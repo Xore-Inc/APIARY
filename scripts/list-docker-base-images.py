@@ -562,11 +562,85 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "msgpack, setuptools, urllib3 twice). The newest 3.14 is 3.14.8 and "
         "measures the same 5."
     ),
+    # --- #3622: Go toolchain / openssl drift, measured 2026-10-11 --------
+    # Go 1.26.8 / 1.27.1 stdlib CVE-2026-78667 (net/http Range), CVE-2026-78669
+    # (HTTP/2 SETTINGS flood, also golang.org/x/net < 0.60.0) and
+    # CVE-2026-97031 (crypto/tls ECH) were published after the last green
+    # run. The Go alpine toolchain images (1.26 and 1.27) were re-pinned to
+    # the fixed 1.26.9 / 1.27.2 digests and measure 0, so they need no entry. The
+    # images below ship a binary built with the vulnerable stdlib and have no
+    # fixed upstream build to move to. All findings are denial of service
+    # (or, for openssl, DTLS information disclosure); none is code execution.
+    "eclipse-temurin:21-jdk": (
+        "sha256:3e3c176ffed168beb42c607be9bc1639b466cf00261a0fb04425562c9d0c5c2b",
+        "measured 3 fixable HIGH (CVE-2026-78667, CVE-2026-78669, "
+        "CVE-2026-97031), all in the Go stdlib compiled into /usr/bin/pebble "
+        "(Canonical's service supervisor, v1.26.7 stdlib), which the Temurin "
+        "base layer ships. Nothing else in the JDK image is flagged. "
+        "analysis/ghidra/service runs `python3 server.py` as ENTRYPOINT, "
+        "never starts pebble, and exposes no Go listener, so no vulnerable "
+        "code path is reachable. The floating tag was re-scanned on "
+        "2026-10-11 and still carries the same pebble build: upstream has "
+        "not rebuilt it. Digest-keyed, so the next pin move re-applies "
+        "the gate to whatever the tag then points at."
+    ),
+    "ghcr.io/getarcaneapp/manager:v2.15.1": (
+        "sha256:540c01198ca3e58dfd398d25c57c8dc241fa7e7f3d1d8d646c8268f19525b1a8",
+        "measured 4 fixable HIGH in the /app/arcane binary: Go stdlib 1.27.1 "
+        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
+        "golang.org/x/net v0.59.0 (CVE-2026-78669). All are denial of "
+        "service; fixed only by a new Arcane release rebuilt on Go 1.27.2 "
+        "(v2.15.1 is the newest published tag). The pin is held at v2.15.1 "
+        "on purpose: the swarm epic (#3587) is built against this API and a "
+        "bump has not been verified compatible. The control plane is bound "
+        "to the WireGuard address only (HP_BIND, default 10.8.0.2 in "
+        "docker-compose.arcane.yml), not the public internet. Revisit when "
+        "Arcane ships a Go 1.27.2 build and the swarm work has been "
+        "validated against it."
+    ),
+    "jasonish/evebox:latest": (
+        "sha256:34be7618354071a19d2f16d7ebcde6556a960f414ed957a1e82495c42f152b6c",
+        "measured 1 fixable HIGH: openssl-libs 3.5.8-1.el9_8 "
+        "(CVE-2026-84782, DTLS handshake retransmission information "
+        "disclosure; fixed in 3.5.8-2.el9_8). Evebox speaks HTTP over TCP "
+        "to Elasticsearch and serves its UI over TCP; it never opens a DTLS "
+        "session, so the vulnerable retransmission path is not reachable. "
+        "`latest` was re-checked on 2026-10-11 and still resolves to this "
+        "digest, so upstream has not rebuilt on the fixed RHEL openssl yet "
+        "and a floating-tag refresh does not help. Digest-keyed: the "
+        "exemption retires itself the moment the pin moves."
+    ),
+    "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5": (
+        "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
+        "measured 4 fixable HIGH in /usr/bin/oauth2-proxy: Go stdlib 1.26.8 "
+        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
+        "golang.org/x/net v0.59.0 (CVE-2026-78669). v7.15.5 is the newest "
+        "published release, so there is no fixed tag to bump to. All are "
+        "denial of service, not auth bypass or data exposure, and the Range "
+        "finding needs net/http FileServer, which oauth2-proxy does not "
+        "use. It is reached through Traefik on the internal proxy network. "
+        "This is an accepted DoS exposure until upstream rebuilds on Go "
+        "1.26.9; digest-keyed so the next pin move re-applies the gate."
+    ),
+    "traefik:v3.7.13": (
+        "sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0",
+        "measured 4 fixable HIGH in /usr/local/bin/traefik: Go stdlib 1.26.8 "
+        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
+        "golang.org/x/net v0.58.0 (CVE-2026-78669). The patch bump was "
+        "tried: v3.7.14 (newest release) was scanned and still carries "
+        "stdlib 1.26.8 and x/net v0.59.0, so it measures the same shape and "
+        "buys nothing; the pin stays on v3.7.13. All are denial of service; "
+        "no fixed Traefik build exists. Traefik is the internet-facing "
+        "ingress, so this is a real but accepted DoS exposure until upstream "
+        "rebuilds on Go 1.26.9 / 1.27.2; digest-keyed so the next pin move "
+        "re-applies the gate."
+    ),
     # The other golang toolchain tags are deliberately absent. The stale
     # 1.23-bookworm and bare 1.23 pins are gone -- their three Dockerfiles
     # moved to golang:1.27-alpine, which measures 0 fixable CRITICAL/HIGH,
     # so the fix there was the bump rather than an exemption.
-    # golang:1.27-alpine needs no entry for the same reason: measured clean.
+    # The 1.26 and 1.27 alpine toolchains need no entry for the same
+    # reason: re-pinned to the 1.26.9 / 1.27.2 digests, measured clean.
     # The entry above is the one that had to be argued rather than bumped.
 }
 
