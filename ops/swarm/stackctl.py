@@ -394,8 +394,11 @@ def wait_rollout(api: Arcane, stack: str, before: dict[str, dict], timeout: int 
                 verdicts[cur["name"]] = f"stuck:{state}:{upd.get('Message', '')}"
             elif fresh and state in DONE_STATES:
                 verdicts[cur["name"]] = "ok" if replicas_ok else "converging"
-            elif not fresh and replicas_ok and clock() - t0 >= grace:
-                verdicts[cur["name"]] = "ok"  # spec change without a rolling update
+            elif (not fresh or not state) and replicas_ok and clock() - t0 >= grace:
+                # A spec change that needs no task change (labels, or a revert to
+                # what already runs) starts no rolling update; swarm leaves the
+                # old status or clears it.
+                verdicts[cur["name"]] = "ok"
             else:
                 verdicts[cur["name"]] = f"updating:{state or 'pending'}"
         line = ", ".join(f"{k}={v}" for k, v in sorted(verdicts.items()))
