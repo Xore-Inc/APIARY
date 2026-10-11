@@ -786,22 +786,25 @@ def cmd_prune(api: Arcane, args, runner: Callable = ssh_run) -> int:
 
 # -- secrets -------------------------------------------------------------------
 
-def secret_list(api: Arcane) -> list[dict]:
+def list_swarm_entries(api: Arcane) -> list[dict]:
     return api.call("GET", "/environments/{env}/swarm/secrets").get("data") or []
 
 
 def cmd_secret(api: Arcane, args, stdin=None) -> int:
     if args.action == "ls":
-        for s in secret_list(api):
+        for s in list_swarm_entries(api):
             spec = s.get("spec") or {}
-            print(f"{spec.get('Name'):40} {s.get('createdAt')} {json.dumps(spec.get('Labels') or {}, sort_keys=True)}")
+            # Metadata only: the list API never returns the payload, and only the
+            # apiary.* bookkeeping labels are shown.
+            labels = {k: v for k, v in (spec.get("Labels") or {}).items() if str(k).startswith("apiary.")}
+            print(f"{spec.get('Name')!s:40} {s.get('createdAt')} {json.dumps(labels, sort_keys=True)}")
         return 0
     if not args.name:
         raise Abort("secret NAME is required")
     m = VERSIONED_NAME.match(args.name)
     if not m:
         raise Abort("secret name must be <base>_vN")
-    existing = {(s.get("spec") or {}).get("Name"): s for s in secret_list(api)}
+    existing = {(s.get("spec") or {}).get("Name"): s for s in list_swarm_entries(api)}
     if args.action == "rm":
         if args.name not in existing:
             raise Abort(f"no secret {args.name}")
