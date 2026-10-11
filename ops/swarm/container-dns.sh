@@ -34,6 +34,15 @@ PY
 networks=$(docker network ls --filter driver=bridge --format '{{.Name}}')
 failed=0
 checked=0
+if [ "$mode" = rejoin ] && docker container inspect hp-elasticsearch >/dev/null 2>&1; then
+  if dns_resolves hp-elasticsearch hp-elasticsearch 2>/dev/null; then :; else
+    rc=$?
+    if [ "$rc" -ne 10 ]; then echo "could not check hp-elasticsearch (probe exit $rc)" >&2; exit 1; fi
+    echo 'rejoining hp-elasticsearch before consumers' >&2
+    docker restart hp-elasticsearch >/dev/null
+    dns_resolves hp-elasticsearch hp-elasticsearch 2>/dev/null || { echo 'hp-elasticsearch DNS rejoin failed' >&2; exit 1; }
+  fi
+fi
 while IFS= read -r network; do
   if [ -z "$network" ] || [ "$network" = bridge ]; then continue; fi
   members=$(docker network inspect "$network" --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}')
@@ -45,15 +54,7 @@ while IFS= read -r network; do
     project=$(docker container inspect "$member" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null) || continue
     if [ -n "$project" ] && [ "$project" != '<no value>' ]; then compose_members+=("$member"); fi
   done <<< "$members"
-  # Recover the datastore before consumers if the whole network lost DNS.
-  ordered=()
   for member in "${compose_members[@]}"; do
-    if [ "$member" = hp-elasticsearch ]; then ordered+=("$member"); fi
-  done
-  for member in "${compose_members[@]}"; do
-    if [ "$member" != hp-elasticsearch ]; then ordered+=("$member"); fi
-  done
-  for member in "${ordered[@]}"; do
     checked=$((checked + 1))
     if dns_resolves "$member" "$member" 2>/dev/null; then continue; else rc=$?; fi
     if [ "$rc" -ne 10 ]; then
