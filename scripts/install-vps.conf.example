@@ -21,7 +21,10 @@ GIT_REF="main"
 # This VPS's own tunnel address (bare, no /prefix -- the script adds /24).
 VPS_WG_ADDRESS="<VPS_WG_ADDRESS>"        # e.g. 10.8.0.1
 
-# The home server's tunnel address, /prefix included.
+# The home server's tunnel address, /prefix included. Must be the homeserver
+# line of ops/swarm/hosts/hub-peers.txt, which lists every hub spoke the
+# script renders into wg0.conf (#3619); the other spokes' keys come from
+# /etc/wireguard/<name>.pub and <name>.psk on this host, never from here.
 HOME_WG_ADDRESS="<HOME_WG_ADDRESS>/24"   # e.g. 10.8.0.2/24
 
 # WireGuard keys. Generate with `wg genkey | tee privatekey | wg pubkey >

@@ -235,6 +235,13 @@ intervention.
 > WireGuard peer entry for home starts as a placeholder that
 > `install-homeserver.sh`'s `step_wireguard_sync_vps_peer` fills in once the
 > home side exists).
+>
+> The VPS hub `wg0` carries every spoke in
+> [`ops/swarm/hosts/hub-peers.txt`](../ops/swarm/hosts/hub-peers.txt): homeserver
+> and precision (#3619). On a rebuild, restore `/etc/wireguard` from the backup
+> (`vps/wireguard/`) before running the script. Otherwise the precision spoke is
+> skipped with a warning and has to be re-added with
+> `ops/swarm/vps-hub-peer.sh add` ([ops/swarm/README.md](../ops/swarm/README.md)).
 
 1. Move real admin SSH to `2222` first, so cowrie can own `22` — confirm
    `2222` works before continuing. There is no script for this step; do it

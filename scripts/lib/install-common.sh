@@ -194,6 +194,9 @@ install_common_usage() {
 
 INSTALL_SELF_DIR="/usr/local/sbin"
 INSTALL_SELF_LIB_DIR="/usr/local/lib/apiary"
+# Extra run-time files an installer wants staged with it (set before
+# install_common_parse_args). Empty for install-homeserver.sh.
+INSTALL_SELF_EXTRA_FILES=()
 
 # install_common_install_self <script-path> [dest-dir]
 # The homeserver runs install-homeserver.sh from /usr/local/sbin because
@@ -212,12 +215,28 @@ install_common_install_self() {
   mkdir -p "$dest_dir" "$INSTALL_SELF_LIB_DIR" || return 1
   install -m 0700 "$src" "$dest" || return 1
   install -m 0644 "$lib_src" "$INSTALL_SELF_LIB_DIR/install-common.sh" || return 1
+  # Data files the installer reads at run time, staged flat beside the library
+  # (install-vps.sh: the hub spoke list and its renderer, #3619). An installer
+  # that declared one it could not resolve must not stage a copy that fails
+  # later, mid-run.
+  local extra staged=()
+  for extra in "${INSTALL_SELF_EXTRA_FILES[@]}"; do
+    if [[ -z "$extra" || ! -r "$extra" ]]; then
+      echo "install-self: a file this installer needs at run time is missing: '${extra}'." >&2
+      echo "Run --install-self from a full checkout." >&2
+      return 1
+    fi
+    staged+=("$INSTALL_SELF_LIB_DIR/$(basename "$extra")")
+    [[ "$(readlink -f "$extra")" == "$(readlink -f "${staged[-1]}")" ]] && continue
+    install -m 0644 "$extra" "${staged[-1]}" || return 1
+  done
   if command -v restorecon >/dev/null 2>&1; then
-    restorecon -F "$dest" "$INSTALL_SELF_LIB_DIR/install-common.sh" >/dev/null 2>&1 || true
+    restorecon -F "$dest" "$INSTALL_SELF_LIB_DIR/install-common.sh" "${staged[@]}" >/dev/null 2>&1 || true
   fi
   echo "Installed:"
   echo "  $dest"
   echo "  $INSTALL_SELF_LIB_DIR/install-common.sh"
+  for extra in "${staged[@]}"; do echo "  $extra"; done
   echo
   echo "Run the installed copy with the same flags; it resolves the library from"
   echo "$INSTALL_SELF_LIB_DIR. Re-run --install-self after every checkout update,"
