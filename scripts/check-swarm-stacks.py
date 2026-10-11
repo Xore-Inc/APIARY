@@ -12,10 +12,11 @@ Per stack:
   - top-level `secrets:` are `external: true` with a versioned `name: <x>_vN`.
     Secret values never live in git; they are created on a manager
     (ops/swarm/stackctl.py secret create) and rotated by bumping N.
-  - top-level `configs:` are versioned (`name: <x>_vN`) and come from a `file:`
-    inside the stack directory (or are external). Arcane also content-hashes
-    the name; the explicit vN keeps a break-glass `docker stack deploy` working,
-    because a swarm config is immutable.
+  - top-level `configs:` are `external: true` with a versioned `name: <x>_vN`
+    and an `x-apiary-file:` inside the stack directory. stackctl.py creates the
+    config from that file at the commit being deployed. Not `file:`: Arcane
+    prunes the configs it manages right after a deploy, which breaks every
+    rollback that needs a fresh task (proved in #3590).
 
 Per service:
   - no `restart:` (swarm ignores it), no `container_name:`, no autoheal label.
@@ -132,11 +133,15 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
         cfg = cfg or {}
         if not VERSIONED.match(str(cfg.get("name", ""))):
             err(f"config {name}: needs a versioned `name: <base>_vN` (got {cfg.get('name')!r}); bump N when the file changes")
-        if cfg.get("external"):
-            continue
-        src = cfg.get("file")
+        for key in ("file", "content", "environment"):
+            if key in cfg:
+                err(f"config {name}: `{key}:` makes Arcane manage and prune the config, which breaks rollback; "
+                    "use `external: true` + `x-apiary-file:`")
+        if not cfg.get("external"):
+            err(f"config {name}: must be `external: true` (stackctl.py creates it from `x-apiary-file:`)")
+        src = cfg.get("x-apiary-file")
         if not src:
-            err(f"config {name}: needs `file:` inside the stack directory (or `external: true`)")
+            err(f"config {name}: needs `x-apiary-file:` naming its source inside the stack directory")
             continue
         target = (path.parent / str(src)).resolve()
         if not target.is_relative_to(stack_dir):

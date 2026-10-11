@@ -82,15 +82,20 @@ secrets:
   app_token:
     # Created out of band on a manager and never in git:
     #   ops/swarm/stackctl.py secret create app_token_v1 < value-file
-    # Rotate: create app_token_v2, change this name, merge, deploy, then
-    # remove _v1 once nothing uses it.
+    # Rotate: create app_token_v2, change this name, merge, deploy. Remove _v1
+    # at the NEXT rotation, not before: a rollback to the previous spec needs it.
     external: true
     name: app_token_v1
 
 configs:
   index:
-    # Non-secret files live next to the stack file. A swarm config is
-    # immutable: bump vN whenever the file changes. Arcane also appends a
-    # content hash (index_v1_<12 hex>) and prunes the old one after the update.
+    # Non-secret files live next to the stack file. stackctl.py deploy creates
+    # the config from x-apiary-file at the commit being deployed, labelled with
+    # its sha256, before Arcane syncs. A config is immutable: bump vN whenever
+    # the file changes (deploy refuses a changed file under an existing name).
+    # External, not `file:`: Arcane prunes configs it manages right after a
+    # deploy, and the rollback target then cannot start. `stackctl.py prune`
+    # keeps the current and the previous version.
+    external: true
     name: index_v1
-    file: ./configs/index.html
+    x-apiary-file: ./configs/index.html

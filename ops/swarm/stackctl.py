@@ -25,6 +25,11 @@ stays the single deploy path; nothing here runs `docker stack deploy`.
   resume                     scale back in reverse order; verifies replicas and
                              the optional apiary.probe
   pause-status               what is recorded as paused
+  configs STACK [--branch B] create the stack's external configs (`x-apiary-file:`)
+                             from the commit the sync will deploy; deploy and
+                             ensure run this first
+  prune STACK [--keep 2]     remove the stack's config versions older than the
+                             newest N (the previous one stays for rollback)
   secret create NAME_vN      read a value from stdin and create an immutable
                              swarm secret; refuses an existing name
   secret ls | secret rm NAME
@@ -39,6 +44,7 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -233,6 +239,103 @@ def resolve_repository(api: Arcane, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# configs: external, versioned, created from git, never pruned by a deploy
+# ---------------------------------------------------------------------------
+#
+# Arcane prunes the configs it manages (`file:` configs) as soon as a deploy
+# no longer references them. The previous spec then points at a config that is
+# gone, so any rollback that has to start a fresh task fails with "config ...
+# not found" (proved on the #3590 probe: a manual rollback ended
+# rollback_paused). Stop-first services (host-mode ports) hit the same thing on
+# their AUTOMATIC rollback. So configs are external like secrets: stackctl
+# creates <base>_vN from the file at the exact commit being deployed, labels it
+# with its sha256, and only `prune` removes old versions.
+
+VERSIONED_NAME = re.compile(r"^([a-z0-9][a-z0-9_.-]*)_v([0-9]+)$")
+
+
+def git(*args: str, root: Path = REPO_ROOT) -> str:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
+
+
+def fetch_ref(branch: str, root: Path = REPO_ROOT) -> str:
+    """Fetch the branch the sync tracks; return the commit Arcane will clone."""
+    git("fetch", "-q", "origin", branch, root=root)
+    return git("rev-parse", "FETCH_HEAD", root=root).strip()
+
+
+def show(commit: str, path: str, root: Path = REPO_ROOT) -> bytes:
+    return subprocess.run(["git", "-C", str(root), "show", f"{commit}:{path}"],
+                          check=True, capture_output=True).stdout
+
+
+def stack_configs(compose_path: str, commit: str, reader: Callable[[str, str], bytes] = show) -> list[dict]:
+    """External configs with an x-apiary-file in the stack file at `commit`."""
+    import yaml  # the workstation has PyYAML; only this path needs it
+    doc = yaml.safe_load(reader(commit, compose_path)) or {}
+    stack_dir = Path(compose_path).parent
+    out = []
+    for key, cfg in (doc.get("configs") or {}).items():
+        cfg = cfg or {}
+        src = cfg.get("x-apiary-file")
+        if not cfg.get("external") or not src:
+            continue
+        m = VERSIONED_NAME.match(str(cfg.get("name", "")))
+        if not m:
+            raise Abort(f"config {key}: name {cfg.get('name')!r} is not <base>_vN")
+        rel = os.path.normpath(stack_dir / src)
+        if not rel.startswith(str(stack_dir) + os.sep):
+            raise Abort(f"config {key}: {src!r} leaves the stack directory")
+        data = reader(commit, rel)
+        out.append({"key": key, "name": cfg["name"], "base": m.group(1), "version": m.group(2),
+                    "path": rel, "data": data, "sha256": hashlib.sha256(data).hexdigest()})
+    return out
+
+
+def config_list(api: Arcane) -> list[dict]:
+    return api.call("GET", "/environments/{env}/swarm/configs").get("data") or []
+
+
+def push_configs(api: Arcane, stack: str, compose_path: str, commit: str,
+                 reader: Callable[[str, str], bytes] = show) -> list[str]:
+    wanted = stack_configs(compose_path, commit, reader)
+    existing = {(c.get("spec") or {}).get("Name"): c for c in config_list(api)}
+    done = []
+    for c in wanted:
+        have = existing.get(c["name"])
+        if have:
+            label = ((have.get("spec") or {}).get("Labels") or {}).get("apiary.config.sha256")
+            if label != c["sha256"]:
+                raise Abort(f"config {c['name']} exists with different content (sha256 {str(label)[:12]} != "
+                            f"{c['sha256'][:12]} of {c['path']} at {commit[:8]}). Configs are immutable: "
+                            f"bump the name to {c['base']}_v{int(c['version']) + 1}.")
+            done.append(f"{c['name']} (exists)")
+            continue
+        spec = {"Name": c["name"], "Data": base64.b64encode(c["data"]).decode(),
+                "Labels": {"apiary.stack": stack, "apiary.config.base": c["base"],
+                           "apiary.config.version": c["version"], "apiary.config.sha256": c["sha256"],
+                           "apiary.config.commit": commit}}
+        api.call("POST", "/environments/{env}/swarm/configs", {"spec": spec})
+        done.append(f"{c['name']} (created from {c['path']}@{commit[:8]})")
+    return done
+
+
+def prune_plan(configs: list[dict], stack: str, keep: int) -> list[dict]:
+    """Configs of `stack` older than the newest `keep` versions of each base."""
+    by_base: dict[str, list[dict]] = {}
+    for c in configs:
+        labels = (c.get("spec") or {}).get("Labels") or {}
+        if labels.get("apiary.stack") != stack or "apiary.config.base" not in labels:
+            continue
+        by_base.setdefault(labels["apiary.config.base"], []).append(c)
+    doomed = []
+    for items in by_base.values():
+        items.sort(key=lambda c: int(c["spec"]["Labels"].get("apiary.config.version", 0)), reverse=True)
+        doomed += items[keep:]
+    return doomed
+
+
+# ---------------------------------------------------------------------------
 # waiting for a rollout
 # ---------------------------------------------------------------------------
 
@@ -358,6 +461,9 @@ def cmd_ensure(api: Arcane, args) -> int:
             api.call("PUT", f"/environments/{{env}}/gitops-syncs/{plan.sync_id}", plan.body)
             log(f"{plan.stack}: sync {plan.sync_id} updated {sorted(plan.body)}; run `deploy {plan.stack}` to apply")
             continue
+        commit = fetch_ref(args.branch)
+        for line in push_configs(api, plan.stack, stacks[plan.stack], commit):
+            log(f"{plan.stack}: config {line}")
         log(f"{plan.stack}: creating sync (Arcane deploys it immediately)")
         created = api.call("POST", "/environments/{env}/gitops-syncs", plan.body).get("data") or {}
         log(f"{plan.stack}: sync {created.get('id')} status={created.get('lastSyncStatus')}")
@@ -375,8 +481,15 @@ def cmd_deploy(api: Arcane, args) -> int:
         raise Abort(f"no swarm_stack sync for {args.stack!r}; run `ensure {args.stack}` first")
     if args.stack in {e["stack"] for e in read_inventory()}:
         raise Abort(f"{args.stack} is recorded as paused; a deploy would restore its replicas. `resume` first.")
+    commit = fetch_ref(sync["branch"])
+    for line in push_configs(api, args.stack, sync["composePath"], commit):
+        log(f"config {line}")
     before = snapshot(api, args.stack)
     run_sync(api, sync["id"])
+    deployed = (find_sync(api, args.stack) or {}).get("lastSyncCommit") or ""
+    if deployed != commit:
+        log(f"WARNING: Arcane deployed {deployed[:8]}, configs were prepared from {commit[:8]} "
+            "(a push landed in between). Run deploy again.")
     if args.no_wait:
         return EXIT_OK
     rc = wait_rollout(api, args.stack, before, timeout=args.timeout)
@@ -562,6 +675,36 @@ def cmd_pause_status(api: Arcane, args) -> int:
     return 0
 
 
+# -- configs --------------------------------------------------------------------
+
+def cmd_configs(api: Arcane, args) -> int:
+    sync = find_sync(api, args.stack)
+    branch = args.branch or (sync or {}).get("branch") or "main"
+    path = (sync or {}).get("composePath") or repo_stacks().get(args.stack)
+    if not path:
+        raise Abort(f"no stack file for {args.stack!r}")
+    commit = fetch_ref(branch)
+    for line in push_configs(api, args.stack, path, commit):
+        log(f"config {line}")
+    return 0
+
+
+def cmd_prune(api: Arcane, args) -> int:
+    if args.keep < 2:
+        raise Abort("--keep below 2 would delete the version a rollback needs")
+    doomed = prune_plan(config_list(api), args.stack, args.keep)
+    if not doomed:
+        log(f"{args.stack}: nothing older than the newest {args.keep} config version(s)")
+    for c in doomed:
+        name = c["spec"]["Name"]
+        try:
+            api.call("DELETE", f"/environments/{{env}}/swarm/configs/{c['id']}")
+            log(f"removed config {name}")
+        except Abort as exc:  # still referenced by a service: swarm refuses, which is right
+            log(f"kept config {name}: {exc}")
+    return 0
+
+
 # -- secrets -------------------------------------------------------------------
 
 def secret_list(api: Arcane) -> list[dict]:
@@ -576,7 +719,7 @@ def cmd_secret(api: Arcane, args, stdin=None) -> int:
         return 0
     if not args.name:
         raise Abort("secret NAME is required")
-    m = re.match(r"^([a-z0-9][a-z0-9_.-]*)_v([0-9]+)$", args.name)
+    m = VERSIONED_NAME.match(args.name)
     if not m:
         raise Abort(f"secret name {args.name!r} must be <base>_vN")
     existing = {(s.get("spec") or {}).get("Name"): s for s in secret_list(api)}
@@ -668,6 +811,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--probe-host", default="10.8.0.2")
     p.add_argument("--probe-via", default="homeserver", help="SSH alias the probe runs from")
     sub.add_parser("pause-status")
+    p = sub.add_parser("configs")
+    p.add_argument("stack")
+    p.add_argument("--branch")
+    p = sub.add_parser("prune")
+    p.add_argument("stack")
+    p.add_argument("--keep", type=int, default=2)
     p = sub.add_parser("secret")
     p.add_argument("action", choices=["create", "ls", "rm"])
     p.add_argument("name", nargs="?")
@@ -681,6 +830,7 @@ COMMANDS = {
     "list": cmd_list, "ensure": cmd_ensure, "deploy": cmd_deploy, "status": cmd_status,
     "rollback": cmd_rollback, "pause": cmd_pause, "resume": cmd_resume,
     "pause-status": cmd_pause_status, "secret": cmd_secret, "remove": cmd_remove,
+    "configs": cmd_configs, "prune": cmd_prune,
 }
 
 

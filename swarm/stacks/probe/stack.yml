@@ -39,13 +39,13 @@ services:
         monitor: 30s
         failure_action: rollback
         max_failure_ratio: 0
-        order: start-first
+        order: stop-first
       rollback_config:
         parallelism: 1
         delay: 0s
         monitor: 20s
         failure_action: pause
-        order: start-first
+        order: stop-first
       labels:
         apiary.pause: safe
         apiary.pause.reason: "#3590 proof stack; nothing depends on it"
@@ -57,5 +57,6 @@ secrets:
 
 configs:
   index:
-    name: probe_index_v4
-    file: ./configs/index.html
+    external: true
+    name: probe_index_v5
+    x-apiary-file: ./configs/index.html
