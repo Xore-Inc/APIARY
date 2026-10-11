@@ -20,7 +20,8 @@ Keys, preshared keys, join tokens, the VPS public endpoint and the homeserver LA
 |---|---|---|
 | `hosts/*-wg-fibre.conf.example`, `hosts/*-wg-lan.conf.example` | `/etc/wireguard/wg-fibre.conf`, `wg-lan.conf` (0600), `wg-quick@wg-fibre`/`@wg-lan` enabled | homeserver, precision |
 | `hosts/precision-wg0.conf.example` | `/etc/wireguard/wg0.conf`, `wg-quick@wg0` enabled | precision |
-| `vps-hub-peer.sh` | `/usr/local/libexec/apiary-vps-hub-peer`; adds the precision block to the VPS `wg0.conf` | VPS |
+| `hosts/hub-peers.txt` | the VPS hub spoke list (name, hub address); `scripts/install-vps.sh` renders one `wg0.conf` `[Peer]` per line (#3619). Keys: `/etc/wireguard/<name>.pub` and `<name>.psk` (0600) | VPS |
+| `vps-hub-peer.sh` | `/usr/local/libexec/apiary-vps-hub-peer`; `add` adds a spoke live and to `wg0.conf` (and keeps its keys in `/etc/wireguard/<name>.pub`/`.psk`); `render` prints the `[Peer]` blocks for `install-vps.sh` | VPS |
 | `peer-route.sh`, `peer-route.service` | `/usr/local/libexec/apiary-swarm-peer-route`, `/etc/systemd/system/peer-route.service` (enabled) | homeserver, precision |
 | `hosts/homeserver.env`, `hosts/precision.env` | `/etc/apiary/swarm-peer.env` | homeserver, precision |
 | `../firewall/swarm-plane.sh`, `../firewall/hosts/*.env` | env rendered to `/etc/apiary/swarm-plane.env` (precision: `REPLACE_WITH_HOMESERVER_LAN_IP` filled in) | all three |
@@ -189,5 +190,6 @@ Run on suspected compromise or yearly, one tunnel at a time, inside the dead-man
 ## Known consequences
 
 - The VPS dockerd now runs without `live-restore` (swarm requirement). A dockerd restart there restarts portbridge and the edge containers; restart policies bring them back.
-- `scripts/install-vps.sh` rewrites `wg0.conf` with only the homeserver peer. After a VPS rebuild, re-add precision with `vps-hub-peer.sh add`.
+- `scripts/install-vps.sh` renders a `[Peer]` for every spoke in `hosts/hub-peers.txt` (#3619). It takes the keys from that spoke's block in the current `wg0.conf`, or else from `/etc/wireguard/<name>.pub`/`.psk`. On a rebuild, restore `/etc/wireguard` from the backup (`vps/wireguard/`) first. A spoke with no keys is skipped with a warning, and the installer summary lists it. Re-add it with `vps-hub-peer.sh add`. The homeserver spoke is never skipped: without a key it gets a placeholder that `install-homeserver.sh` replaces.
+- Dry-run the hub render on the VPS (read-only, prints no secrets): `sudo sh ops/swarm/vps-hub-peer.sh render ops/swarm/hosts/hub-peers.txt 10.8.0.2 | grep -v '^PresharedKey'`, then compare the `PublicKey`/`AllowedIPs` pairs with `sudo wg show wg0 allowed-ips`.
 - The Arcane manager stays a Compose project; phase 3 (#3590) moves stacks under Arcane GitOps.

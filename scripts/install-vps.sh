@@ -82,6 +82,27 @@ fi
 source "$APIARY_INSTALL_LIB_RESOLVED"
 install_common_require
 
+# The VPS hub's spoke list and its renderer (#3619). step_wireguard_config
+# runs before step_clone_repo, so they come from beside this script (a
+# checkout) or from the --install-self staging directory, the same way as
+# the library above. Resolved here so --install-self can stage them too.
+APIARY_HUB_PEER_SH=""
+for _cand in \
+  "${APIARY_HUB_PEER_SH_OVERRIDE:-}" \
+  "$(dirname "$INSTALLER_SELF_PATH")/../ops/swarm/vps-hub-peer.sh" \
+  "$INSTALL_SELF_LIB_DIR/vps-hub-peer.sh"; do
+  if [[ -n "$_cand" && -r "$_cand" ]]; then APIARY_HUB_PEER_SH="$(readlink -f "$_cand")"; break; fi
+done
+APIARY_HUB_PEERS=""
+for _cand in \
+  "${APIARY_HUB_PEERS_OVERRIDE:-}" \
+  "$(dirname "$INSTALLER_SELF_PATH")/../ops/swarm/hosts/hub-peers.txt" \
+  "$INSTALL_SELF_LIB_DIR/hub-peers.txt"; do
+  if [[ -n "$_cand" && -r "$_cand" ]]; then APIARY_HUB_PEERS="$(readlink -f "$_cand")"; break; fi
+done
+# shellcheck disable=SC2034  # consumed by install_common_install_self
+INSTALL_SELF_EXTRA_FILES=("$APIARY_HUB_PEER_SH" "$APIARY_HUB_PEERS")
+
 # This script's summary carries a trailer the homeserver's does not: the
 # freshly generated WireGuard public key, which is the value the operator has
 # to paste into install-homeserver.conf before running the other half.
@@ -91,6 +112,13 @@ print_summary_extra() {
     echo "This VPS's WireGuard public key (feed into install-homeserver.conf's"
     echo "VPS_WG_PUBLIC_KEY before running install-homeserver.sh):"
     grep '^PrivateKey' /etc/wireguard/wg0.conf | awk '{print $3}' | wg pubkey
+    # A hub spoke missing from wg0.conf is never silent (#3619).
+    local name addr
+    while read -r name addr _; do
+      [[ -z "$name" || "$name" == '#'* ]] && continue
+      grep -Eq "^AllowedIPs[[:space:]]*=[[:space:]]*${addr//./\\.}/32\$" /etc/wireguard/wg0.conf ||
+        echo "WARNING: hub peer $name ($addr) is missing from wg0.conf -- see ops/swarm/README.md."
+    done < "${APIARY_HUB_PEERS:-/dev/null}"
   fi
 }
 
@@ -292,10 +320,23 @@ EOF
 # keypair is generated here; the peer entry for home starts as a
 # placeholder that install-homeserver.sh's step_wireguard_sync_vps_peer
 # overwrites with home's real public key + PSK.
+#
+# The hub carries every spoke in ops/swarm/hosts/hub-peers.txt (#3619), not
+# only homeserver: precision (10.8.0.3) is the VPS worker's swarm path to the
+# second manager (#3589). This used to write the homeserver peer alone, so
+# every rebuild silently dropped precision. Spoke keys come from the host
+# (the spoke's block in the current wg0.conf, else /etc/wireguard/<name>.pub
+# and .psk), never from git; see ops/swarm/vps-hub-peer.sh render.
 # ---------------------------------------------------------------------------
 step_wireguard_config() {
   install -d -m 0700 /etc/wireguard
   umask 077
+
+  if [[ -z "$APIARY_HUB_PEER_SH" || -z "$APIARY_HUB_PEERS" ]]; then
+    echo "Cannot find ops/swarm/vps-hub-peer.sh and ops/swarm/hosts/hub-peers.txt" >&2
+    echo "(the hub spoke list). Run from a checkout, or re-run --install-self from one." >&2
+    return 1
+  fi
 
   local priv="${VPS_WG_PRIVATE_KEY:-}"
   if [[ -z "$priv" ]]; then
@@ -303,38 +344,30 @@ step_wireguard_config() {
     echo "Generated a fresh WireGuard private key (no VPS_WG_PRIVATE_KEY in config)."
   fi
 
-  local home_pub="${HOME_WG_PUBLIC_KEY:-}"
-  if [[ -z "$home_pub" ]]; then
-    # Syntactically valid but not home's real key -- wg-quick accepts any
-    # well-formed pubkey, it just won't handshake until the real one lands.
-    # step_wireguard_sync_vps_peer (run from the homeserver install)
-    # overwrites this. No PresharedKey line here either, for the same
-    # reason -- that function adds one if missing (see its own comments).
-    home_pub="$(wg genkey | wg pubkey)"
-    echo "No HOME_WG_PUBLIC_KEY in config -- wrote a placeholder peer entry."
-    echo "Run install-homeserver.sh's step_wireguard_sync_vps_peer against this"
-    echo "VPS once the home side exists, or this tunnel will never handshake."
-  fi
-
+  # Rendered next to the live file, then moved over it: the renderer reads the
+  # current wg0.conf as its key fallback, so it must not be truncated first.
+  local conf=/etc/wireguard/wg0.conf new=/etc/wireguard/wg0.conf.new rc=0
   local home_ip="${HOME_WG_ADDRESS%%/*}"
-  cat >/etc/wireguard/wg0.conf <<EOF
+  cat >"$new" <<EOF
 [Interface]
 Address = ${VPS_WG_ADDRESS}/24
 PrivateKey = ${priv}
 ListenPort = 51820
 MTU = 1280
-
-[Peer]
-PublicKey = ${home_pub}
-AllowedIPs = ${home_ip}/32
 EOF
-  chmod 600 /etc/wireguard/wg0.conf
+  APIARY_WG_DIR=/etc/wireguard sh "$APIARY_HUB_PEER_SH" render \
+    "$APIARY_HUB_PEERS" "$home_ip" "${HOME_WG_PUBLIC_KEY:-}" >>"$new" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) echo "WARNING: wg0.conf is missing at least one hub spoke (see above); the" \
+            "homeserver peer is written, the tunnel comes up without the others." ;;
+    *) rm -f "$new"; echo "Rendering the hub peers failed (exit $rc)." >&2; return 1 ;;
+  esac
+  chmod 600 "$new"
+  [[ -f "$conf" ]] && cp -p "$conf" "$conf.bak.$(date +%s)"
+  mv -f "$new" "$conf"
   systemctl enable wg-quick@wg0
   systemctl restart wg-quick@wg0
-  # Swarm phase 1 (#3589): the hub also carries precision (10.8.0.3). This
-  # rewrite drops that peer; re-add it, keys host-only, with
-  # ops/swarm/vps-hub-peer.sh add (see ops/swarm/README.md).
-  echo "Re-add the precision hub peer (10.8.0.3): ops/swarm/vps-hub-peer.sh add ..."
 }
 
 # ---------------------------------------------------------------------------
