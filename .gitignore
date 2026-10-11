@@ -93,3 +93,11 @@ graphify-out/20??-??-??/*
 # test to skip generated output. Remove a directory only when the dispatch it
 # belongs to is finished; these are live worktrees for open issues.
 oc-*-wt/
+
+# Agent hand-off notes, task-pin lists and diff/measurement scratch dumps. They
+# were committed to the repo root by agent sessions and went stale on arrival.
+# Root-anchored so nothing under docs/ or any component tree is affected.
+/.task-pins.md
+/HANDOFF-*.md
+/DIFF.md
+/CONTAINER-SCAN-MEASUREMENT.md
