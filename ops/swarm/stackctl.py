@@ -320,18 +320,33 @@ def push_configs(api: Arcane, stack: str, compose_path: str, commit: str,
     return done
 
 
-def prune_plan(configs: list[dict], stack: str, keep: int) -> list[dict]:
-    """Configs of `stack` older than the newest `keep` versions of each base."""
+def prune_plan(configs: list[dict], stack: str, keep: int, in_use: set[str]) -> list[dict]:
+    """Config versions of `stack` that no rollback can need any more.
+
+    Per base: keep the version the running spec uses, the `keep - 1` versions
+    below it (rollback targets), and everything newer (a rolled-back version
+    may be redeployed once fixed). A base nothing uses keeps its newest `keep`.
+    """
     by_base: dict[str, list[dict]] = {}
     for c in configs:
         labels = (c.get("spec") or {}).get("Labels") or {}
         if labels.get("apiary.stack") != stack or "apiary.config.base" not in labels:
             continue
         by_base.setdefault(labels["apiary.config.base"], []).append(c)
+
+    def version(c: dict) -> int:
+        return int(c["spec"]["Labels"].get("apiary.config.version", 0))
+
     doomed = []
     for items in by_base.values():
-        items.sort(key=lambda c: int(c["spec"]["Labels"].get("apiary.config.version", 0)), reverse=True)
-        doomed += items[keep:]
+        items.sort(key=version, reverse=True)
+        used = [version(c) for c in items if c["spec"]["Name"] in in_use]
+        if used:
+            floor = min(used)
+            below = [c for c in items if version(c) < floor]
+            doomed += below[keep - 1:]
+        else:
+            doomed += items[keep:]
     return doomed
 
 
@@ -695,9 +710,14 @@ def cmd_configs(api: Arcane, args) -> int:
 def cmd_prune(api: Arcane, args) -> int:
     if args.keep < 2:
         raise Abort("--keep below 2 would delete the version a rollback needs")
-    doomed = prune_plan(config_list(api), args.stack, args.keep)
+    in_use = set()
+    for svc in api.stack_services(args.stack):
+        spec = (api.service(svc["id"]).get("spec") or {})
+        for ref in ((spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}).get("Configs") or []:
+            in_use.add(ref.get("ConfigName"))
+    doomed = prune_plan(config_list(api), args.stack, args.keep, in_use)
     if not doomed:
-        log(f"{args.stack}: nothing older than the newest {args.keep} config version(s)")
+        log(f"{args.stack}: nothing to prune (keeping the in-use version, {args.keep - 1} below it, and newer ones)")
     for c in doomed:
         name = c["spec"]["Name"]
         try:
