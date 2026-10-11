@@ -1,0 +1,5 @@
+# Fixture: swarm ignores build:, so this must fail even with a pinned image.
+services:
+  web:
+    build: ./web
+    image: ghcr.io/example-org/honeypot-dashboard-next@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
