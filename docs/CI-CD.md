@@ -488,6 +488,97 @@ script, and the contract marks it `x-endless-stream: true`. Its body never
 ends, so probing it on a service with auth open would hang the run instead
 of reporting the leak.
 
+## Swarm images: GHCR by digest (#3597)
+
+Swarm ignores `build:`, and a worker node cannot pull a tag that only exists
+in the build host's local image store. Every image a swarm stack runs
+therefore comes from GHCR and is referenced by digest. This is phase 2 of
+epic #3587. Phase 3 (#3590) builds the stacks on top of it. Converting the
+existing compose projects to `image@digest` is not part of this phase; each
+stack does that in its own migration issue (#3591-#3596).
+
+### What publishes the images
+
+`containers.yml` has one matrix row per compose `build:` context. A row
+pushes `ghcr.io/<owner>/honeypot-<image>` with the tags `:sha-<short>`,
+`:<branch>`, `:<tag>` and, on `main`, `:latest`. Rows marked `scoped: true`
+are the contexts added by #3597. On a pull request a scoped row builds only
+when the `scope` job finds a changed path inside its context (or the
+workflow itself changed); on `main`, tags and `workflow_dispatch` every row
+builds and pushes. The older rows are not scoped and build every time.
+
+`scripts/check-swarm-images.py` is the CI job "GHCR image coverage and
+swarm stack pinning" in `quality.yml`. It fails when:
+
+- a compose `build:` context has no `containers.yml` row, or a row builds
+  something other than its compose block (Dockerfile, target, build args),
+  or a second path claimed as an identical copy (`also_contexts:`) drifted;
+- a file matching `swarm/stacks/*/stack.yml` (or `.yaml`) contains `build:`,
+  or an `image:` that is not pinned `@sha256:<64 hex>` (a bare tag, `:latest`
+  and a tag-plus-digest without the digest all fail). The lint is inert until
+  that directory exists.
+
+Run it locally with `python3 scripts/check-swarm-images.py all` (needs
+PyYAML).
+
+### The digest manifest
+
+After every non-pull-request run the `digest-manifest` job resolves each
+row's `:sha-<short>` tag in the registry and uploads one JSON file as the
+workflow artifact **`image-digests`** (file `image-digests.json`, kept 90
+days). It is also rendered as a table in the run's step summary. Phase 3
+reads it from the `Containers` run for the commit it pins, for example:
+
+```sh
+gh run list --workflow containers.yml --branch main --status success -L 1
+gh run download <run-id> -n image-digests
+jq -r '.images["ghosts-api"].ref' image-digests.json
+```
+
+Shape (`schema` is bumped on any breaking change):
+
+```json
+{
+  "schema": 1,
+  "repository": "Xore-Inc/APIARY",
+  "commit": "<full sha>",
+  "run_id": "<actions run id>",
+  "generated_at": "2026-10-11T00:00:00Z",
+  "images": {
+    "<image>": {
+      "repository": "ghcr.io/<owner>/honeypot-<image>",
+      "digest": "sha256:<64 hex>",
+      "ref": "ghcr.io/<owner>/honeypot-<image>@sha256:<64 hex>",
+      "context": "<build context path>",
+      "compose_services": ["<compose file>:<service>", "..."]
+    }
+  }
+}
+```
+
+`ref` is what goes in a stack's `image:` line. The digest is the one
+`docker pull <repository>@<digest>` resolves (the index digest for a
+multi-platform push).
+
+### Finding an image's digest
+
+- Latest on `main`: download the manifest as above.
+- Any pushed tag, by hand:
+  `docker buildx imagetools inspect ghcr.io/<owner>/honeypot-<image>:sha-<short> --format '{{.Manifest.Digest}}'`.
+- In the GitHub UI: the package page under the repository's Packages lists
+  each tag with its digest.
+
+### Pinning and rolling back
+
+To pin, copy `ref` from the manifest into the stack file's `image:` line,
+keeping the tag as a comment if useful, and open a PR; the lint rejects
+anything that is not a `@sha256:` reference. To roll back, take the `ref` for
+the same image from an earlier run's manifest (the 90 day retention is the
+window; older digests stay pullable from GHCR as long as the tag or package
+version exists), put it back in the stack file and redeploy. Because the
+file names an immutable digest, a rollback is a one-line revert of the pin
+and cannot be undone by a moved tag.
+
 ## Pull request workflow
 
 ### No AI attribution (#3329)

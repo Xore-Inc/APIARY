@@ -151,8 +151,8 @@ services:
   # name "ghosts-api" on ghosts_net, so it needs no address override.
   ghosts-client-test:
     build:
-      context: ./vendor/ghosts-src
-      dockerfile: Dockerfile-client-universal
+      context: .
+      dockerfile: Dockerfile.client-prep
     profiles: ["test"]
     networks:
       - ghosts_net

@@ -758,9 +758,12 @@ class ParityWithTheDockerfiles(unittest.TestCase):
         that should make a reviewer say so out loud."""
         rows = self.matrix_rows()
         # 19 as of #3131, which added the citrix and sonicwall rows after
-        # #3321's comments last named a number. If this fails, the matrix
-        # moved: check the new row before bumping it.
-        self.assertEqual(len(rows), 19, "the build matrix changed size")
+        # #3321's comments last named a number; 53 as of #3597, which added
+        # one `scoped: true` row per remaining compose build context (none of
+        # them long-lived dashboard services, so the smoked set below is
+        # unchanged). If this fails, the matrix moved: check the new row
+        # before bumping it.
+        self.assertEqual(len(rows), 53, "the build matrix changed size")
         smoked = {name for name, lines in rows.items() if "boot_smoke: true" in lines}
         self.assertEqual(smoked, {"backend-service", "dashboard-next"})
 
