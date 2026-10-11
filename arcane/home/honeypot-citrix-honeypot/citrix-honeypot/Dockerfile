@@ -1,6 +1,6 @@
 # Citrix ADC/NetScaler Gateway decoy (CVE-2019-19781), Go port of
 # t3chn0m4g3/CitrixHoneypot (#238, #414) -- see main.go's own doc comment.
-FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+FROM golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
 WORKDIR /src
 COPY go.mod .
 COPY *.go ./
