@@ -144,7 +144,8 @@ class ClaudeCodeCLI:
         if (slot, case) != (self.slot, self.case):
             self.slot, self.case, self.round = slot, case, 0
 
-    def __call__(self, _url: str, body: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.backend_url = url
         try:
             return self._run(body)
         except Exception as exc:  # preserve one case's failure and evidence
@@ -178,6 +179,7 @@ class ClaudeCodeCLI:
         answers: list[dict[str, Any]] = []
         backend_errors: list[str] = []
         backend = self.backend
+        self_outer = self
         expected_user = prompt
 
         class Handler(BaseHTTPRequestHandler):
@@ -253,7 +255,9 @@ class ClaudeCodeCLI:
                     forwarded["tools"] = tool_defs
                     forwarded["stream"] = False
                     forwarded["options"] = dict(body.get("options") or {})
-                    answer = backend(f"http://127.0.0.1:{server.server_port}/api/chat", forwarded)
+                    # The callback belongs to the selected engine transport. Ollama
+                    # honors its URL argument; llama.cpp and Colibri own their endpoint.
+                    answer = backend(self_outer.backend_url, forwarded)
                     answers.append({"request": incoming, "backend_request": forwarded,
                                     "response": answer})
                     message = answer.get("message") or {}

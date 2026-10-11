@@ -52,8 +52,10 @@ class ClaudeProtocolTest(unittest.TestCase):
             workspace = root / "workspace"
             workspace.mkdir()
             calls = []
+            backend_urls = []
 
             def backend(_url, body):
+                backend_urls.append(_url)
                 calls.append(body)
                 tool_returned = any(message.get("role") == "tool" for message in body["messages"])
                 if not tool_returned:
@@ -78,6 +80,7 @@ class ClaudeProtocolTest(unittest.TestCase):
                             "num_predict": 512}})
             self.assertEqual(result["done_reason"], "stop", result.get("error"))
             self.assertGreaterEqual(len(calls), 2)
+            self.assertEqual(set(backend_urls), {"ignored"})
             self.assertIn("IMPLEMENTATION COMPLETE", result["message"]["content"])
             self.assertTrue((workspace / "main.c").is_file(),
                 (result, calls, (Path(result["cli_artifacts"]) / "cli.jsonl").read_text(),
