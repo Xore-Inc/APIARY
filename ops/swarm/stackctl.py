@@ -75,6 +75,10 @@ class Abort(Exception):
     pass
 
 
+class NotFound(Abort):
+    pass
+
+
 def log(msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -106,6 +110,8 @@ class Arcane:
             detail = exc.read().decode(errors="replace")[:400]
             if exc.code == 401:
                 raise Abort("Arcane answered 401: the API key is not accepted. Get a fresh key; do not debug the header.")
+            if exc.code == 404:
+                raise NotFound(f"{method} {path} -> 404: {detail}")
             raise Abort(f"{method} {path} -> HTTP {exc.code}: {detail}")
         return json.loads(raw) if raw else {}
 
@@ -131,7 +137,10 @@ class Arcane:
 
     # -- swarm ---------------------------------------------------------------
     def stack_services(self, stack: str) -> list[dict]:
-        return self.paged(f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(stack)}/services")
+        try:
+            return self.paged(f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(stack)}/services")
+        except NotFound:
+            return []  # the stack does not exist (yet)
 
     def service(self, sid: str) -> dict:
         return self.call("GET", f"/environments/{{env}}/swarm/services/{sid}").get("data") or {}
@@ -189,7 +198,12 @@ def desired_sync(stack: str, compose_path: str, repository_id: str, branch: str)
         "composePath": compose_path,
         "autoSync": False,
         "syncInterval": 60,
-        "syncDirectory": False,
+        # Directory mode, like every other sync here. Required, not cosmetic: in
+        # single-file mode Arcane v2.15.1 resolves `file:` configs against its
+        # relative clone dir (GIT_WORK_DIR defaults to data/git) and compounds
+        # the path. Directory mode deploys from the absolute stack-source copy
+        # under /app/data/swarm/sources, which also shows the files in the UI.
+        "syncDirectory": True,
     }
 
 

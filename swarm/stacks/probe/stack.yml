@@ -53,9 +53,9 @@ services:
 secrets:
   probe_token:
     external: true
-    name: probe_token_v1
+    name: probe_token_v2
 
 configs:
   index:
-    name: probe_index_v1
+    name: probe_index_v2
     file: ./configs/index.html
