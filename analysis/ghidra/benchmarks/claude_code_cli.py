@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -223,6 +224,9 @@ class ClaudeCodeCLI:
                     return
                 try:
                     incoming = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    # Claude CLI attaches persistent device/account identifiers that
+                    # are unrelated to benchmark behavior. Never retain or forward them.
+                    incoming.pop("metadata", None)
                     requests.append(incoming)
                     forwarded: dict[str, Any] = dict(body)
                     forwarded.pop("_cli_file_block_fallback", None)
@@ -396,9 +400,10 @@ class ClaudeCodeCLI:
                              if event.get("type") == "result"), {})
         native_sessions = list(config_dir.rglob("*.jsonl"))
         if native_sessions:
-            # Isolated home has one session transcript; copy it under the
-            # artifact folder while retaining the original isolated tree too.
+            # Keep the actual session transcript, then discard Claude config,
+            # device identity, and cache files generated in this private HOME.
             (root / "session.jsonl").write_bytes(native_sessions[0].read_bytes())
+        shutil.rmtree(home, ignore_errors=True)
         turns = []
         tool_results: dict[str, dict[str, Any]] = {}
         for event in events:

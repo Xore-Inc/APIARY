@@ -86,8 +86,12 @@ class ClaudeProtocolTest(unittest.TestCase):
                 (result, calls, (Path(result["cli_artifacts"]) / "cli.jsonl").read_text(),
                  (Path(result["cli_artifacts"]) / "stderr.txt").read_text()))
             self.assertEqual((workspace / "main.c").read_text(), "int main(void){return 0;}\n")
-            self.assertTrue((Path(result["cli_artifacts"]) / "session.jsonl").is_file())
-            self.assertTrue((Path(result["cli_artifacts"]) / "wire.jsonl").is_file())
+            artifacts = Path(result["cli_artifacts"])
+            self.assertTrue((artifacts / "session.jsonl").is_file())
+            self.assertTrue((artifacts / "wire.jsonl").is_file())
+            self.assertFalse((artifacts / "home").exists())
+            self.assertNotIn("metadata", result["cli_messages"])
+            self.assertNotIn("user_id", (artifacts / "wire.jsonl").read_text())
             self.assertTrue(any(turn["cli_tool"] == "mcp__apiary__write_file" and
                                 turn["status"] == "accepted"
                                 for turn in result["tool_turns"]))
