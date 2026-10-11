@@ -680,3 +680,37 @@ mechanism is unchanged by #3135, and `honeypot-pause.sh` does not stop,
 start, or otherwise manage a worker. It only refuses to run while a cold-run
 pattern is live, so that ad-hoc pausing cannot become a second, competing
 record of which workers are down.
+
+### Swarm stacks: scale to 0, not `docker pause` (#3590)
+
+Stacks that have moved to Docker Swarm (`swarm/stacks/<name>/`, epic #3587)
+are not paused by `honeypot-pause.sh`, which refuses them by name. A frozen
+swarm task fails its healthcheck and swarm replaces it, the same silent
+un-pause autoheal causes on compose. They are scaled to 0 through Arcane
+instead:
+
+```bash
+ops/swarm/stackctl.py pause <stack> [stack...]   # gate first, then scale to 0
+ops/swarm/stackctl.py pause-status               # what is recorded
+ops/swarm/stackctl.py resume                     # reverse order, verified, gate last
+```
+
+The differences from the compose procedure:
+- **Classification lives in the stack file.** Each service has `deploy.labels`
+  `apiary.pause: safe|unit|never` plus `apiary.pause.reason`. The default is
+  deny: a missing label fails the stack lint, and `pause` refuses the stack.
+  The pause unit is the whole stack, ordered by an optional
+  `apiary.pause.order`. `apiary.probe: tcp:PORT|http:PORT/path` is the resume probe.
+- **Scaling to 0 stops the tasks, so it frees RAM as well as CPU**, unlike `docker pause`.
+- **The gate is the stack's Arcane GitOps sync, not autoheal.** Every sync
+  run redeploys the stack file's replica count. `pause` turns the sync's
+  `autoSync` off first and `resume` restores it last. A run already in
+  flight is not stopped by that, and turning `autoSync` on starts one at
+  once (seen live), so `pause` keeps re-asserting 0 until the services stay
+  there for 45 s. `stackctl.py deploy` refuses a paused stack.
+- **Same interlock:** `pause` refuses while a cold-run pattern runs on the homeserver.
+
+Drain is the node-level alternative: `docker node update --availability drain
+NODE` moves every task off a node at once, including services classified
+`never`. Use it only for node maintenance ([ops/swarm runbook](../ops/swarm/README.md#runbook-node-maintenance-drain--work--active)),
+never as a way to make room for a benchmark leg.

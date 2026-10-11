@@ -38,6 +38,90 @@ homeserver's strict `rp_filter` on `ens9f0`/`eno1` comes from the distribution d
 
 Check for drift at any time: `nm-profiles.sh check hosts/HOST.nm`, `swarm-plane.sh status /etc/apiary/swarm-plane.env`, `swarm-membership.sh status`.
 
+## Runbook: Compose DNS after swarm membership changes (#3621)
+
+`docker swarm leave` can erase Docker's embedded DNS records for containers on
+local user-defined bridge networks. That stopped `hp-filebeat` from resolving
+`elasticsearch` and halted ingest during the #3589 re-init. `swarm-membership.sh`
+now runs `container-dns.sh rejoin` on each host after a leave and again after
+re-init/join; its dead-man copy includes the DNS script. The check uses the
+host's network namespace tools, so containers need no diagnostic packages.
+
+For a manual membership change outside that script, run this on each affected
+host after `swarm leave` or re-init (from the admin workstation):
+
+```bash
+ssh homeserver sudo -n bash -s -- check < ops/swarm/container-dns.sh
+ssh homeserver sudo -n bash -s -- rejoin < ops/swarm/container-dns.sh
+ssh homeserver sudo -n bash -s -- check < ops/swarm/container-dns.sh
+```
+
+Replace `homeserver` with `precision` or `vps` as needed. `check` is read-only;
+`rejoin` restarts only Compose containers whose own name fails a direct query
+to `127.0.0.11` on a user-defined bridge network. It handles
+`hp-elasticsearch` before consumers. A nonzero exit means DNS is still broken:
+inspect the named container and network, then repeat the check. Before and
+after a membership change, confirm `getent hosts elasticsearch` in
+`hp-filebeat`, rising `honeypot-v2*` count with a fresh public `source.ip`,
+Arcane environments online, runners online, and healthy containers.
+
+The 2026-10-11 read-only sweep found three pre-existing misses in unrelated
+containers: `pentagi-ollama-embedding`, `pgexporter`, and `technitium-dns`.
+They were left running; the next rejoin will repair their records.
+
+## Stacks under Arcane GitOps (#3590)
+
+Copy [`swarm/template/stack.yml`](../../swarm/template/stack.yml) to
+`swarm/stacks/<name>/stack.yml`. The directory name is the stack name. Put
+non-secret files in that directory's `configs/`; use a versioned external
+config name (`<base>_vN`) and `x-apiary-file` for each. `stackctl.py` creates
+the immutable config from the exact commit being deployed. Do not use `file:`:
+Arcane prunes the configs it creates after an update, leaving rollback unable
+to start the previous task. Use digest-pinned images from the #3597 manifest.
+
+Each secret is an external `<base>_vN`, created out of band from stdin. Services
+read it through a `_FILE` variable pointing into `/run/secrets/`; values and
+value files never enter git. Rotate by creating `_v(N+1)`, changing the stack
+file to reference it, merging, and deploying. Keep the old secret through the
+next version so a rollback can still start.
+
+```bash
+python3 scripts/check-swarm-stacks.py
+python3 scripts/check-swarm-images.py stacks
+ops/swarm/stackctl.py secret create app_token_v1 < /path/to/private/value
+ops/swarm/stackctl.py ensure --dry-run
+ops/swarm/stackctl.py ensure <name>  # creation deploys immediately
+ops/swarm/stackctl.py list
+ops/swarm/stackctl.py deploy <name>  # after a later merge
+ops/swarm/stackctl.py status <name>
+```
+
+`ensure` owns one Arcane sync per stack: `targetType=swarm_stack`, branch
+`main`, `composePath=swarm/stacks/<name>/stack.yml`, directory sync, manual
+deployment. Merging alone does not deploy. A successful Arcane sync only means
+the spec was submitted; `deploy` waits for service convergence and exits 3 on
+automatic rollback. Every service has a healthcheck, `restart_policy`,
+`update_config.failure_action=rollback`, and `rollback_config.failure_action=pause`.
+Use `stop-first` for host-published sensor ports so two tasks never contend
+for the port; the update monitor must outlast health detection.
+
+If a rollout fails, inspect `status` and the Arcane sync, then use
+`ops/swarm/stackctl.py rollback <name>` for the previous service spec. Revert
+the bad Git commit and deploy the reverted stack before another sync can
+reapply it. Keep current and previous config versions with
+`ops/swarm/stackctl.py prune <name> --keep 2`; it reads Docker's previous service
+spec through the manager and refuses to prune if that check fails. Remove an
+old secret only after it is no longer a rollback target.
+`ops/swarm/stackctl.py remove <name> --yes`
+deletes the sync, services and stack-owned configs after a quiet window;
+secrets require separate `secret rm NAME` after checking other users.
+
+Pause uses `ops/swarm/stackctl.py pause <name>` / `resume`: the GitOps gate
+closes first, tasks scale to 0, and a quiet window catches in-flight syncs
+that try to restore replicas. See [the pause procedure](../../docs/OPERATIONS.md#swarm-stacks-scale-to-0-not-docker-pause-3590).
+For node maintenance use [drain](#runbook-node-maintenance-drain--work--active),
+then restore the node's recorded availability.
+
 ## How it was applied (and how to re-apply)
 
 One host at a time. Before **every** network, firewall or swarm change, arm a dead-man and confirm its timer is active. Then change, prove from outside and inside, and only then disarm. Probes after each step: fresh `ssh HOST` from the workstation, `honeypot-v2*` count rising with recent public `source.ip`, Arcane environment `precision` `online`, runners online, `docker node ls` from a manager.

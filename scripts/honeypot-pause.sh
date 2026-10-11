@@ -282,6 +282,16 @@ cmd_pause() {
   command -v docker >/dev/null 2>&1 || die "docker not on PATH"
   docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon"
 
+  # Swarm stacks (#3590) are not paused here. Swarm sees a frozen task's
+  # healthcheck time out, marks the task unhealthy and replaces it -- the same
+  # silent un-pause autoheal causes. They are scaled to 0 through Arcane by
+  # ops/swarm/stackctl.py pause, which also frees their RAM.
+  for stack in "$@"; do
+    if docker service ls -q --filter "label=com.docker.stack.namespace=$stack" 2>/dev/null | grep -q .; then
+      die "stack '$stack' runs on Docker Swarm; pause it with: ops/swarm/stackctl.py pause $stack (scale to 0, see ops/swarm/README.md)"
+    fi
+  done
+
   [ ! -s "$INVENTORY" ] || die "a pause is already recorded in $INVENTORY -- resume it first (reverse order), or remove the file if you are certain nothing is paused."
 
   install -d -m 0755 "$PAUSE_DIR"

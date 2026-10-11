@@ -1,0 +1,101 @@
+# Swarm stack template (#3590, epic #3587). Copy to swarm/stacks/<name>/stack.yml.
+#
+# One directory per stack, one Arcane GitOps sync per stack (targetType
+# swarm_stack, created by ops/swarm/stackctl.py ensure). The stack name is the
+# directory name. Runbook: ops/swarm/README.md "Stacks under Arcane GitOps".
+#
+# Lints that gate this file in CI:
+#   scripts/check-swarm-images.py stacks  (#3597) no `build:`, image pinned @sha256
+#   scripts/check-swarm-stacks.py         (#3590) everything commented below
+#
+# This template is linted but never deployed: it lives outside swarm/stacks/.
+
+services:
+  app:
+    # A digest from the containers.yml image-digests manifest (#3597) for our
+    # own images, or `docker buildx imagetools inspect <ref>` for a public one.
+    # The tag before @ is for humans; swarm pulls the digest.
+    image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    command: ["sh", "-c", "test -s \"$$APP_TOKEN_FILE\" && exec httpd -f -p 8080 -h /www"]
+    environment:
+      # The _FILE pattern: the variable names a file under /run/secrets/, never
+      # the value itself. A secret-looking variable without _FILE fails the lint.
+      APP_TOKEN_FILE: /run/secrets/app_token
+    secrets:
+      - source: app_token
+        target: app_token
+        mode: 0400
+    configs:
+      - source: index
+        target: /www/index.html
+        mode: 0444
+    # Replaces autoheal (#3585): swarm replaces an unhealthy task by itself, and
+    # a rolling update watches this check to decide whether to roll back.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Node labels from ops/swarm (phase 1). Pin by label, not hostname.
+          - node.labels.role == manager
+          - node.labels.sensor == false
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        # Must outlast start_period + interval x retries (here 10s + 30s), or a
+        # task that turns unhealthy later counts as a successful update.
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # start-first keeps the old task serving until the new one is healthy.
+        # Use stop-first for host-mode published ports (sensors, #3593): two
+        # tasks cannot bind the same host port on one node.
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 30s
+        # A failed rollback stops and waits for a human.
+        failure_action: pause
+        order: start-first
+      labels:
+        # Pause classification for ops/swarm/stackctl.py pause (#3135):
+        # safe = may scale to 0 alone, unit = only with the whole stack,
+        # never = refused. Default deny: a missing label fails the lint.
+        apiary.pause: safe
+        apiary.pause.reason: "template example; no dependents"
+        # Optional resume probe: tcp:PORT or http:PORT/path against the probe
+        # host. Without it, resume verifies replicas and health only.
+        # apiary.probe: "http:8080/"
+
+secrets:
+  app_token:
+    # Created out of band on a manager and never in git:
+    #   ops/swarm/stackctl.py secret create app_token_v1 < value-file
+    # Rotate: create app_token_v2, change this name, merge, deploy. Remove _v1
+    # at the NEXT rotation, not before: a rollback to the previous spec needs it.
+    external: true
+    name: app_token_v1
+
+configs:
+  index:
+    # Non-secret files live next to the stack file. stackctl.py deploy creates
+    # the config from x-apiary-file at the commit being deployed, labelled with
+    # its sha256, before Arcane syncs. A config is immutable: bump vN whenever
+    # the file changes (deploy refuses a changed file under an existing name).
+    # External, not `file:`: Arcane prunes configs it manages right after a
+    # deploy, and the rollback target then cannot start. `stackctl.py prune`
+    # keeps the current and the previous version.
+    external: true
+    name: index_v1
+    x-apiary-file: ./configs/index.html

@@ -22,6 +22,7 @@
 set -euo pipefail
 
 STATE=${STATE:-$HOME/.local/state/apiary-swarm}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 UNIT=swarm-membership-rollback-3589
 # Keep the existing pool: Docker's default 10.0.0.0/8 overlaps the 10.8.x tunnels.
 POOL=(--default-addr-pool 10.200.0.0/16 --default-addr-pool-mask-length 24)
@@ -41,7 +42,14 @@ assert_empty() {
   [ "$n" -eq 0 ] || { echo "swarm has $n services/secrets/configs; re-init would destroy them" >&2; exit 1; }
 }
 
-leave() { [ "$(state_of "$1")" = inactive ] || d "$1" swarm leave --force >/dev/null; log "$1 left"; }
+dns_rejoin() { ssh -o ConnectTimeout=10 "$1" sudo -n bash -s -- rejoin < "$SCRIPT_DIR/container-dns.sh"; }
+leave() {
+  if [ "$(state_of "$1")" != inactive ]; then
+    d "$1" swarm leave --force >/dev/null || return
+    log "$1 left"
+  fi
+  dns_rejoin "$1" # swarm leave can erase Compose bridge-network DNS records (#3621).
+}
 
 join() { # host token-kind manager-addr advertise-addr [extra args]
   local host=$1 kind=$2 mgr=$3 addr=$4; shift 4
@@ -82,11 +90,14 @@ cmd_managers() {
   d homeserver node update --availability pause "$(d homeserver info --format '{{.Swarm.NodeID}}')" >/dev/null
   recreate_ingress
   join precision manager 10.8.0.2 10.8.0.3 --data-path-addr 10.8.0.3
+  dns_rejoin homeserver
+  dns_rejoin precision
 }
 
 cmd_join_vps() {
   [ "$(state_of vps)" = inactive ] || leave vps
   join vps worker 10.8.0.2 10.8.0.1 --data-path-addr 10.8.0.1
+  dns_rejoin vps
 }
 
 cmd_labels() {
@@ -110,13 +121,17 @@ EOF2
 
 cmd_rollback() {
   assert_empty
-  leave vps || true
-  leave precision || true
+  local failed=0
+  leave vps || { log "vps leave or DNS rejoin failed"; failed=1; }
+  leave precision || { log "precision leave or DNS rejoin failed"; failed=1; }
   leave homeserver
   d homeserver swarm init --advertise-addr 10.254.250.1 --listen-addr 10.254.250.1:2377 "${POOL[@]}" >/dev/null
   d homeserver node update --availability pause "$(d homeserver info --format '{{.Swarm.NodeID}}')" >/dev/null
   join precision worker 10.254.250.1 10.254.250.2
+  dns_rejoin homeserver
+  dns_rejoin precision
   log "rolled back to phase 0"
+  return "$failed"
 }
 
 cmd_status() {
@@ -133,6 +148,7 @@ case "${1:-}" in
     systemctl --user reset-failed "$UNIT.service" 2>/dev/null || true
     install -d -m 0700 "$STATE"
     install -m 0700 "$0" "$STATE/swarm-membership.sh"
+    install -m 0700 "$SCRIPT_DIR/container-dns.sh" "$STATE/container-dns.sh"
     systemd-run --user --on-active="${2:-10min}" --timer-property=AccuracySec=1s --unit="$UNIT" "$STATE/swarm-membership.sh" rollback
     ;;
   disarm) systemctl --user stop "$UNIT.timer" ;;
