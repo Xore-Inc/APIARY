@@ -58,5 +58,5 @@ secrets:
 configs:
   index:
     external: true
-    name: probe_index_v5
+    name: probe_index_v7
     x-apiary-file: ./configs/index.html
