@@ -800,7 +800,7 @@ def cmd_secret(api: Arcane, args, stdin=None) -> int:
         raise Abort("secret NAME is required")
     m = VERSIONED_NAME.match(args.name)
     if not m:
-        raise Abort(f"secret name {args.name!r} must be <base>_vN")
+        raise Abort("secret name must be <base>_vN")
     existing = {(s.get("spec") or {}).get("Name"): s for s in secret_list(api)}
     if args.action == "rm":
         if args.name not in existing:
