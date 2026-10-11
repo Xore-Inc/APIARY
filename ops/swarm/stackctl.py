@@ -48,6 +48,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -489,6 +490,10 @@ def cmd_ensure(api: Arcane, args) -> int:
             log(f"{plan.stack}: initial deploy failed: {created.get('lastSyncError')}")
             rc = EXIT_FAIL
             continue
+        deployed = (find_sync(api, plan.stack) or {}).get("lastSyncCommit")
+        if deployed != commit:
+            log(f"{plan.stack}: Arcane deployed {str(deployed)[:8]}, configs came from {commit[:8]}; retry ensure/deploy")
+            rc = EXIT_FAIL
         rc = max(rc, wait_rollout(api, plan.stack, {}, timeout=args.timeout))
     return rc
 
@@ -505,16 +510,17 @@ def cmd_deploy(api: Arcane, args) -> int:
     before = snapshot(api, args.stack)
     run_sync(api, sync["id"])
     deployed = (find_sync(api, args.stack) or {}).get("lastSyncCommit") or ""
-    if deployed != commit:
-        log(f"WARNING: Arcane deployed {deployed[:8]}, configs were prepared from {commit[:8]} "
+    mismatch = deployed != commit
+    if mismatch:
+        log(f"Arcane deployed {deployed[:8]}, configs were prepared from {commit[:8]} "
             "(a push landed in between). Run deploy again.")
     if args.no_wait:
-        return EXIT_OK
+        return EXIT_FAIL if mismatch else EXIT_OK
     rc = wait_rollout(api, args.stack, before, timeout=args.timeout)
     if rc == EXIT_ROLLED_BACK:
         log(f"{args.stack}: swarm ROLLED BACK the update (failure_action: rollback). "
             "The previous spec is running; fix or revert the commit before the next deploy.")
-    return rc
+    return EXIT_FAIL if mismatch else rc
 
 
 def cmd_status(api: Arcane, args) -> int:
@@ -628,8 +634,10 @@ def settle_paused(api: Arcane, entries: list[dict], quiet: float = 45, timeout: 
                 by_stack[e["stack"]] = {s["id"]: s for s in api.stack_services(e["stack"])}
         disturbed = False
         for e in services:
-            cur = by_stack[e["stack"]].get(e["id"]) or {}
-            if cur.get("replicas") not in (0, None):
+            cur = by_stack[e["stack"]].get(e["id"])
+            if not cur:
+                raise Abort(f"{e['name']} disappeared while pausing; inventory kept for recovery")
+            if cur.get("replicas") != 0:
                 log(f"  {e['name']}: a sync set replicas back to {cur.get('replicas')}; scaling to 0 again")
                 api.call("POST", f"/environments/{{env}}/swarm/services/{e['id']}/scale", {"replicas": 0})
                 disturbed = True
@@ -745,14 +753,24 @@ def cmd_configs(api: Arcane, args) -> int:
     return 0
 
 
-def cmd_prune(api: Arcane, args) -> int:
+def cmd_prune(api: Arcane, args, runner: Callable = ssh_run) -> int:
     if args.keep < 2:
         raise Abort("--keep below 2 would delete the version a rollback needs")
     in_use = set()
     for svc in api.stack_services(args.stack):
-        spec = (api.service(svc["id"]).get("spec") or {})
-        for ref in ((spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}).get("Configs") or []:
-            in_use.add(ref.get("ConfigName"))
+        # Arcane's service-inspect response omits PreviousSpec; Docker exposes it.
+        previous = runner("homeserver", "sudo -n docker service inspect --format '{{json .PreviousSpec}}' " + shlex.quote(svc["id"]))
+        if previous.returncode:
+            raise Abort(f"cannot inspect {svc['name']} rollback target: {previous.stderr.strip()[:200]}")
+        try:
+            prior_spec = json.loads(previous.stdout) or {}
+        except json.JSONDecodeError as exc:
+            raise Abort(f"cannot parse {svc['name']} rollback target: {exc}") from exc
+        if not isinstance(prior_spec, dict):
+            raise Abort(f"cannot parse {svc['name']} rollback target: expected an object")
+        for spec in (api.service(svc["id"]).get("spec") or {}, prior_spec):
+            for ref in ((spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}).get("Configs") or []:
+                in_use.add(ref.get("ConfigName"))
     doomed = prune_plan(config_list(api), args.stack, args.keep, in_use)
     if not doomed:
         log(f"{args.stack}: nothing to prune (keeping the in-use version, {args.keep - 1} below it, and newer ones)")

@@ -163,6 +163,34 @@ class PlanSyncsTest(unittest.TestCase):
         self.assertEqual(stackctl.repo_stacks(tmp), {"a": "swarm/stacks/a/stack.yml"})
 
 
+class CommitRaceTest(unittest.TestCase):
+    def test_deploy_reports_a_different_synced_commit_as_failure(self):
+        sync = dict(id="s1", targetType="swarm_stack", projectName="probe", branch="main",
+                    composePath="swarm/stacks/probe/stack.yml", lastSyncCommit="newer")
+        api = FakeArcane({})
+        api.syncs_rows = [sync]
+        with mock.patch.object(stackctl, "fetch_ref", return_value="expected"), \
+             mock.patch.object(stackctl, "push_configs", return_value=[]), \
+             mock.patch.object(stackctl, "read_inventory", return_value=[]), \
+             mock.patch.object(stackctl, "run_sync"), \
+             mock.patch.object(stackctl, "wait_rollout", return_value=0), \
+             mock.patch.object(stackctl, "log"):
+            self.assertEqual(stackctl.cmd_deploy(api, argparse.Namespace(stack="probe", no_wait=False, timeout=30)), 1)
+
+    def test_ensure_reports_a_different_initial_commit_as_failure(self):
+        api = FakeArcane({})
+        sync = dict(id="s1", targetType="swarm_stack", projectName="probe", lastSyncCommit="newer")
+        with mock.patch.object(stackctl, "repo_stacks", return_value={"probe": "swarm/stacks/probe/stack.yml"}), \
+             mock.patch.object(stackctl, "resolve_repository", return_value="repo"), \
+             mock.patch.object(stackctl, "fetch_ref", return_value="expected"), \
+             mock.patch.object(stackctl, "push_configs", return_value=[]), \
+             mock.patch.object(stackctl, "find_sync", return_value=sync), \
+             mock.patch.object(stackctl, "wait_rollout", return_value=0), \
+             mock.patch.object(stackctl, "log"):
+            args = argparse.Namespace(stacks=["probe"], repository="apiary", branch="main", dry_run=False, timeout=30)
+            self.assertEqual(stackctl.cmd_ensure(api, args), 1)
+
+
 class Clock:
     def __init__(self):
         self.t = 0.0
@@ -289,6 +317,11 @@ class PauseTest(unittest.TestCase):
         ])
         self.assertEqual([s["name"] for s in order], ["a", "b"])
 
+    def test_pause_does_not_accept_a_disappeared_service_as_settled(self):
+        entry = {"kind": "service", "stack": "probe", "id": "s1", "name": "probe_web"}
+        with self.assertRaisesRegex(stackctl.Abort, "disappeared"):
+            stackctl.settle_paused(FakeArcane({}), [entry], quiet=0)
+
     def fake(self, auto_sync=True, script=None):
         api = FakeArcane({"s1": svc(name="probe_web", replicas=2, running=2,
                                     labels={"apiary.pause": "safe", "apiary.probe": "tcp:8080"})}, script)
@@ -398,6 +431,23 @@ class ConfigsTest(unittest.TestCase):
         self.assertEqual(sorted(c["spec"]["Name"] for c in doomed), ["probe_index_v2", "unused_v1"])
         doomed = stackctl.prune_plan(configs, "probe", 3, in_use={"probe_index_v5"})
         self.assertEqual(sorted(c["spec"]["Name"] for c in doomed), [])
+
+    def test_prune_keeps_previous_spec_after_skipped_versions(self):
+        api = FakeArcane({"s1": svc(configs=["index_v8"])})
+        api.configs = [{"id": f"id{v}", "spec": {"Name": f"index_v{v}", "Labels": {
+            "apiary.stack": "probe", "apiary.config.base": "index", "apiary.config.version": str(v)}}}
+                       for v in (2, 3, 5, 6, 7, 8)]
+        prior = json.dumps({"TaskTemplate": {"ContainerSpec": {"Configs": [{"ConfigName": "index_v5"}]}}})
+        runner = lambda host, script: mock.Mock(returncode=0, stdout=prior, stderr="")
+        with mock.patch.object(stackctl, "log"):
+            self.assertEqual(stackctl.cmd_prune(api, argparse.Namespace(stack="probe", keep=2), runner=runner), 0)
+        removed = [path.rsplit("/", 1)[-1] for method, path, _ in api.calls if method == "DELETE"]
+        self.assertEqual(removed, ["id2"])
+        api.calls.clear()
+        broken = lambda host, script: mock.Mock(returncode=1, stdout="", stderr="manager unavailable")
+        with self.assertRaisesRegex(stackctl.Abort, "manager unavailable"):
+            stackctl.cmd_prune(api, argparse.Namespace(stack="probe", keep=2), runner=broken)
+        self.assertFalse(any(method == "DELETE" for method, _, _ in api.calls))
 
 
 class SecretTest(unittest.TestCase):

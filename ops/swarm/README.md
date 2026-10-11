@@ -109,8 +109,10 @@ If a rollout fails, inspect `status` and the Arcane sync, then use
 `ops/swarm/stackctl.py rollback <name>` for the previous service spec. Revert
 the bad Git commit and deploy the reverted stack before another sync can
 reapply it. Keep current and previous config versions with
-`ops/swarm/stackctl.py prune <name> --keep 2`; remove an old secret only after
-it is no longer a rollback target. `ops/swarm/stackctl.py remove <name> --yes`
+`ops/swarm/stackctl.py prune <name> --keep 2`; it reads Docker's previous service
+spec through the manager and refuses to prune if that check fails. Remove an
+old secret only after it is no longer a rollback target.
+`ops/swarm/stackctl.py remove <name> --yes`
 deletes the sync, services and stack-owned configs after a quiet window;
 secrets require separate `secret rm NAME` after checking other users.
 
