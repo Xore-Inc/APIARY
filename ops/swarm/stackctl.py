@@ -608,6 +608,42 @@ def wait_replicas(api: Arcane, stack: str, sid: str, want: int, timeout: int = 3
     return False
 
 
+def settle_paused(api: Arcane, entries: list[dict], quiet: float = 45, timeout: float = 300, poll: float = 3,
+                  sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
+    """Hold every paused service at 0 for `quiet` seconds in a row.
+
+    Switching the gate off does not stop a sync that is already running, and
+    switching autoSync ON makes Arcane kick one at once. Its deploy restores
+    the stack file's replicas, possibly after our scale to 0 (seen live in
+    #3590). So re-assert 0 until nothing has touched the services for longer
+    than one sync takes.
+    """
+    services = [e for e in entries if e["kind"] == "service"]
+    t0 = clock()
+    calm_since = clock()
+    while True:
+        by_stack: dict[str, dict[str, dict]] = {}
+        for e in services:
+            if e["stack"] not in by_stack:
+                by_stack[e["stack"]] = {s["id"]: s for s in api.stack_services(e["stack"])}
+        disturbed = False
+        for e in services:
+            cur = by_stack[e["stack"]].get(e["id"]) or {}
+            if cur.get("replicas") not in (0, None):
+                log(f"  {e['name']}: a sync set replicas back to {cur.get('replicas')}; scaling to 0 again")
+                api.call("POST", f"/environments/{{env}}/swarm/services/{e['id']}/scale", {"replicas": 0})
+                disturbed = True
+            elif cur.get("runningReplicas"):
+                disturbed = True
+        if disturbed:
+            calm_since = clock()
+        elif clock() - calm_since >= quiet:
+            return
+        if clock() - t0 > timeout:
+            raise Abort("services did not stay at 0; the inventory is kept, run `resume` to restore")
+        sleep(poll)
+
+
 def probe(spec: str, host: str, via: str, runner: Callable = ssh_run) -> tuple[bool, str]:
     if spec.startswith("tcp:"):
         port = int(spec[4:])
@@ -645,6 +681,8 @@ def cmd_pause(api: Arcane, args, runner: Callable = ssh_run) -> int:
             write_inventory(entries)
             ok = wait_replicas(api, stack, s["id"], 0)
             log(f"  {s['name']}: {s.get('replicas')} -> 0 {'(stopped)' if ok else '(NOT confirmed stopped)'}")
+    settle_paused(api, entries)
+    log("held at 0 through the quiet window; no sync is restoring replicas")
     append_record(f"pause stacks={','.join(args.stacks)} entries={len(entries)}")
     log(f"recorded {STATE_DIR / INVENTORY}; resume with: stackctl.py resume")
     return EXIT_OK
@@ -775,9 +813,35 @@ def cmd_remove(api: Arcane, args) -> int:
     if sync:
         api.call("DELETE", f"/environments/{{env}}/gitops-syncs/{sync['id']}")
         log(f"deleted sync {sync['id']}")
-    if any(s.get("name") == args.stack for s in api.stacks()):
-        api.call("DELETE", f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(args.stack)}")
-        log(f"removed stack {args.stack}")
+    # A sync run already in flight is not cancelled by deleting its record and
+    # can deploy the stack again seconds later (seen live in #3590). Keep
+    # removing until the stack has stayed gone for longer than one sync takes.
+    clock, sleep = getattr(args, "clock", time.monotonic), getattr(args, "sleep", time.sleep)
+    t0 = calm = clock()
+    while True:
+        if any(s.get("name") == args.stack for s in api.stacks()):
+            try:
+                api.call("DELETE", f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(args.stack)}")
+                log(f"removed stack {args.stack}")
+            except NotFound:
+                pass
+            calm = clock()
+        elif clock() - calm >= getattr(args, "quiet", 45):
+            break
+        if clock() - t0 > 300:
+            raise Abort(f"{args.stack} keeps coming back; check for another sync deploying it")
+        sleep(3)
+    # External configs carry apiary.stack (stackctl created them); remove them
+    # once the services are gone. Swarm refuses one that is still in use.
+    for c in config_list(api):
+        spec = c.get("spec") or {}
+        if (spec.get("Labels") or {}).get("apiary.stack") == args.stack:
+            try:
+                api.call("DELETE", f"/environments/{{env}}/swarm/configs/{c['id']}")
+                log(f"removed config {spec.get('Name')}")
+            except Abort as exc:
+                log(f"kept config {spec.get('Name')}: {exc}")
+    log("secrets are not stack-owned; remove the stack's ones with `secret rm NAME` once nothing else uses them")
     return 0
 
 
