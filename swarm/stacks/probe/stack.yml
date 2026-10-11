@@ -57,5 +57,5 @@ secrets:
 
 configs:
   index:
-    name: probe_index_v2
+    name: probe_index_v4
     file: ./configs/index.html
