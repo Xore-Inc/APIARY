@@ -1658,6 +1658,19 @@ jobs:
             home: true
             run: python scripts/check-zeek-pin-parity.py
 
+          # #3597 (epic #3587): swarm ignores `build:` and a worker cannot pull
+          # a local tag, so every compose build context needs a containers.yml
+          # row that pushes it to GHCR, and every swarm stack file has to pin
+          # its images by digest. The first half keeps coverage complete as
+          # new stacks land; the second is inert until phase 3 (#3590) adds
+          # swarm/stacks/ and then rejects `build:` and floating tags.
+          # PyYAML is installed here for the same reason as the autoheal row.
+          - name: GHCR image coverage and swarm stack pinning (#3597)
+            home: true
+            run: |
+              python3 -m pip install -q pyyaml
+              python3 scripts/check-swarm-images.py all
+
           # #2458: the pointer-rot family (#2352, #2353, #2356/#2453, #2455,
           # #2357, five docs' worth invalidated by #1659) kept being fixed by
           # hand after PR #2367's one-off sweep script proved the shape. This
@@ -2560,7 +2573,7 @@ jobs:
           - name: scripts/tests suite
             home: true
             run: |
-              python3 -m pip install pytest
+              python3 -m pip install pytest pyyaml
               python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
     permissions:
