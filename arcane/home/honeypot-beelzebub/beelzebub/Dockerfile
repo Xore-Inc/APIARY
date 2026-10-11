@@ -24,7 +24,7 @@
 # close/rename/reopen io.Writer wrapper inserted at build time, keeping
 # Builder.logsFile (which Builder.Close() closes) pointed at the live
 # generation. See that patch's own docstring.
-FROM golang:1.26-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
+FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS build
 # python3 only runs json_log_rotation_patch.py (#2892) below; the runtime
 # stage never sees it.
 RUN apk add --no-cache git python3
