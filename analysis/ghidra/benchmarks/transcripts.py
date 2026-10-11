@@ -344,6 +344,8 @@ class Reproducibility:
     # replayed and rescored record predates it. Absence is honest; a filled-in
     # guess would not be.
     engine: str | None = None
+    harness: str = "native"
+    backend_engine: str | None = None
     kv_offload_disabled: bool | None = None
     fallback_engine: str | None = None
     # Where the weights physically sat when the tokens were produced, as
@@ -418,6 +420,8 @@ class Reproducibility:
             "claim_pool_version": self.claim_pool_version,
             "prompt_contract": self.prompt_contract,
             "engine": self.engine,
+            "harness": self.harness,
+            "backend_engine": self.backend_engine,
             "kv_offload_disabled": self.kv_offload_disabled,
             "fallback_engine": self.fallback_engine,
             **self.residency_fields(),
@@ -605,6 +609,15 @@ class TranscriptWriter:
                 "parsed": parsed,
                 "parse_ok": parsed is not None,
                 "tool_turns": (response or {}).get("tool_turns", []),
+                "cli_artifacts": (response or {}).get("cli_artifacts"),
+                "cli_artifacts_relative": (response or {}).get("cli_artifacts_relative"),
+                "cli_session_id": (response or {}).get("cli_session_id"),
+                "cli_wire_sha256": (response or {}).get("cli_wire_sha256"),
+                "cli_messages": (response or {}).get("cli_messages"),
+                "backend_options": (response or {}).get("backend_options"),
+                "file_block_fallback": (response or {}).get("file_block_fallback"),
+                "tool_fallback_reason": (response or {}).get("tool_fallback_reason"),
+                "tool_fallback_artifacts": (response or {}).get("tool_fallback_artifacts"),
             },
             "timing": {
                 "wall_seconds": (response or {}).get("wall_seconds"),

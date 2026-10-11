@@ -38,6 +38,7 @@ from polarity import forbidden_hit, mentions_injection_attempt  # noqa: E402  (p
 # in `tool_calls` with an empty `content`, and reading `content` alone recorded
 # "" for exactly those turns.
 from bench_tools import assistant_text  # noqa: E402
+from coding_cli import CodingCLI  # noqa: E402
 # was_capped is transcripts' and is imported rather than defined here: the
 # corpus scorer and the claim path are handed capped answers too, and this
 # module cannot be `import`ed by name, so a predicate owned only here is a
@@ -2803,6 +2804,11 @@ def chat(
         "options": {"temperature": 0, "num_ctx": context, "num_predict": num_predict, "seed": 144},
     }
     body["options"].update(sampling or {})
+    started = time.monotonic()
+    post = transport if transport is not None else request_json
+    cli_mode = getattr(post, "is_coding_cli", False)
+    if cli_mode:
+        post.set_case(recorder.slot if recorder else "unknown", case)
     # Harmony-served checkpoints (gpt-oss family) break three of the defaults
     # above when reached through Ollama 0.32.x's /api/chat (#2233), so they get
     # a serving adaptation instead of silent null-field scores. Prompts stay
@@ -2811,7 +2817,25 @@ def chat(
     if is_harmony_served(model):
         body["think"] = True
         body["options"].update(HARMONY_SAMPLING)
-        require_harmony_output_budget(model, num_predict)
+        try:
+            require_harmony_output_budget(model, num_predict)
+        except ValueError as exc:
+            if not cli_mode:
+                raise
+            detail = f"{type(exc).__name__}: {exc}"
+            result = {
+                "content": "", "message": {}, "prose": "",
+                "wall_seconds": round(time.monotonic() - started, 3),
+                "prompt_tokens": None, "output_tokens": None,
+                "tokens_per_second": None, "done_reason": "error",
+                "error": detail,
+            }
+            if parser is not None:
+                result["parsed"] = parser("")
+            if recorder is not None:
+                recorder.record(case=case, workflow=workflow, request_body=body,
+                                response=result, parsed=result.get("parsed"), error=detail)
+            return result
         # Never lowers a slot's own budget, and with the check above it can only
         # ever be the declared number: the floor and the budget are one value
         # on the wire, which is the whole point.
@@ -2827,18 +2851,34 @@ def chat(
     if tools:
         import bench_tools as _bt
         body["tools"] = list(tools)
-    started = time.monotonic()
     # The engine seam. `transport` is whatever is actually serving this model --
     # llama.cpp's /v1/chat/completions or Ollama's /api/chat -- and it has the
     # harness transport's own signature, so this call site and the tool-round
     # loop below are byte-identical on both engines. None means Ollama, which is
     # what every existing caller and every test passes.
-    post = transport if transport is not None else request_json
     tool_fallback_reason = None
     while True:
         try:
             response = post(f"{base_url}/api/chat", body)
-            if tools:
+            if cli_mode and tools and response.get("error"):
+                detail = response["error"]
+                if (serving_is_malformed_tool_call(detail) or
+                        "does not support tools" in detail.lower() or
+                        "invalid tool call arguments" in detail.lower()):
+                    failed_artifacts = response.get("cli_artifacts")
+                    fallback_body = dict(body)
+                    fallback_body.pop("tools", None)
+                    fallback_body["_cli_file_block_fallback"] = True
+                    fallback_body["messages"] = [dict(message) for message in body["messages"]]
+                    fallback_body["messages"][0]["content"] += (
+                        "\n\nThe backend rejected structured tool calls. Emit complete source "
+                        "only in literal <file path=\"relative/path\">...</file> blocks."
+                    )
+                    response = post(f"{base_url}/api/chat", fallback_body)
+                    response["tool_fallback_reason"] = detail
+                    response["tool_fallback_artifacts"] = failed_artifacts
+                    response["file_block_fallback"] = True
+            if tools and not cli_mode:
                 response = _bt.conduct_tool_rounds(
                     post, f"{base_url}/api/chat", body, response)
             break
@@ -2906,6 +2946,15 @@ def chat(
         "tokens_per_second": round(eval_count / (eval_duration / 1e9), 2) if eval_count and eval_duration else None,
         "done_reason": response.get("done_reason"),
     }
+    if response.get("error"):
+        result["error"] = response["error"]
+    for key in ("tool_fallback_reason", "tool_fallback_artifacts", "file_block_fallback"):
+        if response.get(key):
+            result[key] = response[key]
+    if response.get("cli_artifacts"):
+        for key in ("cli_artifacts", "cli_artifacts_relative", "cli_session_id",
+                    "cli_wire_sha256", "cli_messages", "backend_options"):
+            result[key] = response.get(key)
     if tool_fallback_reason:
         result["tool_fallback_reason"] = tool_fallback_reason
     if parser is not None:
@@ -2920,7 +2969,10 @@ def chat(
         result["tool_turns"] = [
             {"tool": turn.get("tool"), "arguments": turn.get("arguments"),
              "status": turn.get("status"), "reason": turn.get("reason"),
-             "result": (turn.get("result") or "")[:2000]}
+             "result": ((turn.get("result") or "") if cli_mode else
+                        (turn.get("result") or "")[:2000]),
+             **({"id": turn.get("id"), "cli_tool": turn.get("cli_tool")}
+                if cli_mode else {})}
             for turn in tool_turns
         ]
     if recorder is not None:
@@ -2930,6 +2982,7 @@ def chat(
             request_body=body,
             response=result,
             parsed=result.get("parsed"),
+            error=result.get("error"),
         )
     return result
 
@@ -3557,6 +3610,8 @@ def score_coder(
         import bench_tools as _bt
         sandbox = Path(tempfile.mkdtemp(prefix=f"coder-{case.name}-"))
         _bt.set_file_root(sandbox)
+        if getattr(transport, "is_coding_cli", False):
+            transport.workspace = sandbox
         try:
             for round_index in range(CODER_MAX_ROUNDS):
                 raw = chat(
@@ -3595,6 +3650,25 @@ def score_coder(
                         # The cause, in the round itself, so the transcript of a
                         # slot that stopped here says what the server rejected.
                         "malformed_tool_call": raw["malformed_tool_call"],
+                    })
+                    break
+                if (raw or {}).get("error"):
+                    stopped_because = "cli_error"
+                    turns = raw.get("tool_turns") or []
+                    writes = [t for t in turns if t.get("tool") == "write_file"]
+                    rounds.append({
+                        "round": round_index, "output_tokens": raw.get("output_tokens"),
+                        "capped": True, "declared_done": False, "chars": len(content),
+                        "tools_called": [t.get("tool") for t in turns], "tool_turns": turns,
+                        "files_written": sorted({
+                            str((t.get("arguments") or {}).get("path", ""))
+                            for t in writes if t.get("status") == "accepted"}),
+                        "writes_accepted": sum(t.get("status") == "accepted" for t in writes),
+                        "writes_rejected": sum(t.get("status") == "rejected" for t in writes),
+                        "file_mechanism": file_mechanism(bool(writes), 0),
+                        "text_blocks_seen": 0, "text_blocks_written": 0,
+                        "text_blocks_refused": 0, "text_blocks_malformed": 0,
+                        "text_block_paths": [], "error": raw["error"],
                     })
                     break
                 tool_calls = message.get("tool_calls") or []
@@ -3649,8 +3723,12 @@ def score_coder(
                 prompt = _continuation_prompt(case, content, round_index + 1)
         finally:
             _bt.set_file_root(None)
+            if getattr(transport, "is_coding_cli", False):
+                transport.workspace = None
 
         record = _pending_coder_case(case, raw)
+        if raw.get("cli_artifacts"):
+            record["cli_artifacts"] = raw["cli_artifacts"]
         record["sandbox_dir"] = str(sandbox)
         record["rounds"] = rounds
         record["round_count"] = len(rounds)
@@ -3745,8 +3823,9 @@ CODER_ARTIFACTS_DIRNAME = "coder-artifacts"
 ARTIFACT_INDEX_FILENAME = "artifact-index.jsonl"
 
 # Compilation/syntax checking is a *diagnostic*, never a gate or execution:
-# generated binaries and Python bytecode are deleted, nothing is run, and the
-# result does not move any score. Grading stays manual against the frozen rubric.
+# native generated products are deleted, CLI products are retained inert for
+# audit, nothing is run, and the result does not move any score. Grading stays
+# manual against the frozen rubric.
 # Owner decision: full compile rather than -fsyntax-only, so a case that parses
 # but fails to link is visible.
 _COMPILE = {
@@ -3755,23 +3834,33 @@ _COMPILE = {
     ".rs": (["rustc", "--edition", "2021", "--crate-name", "benchmark_artifact",
              "-o", "{out}", "{src}"], "rustc"),
     ".py": (["python3", "-m", "py_compile", "{src}"], "python3"),
+    ".cs": (["csc", "-out:{out}", "{src}"], "csc"),
+    ".ps1": (["pwsh", "-NoProfile", "-NonInteractive", "-Command",
+              "$errors = $null; "
+              "[System.Management.Automation.Language.Parser]::ParseFile($args[0], "
+              "[ref]$null, [ref]$errors) > $null; "
+              "if ($errors.Count) { $errors | ForEach-Object { "
+              "[Console]::Error.WriteLine($_) }; exit 1 }", "{src}"], "pwsh"),
     ".php": (["php", "-l", "{src}"], "php"),
     ".sh": (["bash", "-n", "{src}"], "bash"),
 }
 
 
-def compile_check(source: Path, workdir: Path) -> dict[str, Any]:
+def compile_check(source: Path, workdir: Path, retain_products: bool = False) -> dict[str, Any]:
     """Run one artifact's compile/syntax diagnostic in an isolated temp dir.
 
     Isolated because this is untrusted model output: a checker invoked on it
     must not be able to write anywhere near the harness, and a crash must not
-    take the run with it. Generated binaries and bytecode are removed on every
-    path, including failure, so nothing built from generated code survives.
+    take the run with it. Native checks remove generated products; CLI checks
+    may retain inert products for audit. Generated programs are never run.
     """
     ext = source.suffix
     if ext not in _COMPILE:
         return {"attempted": False, "reason": f"no compiler mapped for {ext or 'unknown extension'}",
-                "ok": None, "diagnostics": ""}
+                "ok": None, "diagnostics": "",
+                **({"command": None, "compiler": None, "returncode": None,
+                    "stdout": "", "stderr": "", "products": []}
+                   if retain_products else {})}
     argv, compiler = _COMPILE[ext]
     workdir.mkdir(parents=True, exist_ok=True)
     binary = workdir / f"{source.stem}.bin"
@@ -3779,8 +3868,11 @@ def compile_check(source: Path, workdir: Path) -> dict[str, Any]:
     argv = [a.format(out=str(binary), src=str(source)) for a in argv]
     if not shutil.which(compiler):
         return {"attempted": True, "reason": f"{compiler} not installed", "ok": None,
-                "diagnostics": ""}
+                "diagnostics": "", **({"command": argv, "compiler": compiler,
+                                        "returncode": None, "stdout": "", "stderr": "",
+                                        "products": []} if retain_products else {})}
     returncode = None
+    stdout = stderr = ""
     try:
         env = os.environ.copy() if ext == ".py" else None
         if env is not None:
@@ -3789,19 +3881,35 @@ def compile_check(source: Path, workdir: Path) -> dict[str, Any]:
                               cwd=workdir, env=env)
         returncode = proc.returncode
         ok = returncode == 0
-        diagnostics = (proc.stderr or proc.stdout or "")[:4000]
-    except subprocess.TimeoutExpired:
+        stdout, stderr = proc.stdout or "", proc.stderr or ""
+        diagnostics = (stderr or stdout)[:4000]
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.stdout or "", exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
         ok, diagnostics = False, "compile timed out after 120s"
     except Exception as exc:                              # noqa: BLE001
         ok, diagnostics = False, f"{type(exc).__name__}: {exc}"
     finally:
-        binary.unlink(missing_ok=True)
-        shutil.rmtree(pycache, ignore_errors=True)
+        if not retain_products:
+            binary.unlink(missing_ok=True)
+            shutil.rmtree(pycache, ignore_errors=True)
+    products = []
+    if retain_products:
+        products = [str(path) for path in (binary,) if path.is_file()]
+        if pycache.exists():
+            products.extend(str(path) for path in pycache.rglob("*") if path.is_file())
     return {"attempted": True, "ok": ok, "compiler": compiler,
-            "returncode": returncode, "diagnostics": diagnostics}
+            "returncode": returncode, "diagnostics": diagnostics,
+            **({"command": argv, "stdout": stdout, "stderr": stderr,
+                "products": products}
+               if retain_products else {})}
 
 _EXT_BY_LANGUAGE = {
-    "C++": ".cpp", "C": ".c", "Python": ".py", "Rust": ".rs", "PHP": ".php",
+    "C++": ".cpp", "C": ".c", "C#": ".cs", "PowerShell": ".ps1",
+    "Python": ".py", "Rust": ".rs", "PHP": ".php",
 }
 
 
@@ -3862,7 +3970,8 @@ def write_coder_artifacts(writer: TranscriptWriter, artifact: dict[str, Any],
 
 def write_coder_artifact_file(root: Path, artifact: dict[str, Any], case_id: str,
                               record: dict[str, Any], compile_results: dict[str, Any],
-                              workdir: Path, artifact_index: Path | None = None) -> int:
+                              workdir: Path, artifact_index: Path | None = None,
+                              retain_products: bool = False) -> int:
     """Write ONE case artifact from a written file or the final answer prose.
 
     The gradeable flat artifact deliberately prefers sources in this order:
@@ -3887,8 +3996,9 @@ def write_coder_artifact_file(root: Path, artifact: dict[str, Any], case_id: str
     else:
         case_id_for_file = case_id
 
-    copied, path_sources = _copy_tool_written_files(record, root)
-    if artifact_index is not None:
+    copy_root = root / "cases" / case_id if record.get("cli_artifacts") else root
+    copied, path_sources = _copy_tool_written_files(record, copy_root)
+    if artifact_index is not None and not record.get("cli_artifacts"):
         with artifact_index.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({
                 "case": case_id,
@@ -3900,9 +4010,9 @@ def write_coder_artifact_file(root: Path, artifact: dict[str, Any], case_id: str
     selection_note = ""
     for directory, kind in (("tool-written", "write_file tool"),
                             ("text-block", "<file> block")):
-        candidates = [root / path for path in copied if Path(path).parts[0] == directory]
+        candidates = [copy_root / path for path in copied if Path(path).parts[0] == directory]
         exact = [path for path in candidates
-                 if path.relative_to(root / directory).as_posix() == declared]
+                 if path.relative_to(copy_root / directory).as_posix() == declared]
         basename = [path for path in candidates if path.name == Path(declared).name]
         same_ext = [path for path in candidates if path.suffix == Path(declared).suffix]
         choices = exact or basename or same_ext or candidates
@@ -3922,7 +4032,7 @@ def write_coder_artifact_file(root: Path, artifact: dict[str, Any], case_id: str
                 key=lambda path: (
                     path.stat().st_size,
                     hashlib.sha256(
-                        path.relative_to(root / directory).as_posix().encode()
+                        path.relative_to(copy_root / directory).as_posix().encode()
                     ).digest(),
                 ),
             )
@@ -3972,7 +4082,9 @@ def write_coder_artifact_file(root: Path, artifact: dict[str, Any], case_id: str
     # exactly what the model emitted is the honest thing.
     compile_input = root / f".compile{ext}"
     compile_input.write_text(content, encoding="utf-8")
-    compile_results[case_id] = compile_check(compile_input, workdir)
+    compile_results[case_id] = compile_check(
+        compile_input, root / "compiled" / case_id if retain_products else workdir,
+        retain_products=retain_products)
     compile_input.unlink(missing_ok=True)
     return 1
 
@@ -4202,6 +4314,8 @@ def evaluate_slot(
             reproducibility=Reproducibility(
                 tier=tier, prompt_contract=contract,
                 engine=session.engine,
+                harness="opencode" if getattr(transport, "is_coding_cli", False) else "native",
+                backend_engine=getattr(session, "cli_backend_engine", None),
                 kv_offload_disabled=serving_record.get("kv_offload_disabled"),
                 fallback_engine=session.fallback_engine,
                 # The measured placement, handed over whole. Unpacking six names
@@ -4221,7 +4335,7 @@ def evaluate_slot(
         # error that only looks like one. A model that advertises tools and
         # still rejects them falls through to the existing 400 handler below --
         # this is the fast path, not its replacement.
-        if slot == "coder" and (reason := missing_capability_reason(
+        if slot == "coder" and not getattr(transport, "is_coding_cli", False) and (reason := missing_capability_reason(
                 base_url, model, recorder)) is not None:
             return {
                 "model": model,
@@ -4264,10 +4378,30 @@ def evaluate_slot(
                     write_coder_artifact_file(
                         root, artifact, record["case"], record,
                         stream_state["compile"], stream_state["workdir"],
-                        writer.directory / ARTIFACT_INDEX_FILENAME)
+                        writer.directory / ARTIFACT_INDEX_FILENAME,
+                        retain_products=getattr(transport, "is_coding_cli", False))
                     (root / "compile-report.json").write_text(
                         json.dumps(stream_state["compile"], indent=2),
                         encoding="utf-8")
+                    if getattr(transport, "is_coding_cli", False):
+                        case_id = record["case"]
+                        related = [root / "cases" / case_id,
+                                   root / "compiled" / case_id]
+                        files = [path for base in related if base.exists()
+                                 for path in base.rglob("*") if path.is_file()]
+                        language, declared = _coder_case_files().get(case_id, ("", ""))
+                        ext = Path(declared).suffix or _EXT_BY_LANGUAGE.get(language, ".txt")
+                        grade = root / (case_id if case_id.endswith(ext) else case_id + ext)
+                        if grade.is_file():
+                            files.append(grade)
+                        files.append(root / "compile-report.json")
+                        with (writer.directory / ARTIFACT_INDEX_FILENAME).open(
+                                "a", encoding="utf-8") as index:
+                            index.write(json.dumps({"slot": "coder", "case": case_id,
+                                "model": artifact.get("tag"),
+                                "paths": sorted(str(path.relative_to(
+                                    writer.directory / CODER_ARTIFACTS_DIRNAME))
+                                    for path in files if path.is_file())}) + "\n")
                     write_human_grades_template(writer, artifact, record)
 
                 cases = score_coder(base_url, model, context, recorder, _stream_one,
@@ -4278,7 +4412,8 @@ def evaluate_slot(
             # a human grader can read code instead of escaped JSON. A case with
             # no real source intentionally has no flat artifact.
             if writer is not None:
-                compiled = write_coder_artifacts(writer, artifact, {c["case"]: c for c in cases})
+                if not getattr(transport, "is_coding_cli", False):
+                    write_coder_artifacts(writer, artifact, {c["case"]: c for c in cases})
                 report_path = (writer.directory / CODER_ARTIFACTS_DIRNAME
                                / artifact.get("tag", "unknown").replace("/", "_")
                                / "compile-report.json")
@@ -4645,6 +4780,11 @@ def main() -> int:
     )
     parser.add_argument("--colibri-base-url", default="http://127.0.0.1:8973",
         help="Base URL for the colibri engine (default: http://127.0.0.1:8973)")
+    parser.add_argument("--harness", choices=("native", "opencode"), default="native",
+                        help="Agent runtime; opencode scores are separate from native scores")
+    parser.add_argument("--coding-cli-bin", default="opencode")
+    parser.add_argument("--coding-cli-timeout", type=int, default=9000)
+    parser.add_argument("--coding-cli-steps", type=int, default=16)
     parser.add_argument("--context", type=int, default=16384)
     parser.add_argument("--manifest", help="Approved/candidate manifest; evaluates each model only for its slot")
     parser.add_argument("--output", help="Operator-side path for the verbose report (required with --manifest)")
@@ -4694,6 +4834,17 @@ def main() -> int:
         parser.error("--manifest requires --output and cannot be combined with positional models")
     if not args.manifest and not args.models:
         parser.error("provide model tags or --manifest with --output")
+    if getattr(args, "harness", "native") == "opencode":
+        if args.no_transcripts:
+            parser.error("--harness opencode requires transcripts for CLI artifacts")
+        if args.coding_cli_timeout <= 0 or args.coding_cli_steps <= 0:
+            parser.error("CLI timeout and steps must be positive")
+        if not shutil.which(args.coding_cli_bin):
+            parser.error(f"OpenCode executable not found: {args.coding_cli_bin}")
+        version = subprocess.run([args.coding_cli_bin, "--version"],
+                                 capture_output=True, text=True, timeout=10, check=False)
+        if version.returncode or version.stdout.strip() != "opencode v2.0.26":
+            parser.error("--harness opencode requires OpenCode v2.0.26")
 
     # Opened after argument validation so a usage error never leaves an empty
     # run directory that a later run would refuse to reuse.
@@ -4711,13 +4862,14 @@ def main() -> int:
         writer = TranscriptWriter(
             args.transcript_dir,
             RunMetadata(
-                benchmark=BENCHMARK_VERSION,
+                benchmark=BENCHMARK_VERSION + ("-opencode-cli-v1" if args.harness == "opencode" else ""),
                 provenance=args.provenance,
                 operator=args.operator,
                 supersedes=args.supersedes,
             ),
         )
         print(f"transcripts: {writer.path}", flush=True)
+    args.coding_cli_root = writer.directory / CODER_ARTIFACTS_DIRNAME if writer else None
     try:
         return run(args, base_url, writer)
     finally:
@@ -4786,23 +4938,29 @@ def open_session(
     if args.engine == ENGINE_OLLAMA:
         session.engine, session.fallback_engine = ENGINE_OLLAMA, None
         session.transport = serving_ollama_transport(base_url, request_json)
-        return session
-    print(f"  engine: starting llama.cpp for {model}", flush=True)
-    # `session.open()` raises `UnresolvableModel` for a name that is not a model
-    # under any spelling, rather than falling back -- the fallback would score
-    # whichever model was resident and report success. Nothing catches it here:
-    # `run()` decides what one bad slot costs the run, records it as that slot's
-    # failure, and keeps evaluating the rest.
-    session.open()
-    # The reason is printed only when a fallback actually happened. Comparing
-    # the engine name against a constant that says "llamacpp" while the engine
-    # reports "llama.cpp" never matched, so this printed the fallback clause on
-    # every healthy llama.cpp run -- `serving on llama.cpp (llama.cpp
-    # unavailable, fell back: None)`. That line is how a whole roster gets
-    # judged, so a contradiction baked into the success path is not cosmetic.
-    print(f"  engine: serving on {session.engine}"
-          + (f" (llama.cpp unavailable, fell back: {session.fallback_reason})"
-             if session.fallback_engine else ""), flush=True)
+    else:
+        print(f"  engine: starting llama.cpp for {model}", flush=True)
+        # `session.open()` raises `UnresolvableModel` for a name that is not a model
+        # under any spelling, rather than falling back -- the fallback would score
+        # whichever model was resident and report success. Nothing catches it here:
+        # `run()` decides what one bad slot costs the run, records it as that slot's
+        # failure, and keeps evaluating the rest.
+        session.open()
+        # The reason is printed only when a fallback actually happened. Comparing
+        # the engine name against a constant that says "llamacpp" while the engine
+        # reports "llama.cpp" never matched, so this printed the fallback clause on
+        # every healthy llama.cpp run -- `serving on llama.cpp (llama.cpp
+        # unavailable, fell back: None)`. That line is how a whole roster gets
+        # judged, so a contradiction baked into the success path is not cosmetic.
+        print(f"  engine: serving on {session.engine}"
+              + (f" (llama.cpp unavailable, fell back: {session.fallback_reason})"
+                 if session.fallback_engine else ""), flush=True)
+    if getattr(args, "harness", "native") == "opencode":
+        session.cli_backend_engine = session.engine
+        session.transport = CodingCLI(
+            model, session.transport, args.coding_cli_bin,
+            args.coding_cli_timeout, args.coding_cli_steps,
+            args.coding_cli_root / model.replace("/", "_"))
     return session
 
 
@@ -4836,7 +4994,8 @@ def run(args: argparse.Namespace, base_url: str, writer: TranscriptWriter | None
         with open(args.manifest, encoding="utf-8") as source:
             manifest = json.load(source)
         report = {
-            "benchmark": BENCHMARK_VERSION,
+            "benchmark": BENCHMARK_VERSION + ("-opencode-cli-v1" if getattr(args, "harness", "native") == "opencode" else ""),
+            "harness": getattr(args, "harness", "native"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "retention": {"class": "operator-side-verbose", "recommended_days": 30},
             "ollama_version": optional_version(base_url),
@@ -4882,7 +5041,8 @@ def run(args: argparse.Namespace, base_url: str, writer: TranscriptWriter | None
         return 0 if all(item.get("ok") for item in report["slots"].values()) else 1
 
     report = {
-        "benchmark": BENCHMARK_VERSION,
+        "benchmark": BENCHMARK_VERSION + ("-opencode-cli-v1" if getattr(args, "harness", "native") == "opencode" else ""),
+        "harness": getattr(args, "harness", "native"),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "base_url": base_url,
         "context": args.context,

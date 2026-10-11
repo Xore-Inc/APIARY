@@ -10,9 +10,9 @@ record, literature review, measurements, and recommendations live in
 
 - Fixtures are synthetic and use only TEST-NET addresses, reserved
   `.test`/`.invalid` names, and fake credentials.
-- Input is sent only to the configured Ollama URL, which defaults to loopback.
-- The script never executes fixture content or manages a process, container,
-  VM, network rule, or model download.
+- Native input is sent only to the configured Ollama URL, which defaults to loopback.
+- The CLI mode starts an isolated OpenCode process and loopback bridge. It never
+  executes generated programs or downloads models.
 - GPU telemetry is read with `nvidia-smi`; its absence is reported as `null`.
 - Each candidate is explicitly unloaded before the next one.
 
@@ -20,6 +20,52 @@ Review every new fixture for routable addresses, real secrets, and executable
 side effects before committing it.
 
 ## Run
+
+### Coding CLI harness
+
+Install OpenCode v2.0.26 on the benchmark host, then select it explicitly for a
+new run. Keep the native roster and CLI roster in separate transcript roots;
+their scores are not comparable because OpenCode adds its own agent prompt and
+tool loop. The CLI benchmark uses the existing `--engine` selection beneath a
+local loopback bridge, so llama.cpp, colibri, and Ollama fallback remain the
+same engine choices. No GPU request is needed to verify the CLI adapter: run
+`python3 analysis/ghidra/benchmarks/tests/test_coding_cli.py` from the repo
+root for the always-on bridge/unit coverage. On a runner where the exact CLI
+is already provisioned, opt into the real CLI-to-stub gate with
+`APIARY_OPENCODE_INTEGRATION=1 python3 analysis/ghidra/benchmarks/tests/test_coding_cli.py`.
+The opt-in gate fails unless `opencode --version` is exactly
+`opencode v2.0.26`; ordinary GitHub-hosted CI does not assume it is installed.
+
+```bash
+python3 analysis/ghidra/benchmarks/evaluate-models.py \
+  --harness opencode --engine llamacpp \
+  --base-url http://127.0.0.1:11434 \
+  --slots ghidra,sessions,revdeck,coder \
+  --provenance live_model --transcript-dir /var/lib/benchmark-runs/cli-transcripts \
+  MODEL_TAG
+```
+
+`--coding-cli-bin`, `--coding-cli-timeout` (seconds, default 9000), and
+`--coding-cli-steps` (default 16) set the installed CLI, per-request wall clock,
+and OpenCode agent step cap. `--harness native` is the explicit legacy fallback.
+CLI mode requires transcripts. Every case is attempted even if an earlier CLI
+request fails; timeout, backend error, and step cap give that case a non-`ok`
+record. Tool support is measured by attempting the CLI, not inferred from
+Ollama capability metadata.
+
+The run uses schema `apiary-benchmark-transcript-v1` and a distinct benchmark
+version ending `-opencode-cli-v1`. Each transcript records the original harness
+request and its `response.cli_artifacts` path. Under that run's
+`coder-artifacts/<model>/<slot>/<case>/round-NN/`, `wire.jsonl` holds complete
+OpenCode requests and backend responses, `cli.jsonl` holds the raw CLI events,
+`session.json` exports the session, `home/` holds the isolated CLI configuration
+and session storage, and `stderr.txt`
+holds diagnostics. The source files, per-case manifests, compiler diagnostics,
+and retained binaries/bytecode remain under `coder-artifacts/<model>/` for
+manual grading. Generated programs are never executed. The CLI permits
+workspace read, write, edit, glob, and grep; Bash, task delegation, web, and
+external directory access are denied. Run this on a host with appropriate
+process and filesystem isolation for untrusted model output.
 
 Install candidate tags as a separate reviewed operator action, then run the
 three approved/candidate slots on the analysis host. The benchmark never pulls

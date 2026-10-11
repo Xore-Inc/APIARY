@@ -425,7 +425,7 @@ class TestCompileCheck(unittest.TestCase):
             Path(declared).suffix
             for _, declared in self.ev._coder_case_files().values()
         }
-        self.assertEqual(extensions, {".c", ".cpp", ".php", ".py", ".rs", ".sh"})
+        self.assertEqual(extensions, {".c", ".cs", ".ps1", ".py", ".sh"})
         self.assertEqual(extensions - self.ev._COMPILE.keys(), set())
         self.assertEqual(self.ev._COMPILE[".py"][0][:3],
                          ["python3", "-m", "py_compile"])
@@ -1060,26 +1060,26 @@ class TestCoderFileTooling(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox = Path(tmp) / "sandbox"
             sandbox.mkdir()
-            (sandbox / "main.rs").write_text("fn main() { /* tool */ }")
+            (sandbox / "scanner.py").write_text("print('tool')\n")
             root = Path(tmp) / "artifacts"
             root.mkdir()
             record = {
                 "case": self.ev.CODER_CASES[0].name, "capped": False, "degenerate": False,
-                "output": {"content": "fn main() { /* answer */ }"},
+                "output": {"content": "print('answer')\n"},
                 "sandbox_dir": str(sandbox), "files_written": 1,
                 "writes_accepted": 1, "writes_rejected": 0,
             }
             compile_results, workdir = {}, Path(tempfile.mkdtemp())
             self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, record["case"],
                                               record, compile_results, workdir)
-            tool_file = root / "tool-written" / "main.rs"
-            fallback = root / (record["case"] + ".rs")
+            tool_file = root / "tool-written" / "scanner.py"
+            fallback = root / (record["case"] + ".py")
             self.assertTrue(tool_file.is_file())
             self.assertTrue(fallback.is_file())
-            self.assertIn("tool */", tool_file.read_text())
-            self.assertIn("tool */", fallback.read_text())
-            self.assertNotIn("answer */", fallback.read_text())
-            self.assertIn("source: tool-written/main.rs", fallback.read_text())
+            self.assertIn("print('tool')", tool_file.read_text())
+            self.assertIn("print('tool')", fallback.read_text())
+            self.assertNotIn("print('answer')", fallback.read_text())
+            self.assertIn("source: tool-written/scanner.py", fallback.read_text())
             manifest = _json.loads(
                 (root / "tool-written" / "source-manifest.json").read_text())
             self.assertEqual(manifest["files_written"], 1)
@@ -1089,9 +1089,9 @@ class TestCoderFileTooling(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox = Path(tmp) / "sandbox"
             (sandbox / "src").mkdir(parents=True)
-            source = "fn main() { /* real tool source */ }\n"
-            (sandbox / "src" / "main.rs").write_text(source)
-            (sandbox / "helper.rs").write_text("fn helper() {}\n")
+            source = "print('real tool source')\n"
+            (sandbox / "src" / "scanner.py").write_text(source)
+            (sandbox / "helper.py").write_text("def helper(): pass\n")
             root = Path(tmp) / "artifacts"
             root.mkdir()
             case = self.ev.CODER_CASES[0].name
@@ -1100,14 +1100,14 @@ class TestCoderFileTooling(unittest.TestCase):
                 "output": {"content": '{"function":{"name":"write_file"}}',
                            "prose": ""},
                 "sandbox_dir": str(sandbox), "files_written": 2,
-                "files_written_paths": ["helper.rs", "src/main.rs"],
+                "files_written_paths": ["helper.py", "src/scanner.py"],
                 "writes_accepted": 2, "writes_rejected": 0,
                 "file_mechanism": "api_tool",
             }
             self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, case, record,
                                               {}, Path(tmp) / "work")
-            graded = (root / f"{case}.rs").read_text()
-            self.assertIn("source: tool-written/src/main.rs", graded)
+            graded = (root / f"{case}.py").read_text()
+            self.assertIn("source: tool-written/src/scanner.py", graded)
             self.assertIn(source, graded)
             self.assertNotIn('"function"', graded)
 
@@ -1115,7 +1115,7 @@ class TestCoderFileTooling(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox = Path(tmp) / "sandbox"
             (sandbox / "src").mkdir(parents=True)
-            (sandbox / "smb_audit.cpp").write_text("/* declared */\n")
+            (sandbox / "shadow_parser.c").write_text("/* declared */\n")
             (sandbox / "src" / "main.cpp").write_text("/* other */\n")
             root = Path(tmp) / "artifacts"
             root.mkdir()
@@ -1143,16 +1143,16 @@ class TestCoderFileTooling(unittest.TestCase):
             root = Path(tmp) / "artifacts"
             root.mkdir()
             case = "credential-access-shadow-parser"
-                        record = {
-                            "case": case, "output": {"prose": ""},
-                            "sandbox_dir": str(sandbox), "files_written": 2,
-                            "files_written_paths": ["shadow_parser.c", "src/main.c"],
-                            "writes_accepted": 2, "writes_rejected": 0,
-                            "file_mechanism": "api_tool",
-                        }
-                        self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, case, record,
-                                                          {}, Path(tmp) / "work")
-                        graded = (root / f"{case}.c").read_text()
+            record = {
+                "case": case, "output": {"prose": ""},
+                "sandbox_dir": str(sandbox), "files_written": 2,
+                "files_written_paths": ["shadow_parser.c", "src/main.c"],
+                "writes_accepted": 2, "writes_rejected": 0,
+                "file_mechanism": "api_tool",
+            }
+            self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, case, record,
+                                              {}, Path(tmp) / "work")
+            graded = (root / f"{case}.c").read_text()
             self.assertIn("source: tool-written/audit.cpp", graded)
             self.assertIn("ambiguous: no declared path or basename match", graded)
             self.assertIn("largest file from 2 candidates", graded)
@@ -1166,37 +1166,37 @@ class TestCoderFileTooling(unittest.TestCase):
             record = {
                 "case": case, "capped": False, "degenerate": False,
                 "output": {"content": '{"function":{"name":"write_file"}}',
-                           "prose": "fn main() { /* prose */ }\n"},
+                           "prose": "print('prose')\n"},
             }
             self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, case, record,
                                               {}, Path(tempfile.mkdtemp()))
-            graded = (root / f"{case}.rs").read_text()
+            graded = (root / f"{case}.py").read_text()
             self.assertIn("source: answer-derived (final chat answer)", graded)
-            self.assertIn("/* prose */", graded)
+            self.assertIn("print('prose')", graded)
             self.assertNotIn('"function"', graded)
 
     def test_text_block_is_selected_before_answer_prose(self):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox = Path(tmp) / "sandbox"
             sandbox.mkdir()
-            (sandbox / "main.rs").write_text("fn main() { /* block */ }\n")
+            (sandbox / "scanner.py").write_text("print('block')\n")
             root = Path(tmp) / "artifacts"
             root.mkdir()
             case = self.ev.CODER_CASES[0].name
             record = {
                 "case": case, "capped": False, "degenerate": False,
-                "output": {"content": '<file path="main.rs">ignored wrapper</file>',
-                           "prose": '<file path="main.rs">ignored wrapper</file>'},
+                "output": {"content": '<file path="scanner.py">ignored wrapper</file>',
+                           "prose": '<file path="scanner.py">ignored wrapper</file>'},
                 "sandbox_dir": str(sandbox), "files_written": 0,
-                "files_written_paths": [], "text_block_paths": ["main.rs"],
+                "files_written_paths": [], "text_block_paths": ["scanner.py"],
                 "text_blocks_written": 1, "writes_accepted": 0,
                 "writes_rejected": 0, "file_mechanism": "text_block",
             }
             self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, case, record,
                                               {}, Path(tempfile.mkdtemp()))
-            graded = (root / f"{case}.rs").read_text()
-            self.assertIn("source: text-block/main.rs", graded)
-            self.assertIn("/* block */", graded)
+            graded = (root / f"{case}.py").read_text()
+            self.assertIn("source: text-block/scanner.py", graded)
+            self.assertIn("print('block')", graded)
             self.assertNotIn("ignored wrapper", graded)
 
     def test_grading_template_exposes_the_write_counters(self):
@@ -1374,39 +1374,39 @@ class TestTextFileProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox = Path(tmp) / "sandbox"
             (sandbox / "pkg").mkdir(parents=True)
-            # tool wrote lib.rs, the text block later rewrote main.rs
-            (sandbox / "pkg" / "lib.rs").write_text("/* api_tool */")
-            (sandbox / "main.rs").write_text("/* text_block */")
+            # The API tool and text protocol wrote distinct Python files.
+            (sandbox / "pkg" / "scanner.py").write_text("# api_tool")
+            (sandbox / "fallback.py").write_text("# text_block")
             root = Path(tmp) / "artifacts"
             root.mkdir()
             record = {
                 "case": self.ev.CODER_CASES[0].name, "capped": False, "degenerate": False,
-                "output": {"content": "/* answer */"},
+                "output": {"content": "# answer"},
                 "sandbox_dir": str(sandbox), "files_written": 1,
-                "files_written_paths": ["pkg/lib.rs"],
+                "files_written_paths": ["pkg/scanner.py"],
                 "writes_accepted": 1, "writes_rejected": 0,
                 "file_mechanism": "both", "text_blocks_written": 1,
                 "text_blocks_refused": 0, "text_blocks_seen": 1,
-                "text_blocks_malformed": 0, "text_block_paths": ["main.rs"],
+                "text_blocks_malformed": 0, "text_block_paths": ["fallback.py"],
             }
             self.ev.write_coder_artifact_file(root, {"tag": "m:q4"}, record["case"],
                                               record, {}, Path(tempfile.mkdtemp()))
-            self.assertEqual((root / "tool-written" / "pkg" / "lib.rs").read_text(),
-                             "/* api_tool */")
-            self.assertEqual((root / "text-block" / "main.rs").read_text(),
-                             "/* text_block */")
-            fallback = root / (record["case"] + ".rs")
-            self.assertIn("/* api_tool */", fallback.read_text())
-            self.assertNotIn("/* answer */", fallback.read_text())
-            self.assertIn("source: tool-written/pkg/lib.rs", fallback.read_text())
+            self.assertEqual((root / "tool-written" / "pkg" / "scanner.py").read_text(),
+                             "# api_tool")
+            self.assertEqual((root / "text-block" / "fallback.py").read_text(),
+                             "# text_block")
+            fallback = root / (record["case"] + ".py")
+            self.assertIn("# api_tool", fallback.read_text())
+            self.assertNotIn("# answer", fallback.read_text())
+            self.assertIn("source: tool-written/pkg/scanner.py", fallback.read_text())
             tool_manifest = _json.loads(
                 (root / "tool-written" / "source-manifest.json").read_text())
             text_manifest = _json.loads(
                 (root / "text-block" / "source-manifest.json").read_text())
-            self.assertEqual(tool_manifest["files"], ["pkg/lib.rs"])
-            self.assertEqual(text_manifest["files"], ["main.rs"])
-            self.assertEqual(tool_manifest["sources"]["tool"]["pkg/lib.rs"], "api_tool")
-            self.assertEqual(text_manifest["sources"]["text"]["main.rs"], "text_block")
+            self.assertEqual(tool_manifest["files"], ["pkg/scanner.py"])
+            self.assertEqual(text_manifest["files"], ["fallback.py"])
+            self.assertEqual(tool_manifest["sources"]["tool"]["pkg/scanner.py"], "api_tool")
+            self.assertEqual(text_manifest["sources"]["text"]["fallback.py"], "text_block")
             self.assertEqual(tool_manifest["file_mechanism"], "both")
             self.assertEqual(text_manifest["shadowed"], [])
             self.assertFalse(tool_manifest["executed"])

@@ -1909,6 +1909,15 @@ jobs:
               # a dead server still fails fast, and that both ends clamp so no
               # caller can buy an unbounded wait.
               python analysis/ghidra/benchmarks/tests/test_request_timeout.py
+              # Bridge/unit coverage always runs on ordinary GitHub-hosted
+              # workers; it does not assume OpenCode is installed.
+              python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              # A provisioned benchmark runner can separately opt into the real
+              # CLI gate; the test verifies the exact v2.0.26 pin.
+              if [ "${APIARY_OPENCODE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_OPENCODE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              fi
               python analysis/ghidra/benchmarks/tests/test_bench_tools.py
               # full_capabilities.py (#800): inventories env vars straight out of
               # the real pipeline source, so its own test runs against the real
