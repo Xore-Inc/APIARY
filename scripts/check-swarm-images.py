@@ -255,7 +255,9 @@ def check_completeness(
 
     # -- row sanity ------------------------------------------------------
     seen_images: dict[str, Row] = {}
-    by_context: dict[str, Row] = {}
+    # keyed by (context, Dockerfile): two images may build different
+    # Dockerfiles out of one context (sandbox/ghosts).
+    by_context: dict[tuple[str, str], Row] = {}
     for row in rows:
         if not IMAGE_NAME.match(row.image):
             errors.append(f"row {row.image!r}: not a valid image name ({IMAGE_NAME.pattern})")
@@ -268,11 +270,13 @@ def check_completeness(
                 f"row {row.image!r}: {row.context}/{row.dockerfile} does not exist (stale row?)"
             )
         for ctx in row.contexts:
-            if ctx in by_context and by_context[ctx] is not row:
+            key = (ctx, row.dockerfile)
+            if key in by_context and by_context[key] is not row:
                 errors.append(
-                    f"context {ctx}: claimed by both {by_context[ctx].image!r} and {row.image!r}"
+                    f"context {ctx} ({row.dockerfile}): claimed by both "
+                    f"{by_context[key].image!r} and {row.image!r}"
                 )
-            by_context[ctx] = row
+            by_context[key] = row
         if (primary).is_dir():
             want = tree_digest(primary)
             for extra in row.also_contexts:
@@ -299,20 +303,15 @@ def check_completeness(
         if b.context in exempt:
             report.append(f"exempt {where}: {b.context} ({exempt[b.context]})")
             continue
-        row = by_context.get(b.context)
+        row = by_context.get((b.context, b.dockerfile))
         if row is None:
             errors.append(
-                f"{where}: build context {b.context} has no row in {workflow}. "
+                f"{where}: build context {b.context} ({b.dockerfile}) has no row in {workflow}. "
                 f"Add one (image name, context, dockerfile if not Dockerfile) so CI "
                 f"pushes {REGISTRY}/<owner>/{IMAGE_PREFIX}<image>."
             )
             continue
         report.append(f"ok     {where}: {b.context} -> {row.image}")
-        if b.dockerfile != row.dockerfile:
-            errors.append(
-                f"{where}: compose builds {b.context}/{b.dockerfile} but row {row.image!r} "
-                f"builds {row.dockerfile}; set `dockerfile: {b.dockerfile}` on the row"
-            )
         if (b.target or None) != (row.target or None):
             errors.append(
                 f"{where}: compose target {b.target!r} differs from row {row.image!r} "
@@ -458,10 +457,10 @@ def build_manifest(
     run_id: str = "",
 ) -> dict:
     rows = matrix_rows(root, workflow)
-    services: dict[str, list[str]] = {}
+    services: dict[tuple[str, str], list[str]] = {}
     for b in compose_builds(root):
         if b.context:
-            services.setdefault(b.context, []).append(f"{b.file}:{b.service}")
+            services.setdefault((b.context, b.dockerfile), []).append(f"{b.file}:{b.service}")
     short = sha[:7]
     images = {}
     for row in sorted(rows, key=lambda r: r.image):
@@ -469,7 +468,7 @@ def build_manifest(
         digest = resolve(f"{repo}:sha-{short}")
         if not DIGEST.match(digest):
             raise RuntimeError(f"{row.image}: {digest!r} is not a sha256 digest")
-        compose = sorted({s for c in row.contexts for s in services.get(c, [])})
+        compose = sorted({s for c in row.contexts for s in services.get((c, row.dockerfile), [])})
         images[row.image] = {
             "repository": repo,
             "digest": digest,

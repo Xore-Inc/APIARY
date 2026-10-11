@@ -233,8 +233,8 @@ jobs:
             dockerfile: Dockerfile.api-prep
             scoped: true
           - image: ghosts-client
-            context: sandbox/ghosts/vendor/ghosts-src
-            dockerfile: Dockerfile-client-universal
+            context: sandbox/ghosts
+            dockerfile: Dockerfile.client-prep
             scoped: true
           - image: hellpot
             context: arcane/home/honeypot-hellpot/hellpot
