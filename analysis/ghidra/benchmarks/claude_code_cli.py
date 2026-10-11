@@ -345,7 +345,7 @@ class ClaudeCodeCLI:
                     "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
                     "DISABLE_AUTOUPDATER": "1"})
         session_id = str(uuid.uuid4())
-        command = [self.binary, "--bare", "-p", "--input-format", "stream-json",
+        command = [self.binary, "--bare", "--restricted", "-p", "--input-format", "stream-json",
                    "--output-format", "stream-json", "--verbose", "--model", model,
                    "--system-prompt-file", str(system_path), "--session-id", session_id,
                    "--max-turns", str(self.steps), "--permission-mode", "dontAsk",
