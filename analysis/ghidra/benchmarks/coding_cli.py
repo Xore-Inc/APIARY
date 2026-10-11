@@ -9,6 +9,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -65,6 +66,7 @@ def _to_cli_calls(calls: list[dict[str, Any]], turn: int) -> tuple[list[dict[str
 
 class CodingCLI:
     is_coding_cli = True
+    harness_name = "opencode"
 
     def __init__(self, model: str, backend: Callable[..., dict[str, Any]], binary: str,
                  timeout: int, steps: int, artifact_root: Path):
@@ -83,7 +85,7 @@ class CodingCLI:
         try:
             return self._run(_url, body)
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
+            error = _exception_detail(exc)
             root = (self.artifact_root / self.slot /
                     self.case.replace("/", "_").replace("..", "_") /
                     f"round-{self.round:02d}")
@@ -105,6 +107,7 @@ class CodingCLI:
                     "done_reason": "error", "error": error, "tool_turns": [],
                     "cli_artifacts": str(root),
                     "cli_artifacts_relative": str(root.relative_to(coder_root))}
+
 
     def _run(self, _url: str, body: dict[str, Any]) -> dict[str, Any]:
         self.round += 1
@@ -213,7 +216,7 @@ class CodingCLI:
                             stream.write(json.dumps(answers[-1]) + "\n")
                         self._json(payload)
                 except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"
+                    error = _exception_detail(exc)
                     backend_errors.append(error)
                     with wire.open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps({"request": requests[-1] if requests else None,
@@ -389,3 +392,23 @@ class CodingCLI:
                 "backend_options": [item["backend_request"]["options"] for item in answers
                                     if item.get("backend_request")],
                 "cli_artifacts_relative": str(root.relative_to(self.artifact_root.parent))}
+
+
+def _exception_detail(exc: Exception) -> str:
+    """Keep backend response bodies so the evaluator can classify real errors."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            body = ""
+        if body:
+            try:
+                payload = json.loads(body)
+                detail = payload.get("error", payload.get("message", payload))
+                if isinstance(detail, dict):
+                    detail = detail.get("message", detail)
+                return f"HTTPError {exc.code}: {detail}"
+            except (ValueError, TypeError):
+                return f"HTTPError {exc.code}: {body}"
+        return f"HTTPError {exc.code}: {exc.reason}"
+    return f"{type(exc).__name__}: {exc}"

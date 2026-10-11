@@ -1910,13 +1910,17 @@ jobs:
               # caller can buy an unbounded wait.
               python analysis/ghidra/benchmarks/tests/test_request_timeout.py
               # Bridge/unit coverage always runs on ordinary GitHub-hosted
-              # workers; it does not assume OpenCode is installed.
+              # workers; neither coding CLI is required.
               python analysis/ghidra/benchmarks/tests/test_coding_cli.py
-              # A provisioned benchmark runner can separately opt into the real
-              # CLI gate; the test verifies the exact v2.0.26 pin.
+              python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
+              # Provisioned runners can exercise the CLIs against local stubs.
               if [ "${APIARY_OPENCODE_INTEGRATION:-0}" = "1" ]; then
                 APIARY_OPENCODE_INTEGRATION=1 \
                   python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              fi
+              if [ "${APIARY_CLAUDE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_CLAUDE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
               fi
               python analysis/ghidra/benchmarks/tests/test_bench_tools.py
               # full_capabilities.py (#800): inventories env vars straight out of

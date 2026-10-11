@@ -1,6 +1,7 @@
 """OpenCode v2.0.26 integration against a deterministic in-process backend."""
 
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 BENCH = Path(__file__).resolve().parents[1]
@@ -189,13 +191,19 @@ class CodingCLITest(unittest.TestCase):
     @unittest.skipUnless(RUN_OPENCODE_INTEGRATION, "set APIARY_OPENCODE_INTEGRATION=1")
     def test_same_backend_tool_rejection_uses_file_block_fallback(self):
         import bench_tools as bt
-        for detail in ("does not support tools", "invalid tool call arguments"):
+        for detail in ("does not support tools", "invalid tool call arguments",
+                       "HTTPError: does not support tools"):
             with self.subTest(detail=detail):
                 requests = []
 
                 def backend(_url, body):
                     requests.append(body)
                     if body["tools"]:
+                        if detail.startswith("HTTPError"):
+                            raise urllib.error.HTTPError(
+                                "http://backend/v1/chat/completions", 400,
+                                "Bad Request", {},
+                                io.BytesIO(b'{"error":{"message":"does not support tools"}}'))
                         raise RuntimeError(detail)
                     return {"message": {"role": "assistant", "content":
                             '<file path="main.c">int main(void){return 0;}</file>\nIMPLEMENTATION COMPLETE'},
@@ -206,9 +214,11 @@ class CodingCLITest(unittest.TestCase):
                                  self.body["messages"][1]["content"], 16384, False, 16000,
                                  tools=list(bt.FILE_TOOLS), transport=cli)
                 self.assertTrue(result["file_block_fallback"], result)
-                self.assertIn(detail, result["tool_fallback_reason"])
+                self.assertIn("does not support tools" if detail.startswith("HTTPError") else detail,
+                              result["tool_fallback_reason"])
                 failed = Path(result["tool_fallback_artifacts"])
-                self.assertIn(detail, (failed / "wire.jsonl").read_text())
+                self.assertIn("does not support tools" if detail.startswith("HTTPError") else detail,
+                              (failed / "wire.jsonl").read_text())
                 self.assertEqual(result["tool_turns"], [])
                 self.assertEqual([bool(request["tools"]) for request in requests], [True, False])
                 self.assertTrue(all(request["model"] == "real-model" for request in requests))

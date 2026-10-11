@@ -11,7 +11,7 @@ record, literature review, measurements, and recommendations live in
 - Fixtures are synthetic and use only TEST-NET addresses, reserved
   `.test`/`.invalid` names, and fake credentials.
 - Native input is sent only to the configured Ollama URL, which defaults to loopback.
-- The CLI mode starts an isolated OpenCode process and loopback bridge. It never
+- The CLI mode starts an isolated Claude Code or OpenCode process and loopback bridge. It never
   executes generated programs or downloads models.
 - GPU telemetry is read with `nvidia-smi`; its absence is reported as `null`.
 - Each candidate is explicitly unloaded before the next one.
@@ -23,22 +23,25 @@ side effects before committing it.
 
 ### Coding CLI harness
 
-Install OpenCode v2.0.26 on the benchmark host, then select it explicitly for a
-new run. Keep the native roster and CLI roster in separate transcript roots;
-their scores are not comparable because OpenCode adds its own agent prompt and
-tool loop. The CLI benchmark uses the existing `--engine` selection beneath a
-local loopback bridge, so llama.cpp, colibri, and Ollama fallback remain the
-same engine choices. No GPU request is needed to verify the CLI adapter: run
-`python3 analysis/ghidra/benchmarks/tests/test_coding_cli.py` from the repo
-root for the always-on bridge/unit coverage. On a runner where the exact CLI
-is already provisioned, opt into the real CLI-to-stub gate with
-`APIARY_OPENCODE_INTEGRATION=1 python3 analysis/ghidra/benchmarks/tests/test_coding_cli.py`.
-The opt-in gate fails unless `opencode --version` is exactly
-`opencode v2.0.26`; ordinary GitHub-hosted CI does not assume it is installed.
+Install Claude Code on the benchmark host, then run a distinct Claude Code
+measurement. Keep native and CLI harness scores in separate transcript roots;
+they include different agent prompts and tool loops. The CLI benchmark retains
+the existing `--engine` selection beneath a local loopback bridge. Claude Code
+speaks Anthropic Messages to that bridge, which translates calls to the current
+llama.cpp/Ollama/Colibri transport and exposes sandboxed benchmark file tools
+through MCP. Anthropic documents custom Messages gateways but does not support
+routing Claude Code to non-Claude models; this local compatibility path is an
+experimental measurement harness, not an Anthropic-supported configuration.
+
+Run deterministic bridge/unit checks with
+`python3 analysis/ghidra/benchmarks/tests/test_claude_code_cli.py`. On a runner
+with Claude Code installed, exercise the real CLI against a local stub backend
+with `APIARY_CLAUDE_INTEGRATION=1 python3 analysis/ghidra/benchmarks/tests/test_claude_code_cli.py`.
+OpenCode remains an explicit alternate with `--harness opencode`.
 
 ```bash
 python3 analysis/ghidra/benchmarks/evaluate-models.py \
-  --harness opencode --engine llamacpp \
+  --harness claude --coding-cli-bin claude --engine llamacpp \
   --base-url http://127.0.0.1:11434 \
   --slots ghidra,sessions,revdeck,coder \
   --provenance live_model --transcript-dir /var/lib/benchmark-runs/cli-transcripts \
@@ -47,19 +50,20 @@ python3 analysis/ghidra/benchmarks/evaluate-models.py \
 
 `--coding-cli-bin`, `--coding-cli-timeout` (seconds, default 9000), and
 `--coding-cli-steps` (default 16) set the installed CLI, per-request wall clock,
-and OpenCode agent step cap. `--harness native` is the explicit legacy fallback.
+and agent turn cap. `--harness native` runs the original direct harness.
 CLI mode requires transcripts. Every case is attempted even if an earlier CLI
 request fails; timeout, backend error, and step cap give that case a non-`ok`
 record. Tool support is measured by attempting the CLI, not inferred from
 Ollama capability metadata.
 
-The run uses schema `apiary-benchmark-transcript-v1` and a distinct benchmark
-version ending `-opencode-cli-v1`. Each transcript records the original harness
-request and its `response.cli_artifacts` path. Under that run's
+Claude Code runs use schema `apiary-benchmark-transcript-v1` and the distinct
+benchmark version `-claude-code-cli-v1`. Each transcript records the original
+harness request, actual CLI messages, session ID, CLI version, and
+`response.cli_artifacts`. Under that run's
 `coder-artifacts/<model>/<slot>/<case>/round-NN/`, `wire.jsonl` holds complete
-OpenCode requests and backend responses, `cli.jsonl` holds the raw CLI events,
-`session.json` exports the session, `home/` holds the isolated CLI configuration
-and session storage, and `stderr.txt`
+Anthropic Messages requests and backend responses, `cli.jsonl` holds raw CLI
+events, `session.jsonl` holds Claude Code's native session, and `home/` contains
+isolated configuration and session storage. `stderr.txt`
 holds diagnostics. The source files, per-case manifests, compiler diagnostics,
 and retained binaries/bytecode remain under `coder-artifacts/<model>/` for
 manual grading. Generated programs are never executed. The CLI permits

@@ -506,6 +506,26 @@ class TestCompileCheck(unittest.TestCase):
             self.assertFalse(r["ok"])
             self.assertTrue(r["diagnostics"].strip())
 
+    def test_powershell_parser_gets_source_path_through_environment(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as t:
+            src = Path(t) / 'quoted " $(touch pwned);.ps1'
+            src.write_text("Write-Output 'never execute'\n")
+            with mock.patch.object(self.ev.shutil, "which", return_value="/usr/bin/pwsh"), \
+                 mock.patch.object(self.ev.subprocess, "run",
+                                   return_value=SimpleNamespace(returncode=0, stderr="", stdout="")) as run:
+                result = self.ev.compile_check(src, Path(t) / "work")
+            argv = run.call_args.args[0]
+            command = argv[argv.index("-Command") + 1]
+            self.assertTrue(result["ok"])
+            self.assertIn("$env:APIARY_COMPILE_INPUT", command)
+            self.assertNotIn(str(src), command)
+            self.assertNotIn(str(src), argv)
+            self.assertEqual(run.call_args.kwargs["env"]["APIARY_COMPILE_INPUT"],
+                             str(src.resolve()))
+
     def test_shell_syntax_is_checked_without_execution(self):
         import tempfile
         from pathlib import Path

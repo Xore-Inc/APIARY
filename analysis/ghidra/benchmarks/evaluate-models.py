@@ -39,6 +39,7 @@ from polarity import forbidden_hit, mentions_injection_attempt  # noqa: E402  (p
 # "" for exactly those turns.
 from bench_tools import assistant_text  # noqa: E402
 from coding_cli import CodingCLI  # noqa: E402
+from claude_code_cli import ClaudeCodeCLI  # noqa: E402
 # was_capped is transcripts' and is imported rather than defined here: the
 # corpus scorer and the claim path are handed capped answers too, and this
 # module cannot be `import`ed by name, so a predicate owned only here is a
@@ -2953,7 +2954,7 @@ def chat(
             result[key] = response[key]
     if response.get("cli_artifacts"):
         for key in ("cli_artifacts", "cli_artifacts_relative", "cli_session_id",
-                    "cli_wire_sha256", "cli_messages", "backend_options"):
+                    "cli_wire_sha256", "cli_messages", "backend_options", "cli_version"):
             result[key] = response.get(key)
     if tool_fallback_reason:
         result["tool_fallback_reason"] = tool_fallback_reason
@@ -3836,11 +3837,11 @@ _COMPILE = {
     ".py": (["python3", "-m", "py_compile", "{src}"], "python3"),
     ".cs": (["csc", "-out:{out}", "{src}"], "csc"),
     ".ps1": (["pwsh", "-NoProfile", "-NonInteractive", "-Command",
-              "$errors = $null; "
-              "[System.Management.Automation.Language.Parser]::ParseFile($args[0], "
+              "$errors = $null; $source = $env:APIARY_COMPILE_INPUT; "
+              "[System.Management.Automation.Language.Parser]::ParseFile($source, "
               "[ref]$null, [ref]$errors) > $null; "
-              "if ($errors.Count) { $errors | ForEach-Object { "
-              "[Console]::Error.WriteLine($_) }; exit 1 }", "{src}"], "pwsh"),
+              "if ($errors.Count) {{ $errors | ForEach-Object {{ "
+              "[Console]::Error.WriteLine($_) }}; exit 1 }}"], "pwsh"),
     ".php": (["php", "-l", "{src}"], "php"),
     ".sh": (["bash", "-n", "{src}"], "bash"),
 }
@@ -3874,9 +3875,12 @@ def compile_check(source: Path, workdir: Path, retain_products: bool = False) ->
     returncode = None
     stdout = stderr = ""
     try:
-        env = os.environ.copy() if ext == ".py" else None
+        env = os.environ.copy() if ext in {".py", ".ps1"} else None
         if env is not None:
-            env["PYTHONPYCACHEPREFIX"] = str(pycache)
+            if ext == ".py":
+                env["PYTHONPYCACHEPREFIX"] = str(pycache)
+            if ext == ".ps1":
+                env["APIARY_COMPILE_INPUT"] = str(source.resolve())
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=120,
                               cwd=workdir, env=env)
         returncode = proc.returncode
@@ -4314,7 +4318,7 @@ def evaluate_slot(
             reproducibility=Reproducibility(
                 tier=tier, prompt_contract=contract,
                 engine=session.engine,
-                harness="opencode" if getattr(transport, "is_coding_cli", False) else "native",
+        harness=getattr(transport, "harness_name", "native"),
                 backend_engine=getattr(session, "cli_backend_engine", None),
                 kv_offload_disabled=serving_record.get("kv_offload_disabled"),
                 fallback_engine=session.fallback_engine,
@@ -4780,9 +4784,9 @@ def main() -> int:
     )
     parser.add_argument("--colibri-base-url", default="http://127.0.0.1:8973",
         help="Base URL for the colibri engine (default: http://127.0.0.1:8973)")
-    parser.add_argument("--harness", choices=("native", "opencode"), default="native",
-                        help="Agent runtime; opencode scores are separate from native scores")
-    parser.add_argument("--coding-cli-bin", default="opencode")
+    parser.add_argument("--harness", choices=("native", "claude", "opencode"), default="native",
+                        help="Agent runtime; coding CLI scores are separate from native scores")
+    parser.add_argument("--coding-cli-bin", default=None)
     parser.add_argument("--coding-cli-timeout", type=int, default=9000)
     parser.add_argument("--coding-cli-steps", type=int, default=16)
     parser.add_argument("--context", type=int, default=16384)
@@ -4819,6 +4823,9 @@ def main() -> int:
              "exclusive with everything else (#2266).",
     )
     args = parser.parse_args()
+    if args.coding_cli_bin is None:
+        args.coding_cli_bin = {"claude": "claude", "opencode": "opencode"}.get(
+            args.harness, "claude")
     if args.rescore_from:
         if args.models or args.manifest or args.no_transcripts:
             parser.error("--rescore-from cannot be combined with a live-model run")
@@ -4834,17 +4841,22 @@ def main() -> int:
         parser.error("--manifest requires --output and cannot be combined with positional models")
     if not args.manifest and not args.models:
         parser.error("provide model tags or --manifest with --output")
-    if getattr(args, "harness", "native") == "opencode":
+    if getattr(args, "harness", "native") in ("claude", "opencode"):
         if args.no_transcripts:
-            parser.error("--harness opencode requires transcripts for CLI artifacts")
+            parser.error("coding CLI harnesses require transcripts for CLI artifacts")
         if args.coding_cli_timeout <= 0 or args.coding_cli_steps <= 0:
             parser.error("CLI timeout and steps must be positive")
         if not shutil.which(args.coding_cli_bin):
-            parser.error(f"OpenCode executable not found: {args.coding_cli_bin}")
+            parser.error(f"coding CLI executable not found: {args.coding_cli_bin}")
         version = subprocess.run([args.coding_cli_bin, "--version"],
                                  capture_output=True, text=True, timeout=10, check=False)
-        if version.returncode or version.stdout.strip() != "opencode v2.0.26":
+        args.coding_cli_version = version.stdout.strip()
+        if version.returncode:
+            parser.error(f"could not read coding CLI version: {version.stderr.strip()}")
+        if args.harness == "opencode" and args.coding_cli_version != "opencode v2.0.26":
             parser.error("--harness opencode requires OpenCode v2.0.26")
+        if args.harness == "claude" and "Claude Code" not in args.coding_cli_version:
+            parser.error("--harness claude requires the Claude Code CLI")
 
     # Opened after argument validation so a usage error never leaves an empty
     # run directory that a later run would refuse to reuse.
@@ -4862,7 +4874,8 @@ def main() -> int:
         writer = TranscriptWriter(
             args.transcript_dir,
             RunMetadata(
-                benchmark=BENCHMARK_VERSION + ("-opencode-cli-v1" if args.harness == "opencode" else ""),
+                benchmark=BENCHMARK_VERSION + ({"claude": "-claude-code-cli-v1",
+                                                 "opencode": "-opencode-cli-v1"}.get(args.harness, "")),
                 provenance=args.provenance,
                 operator=args.operator,
                 supersedes=args.supersedes,
@@ -4939,6 +4952,17 @@ def open_session(
         session.engine, session.fallback_engine = ENGINE_OLLAMA, None
         session.transport = serving_ollama_transport(base_url, request_json)
     else:
+        # Route llama.cpp failures to Ollama first whenever its existing API is
+        # reachable. Keep Colibri configured only as the next option when the
+        # Ollama endpoint itself is down; this changes harness selection only.
+        if session.colibri_base_url:
+            try:
+                request_json(f"{base_url.rstrip('/')}/api/tags", None, 5)
+            except Exception as exc:  # noqa: BLE001 -- preserve Colibri for outage fallback
+                print(f"  engine: Ollama health probe failed ({type(exc).__name__}: {exc}); "
+                      "Colibri remains available as fallback", flush=True)
+            else:
+                session.colibri_base_url = None
         print(f"  engine: starting llama.cpp for {model}", flush=True)
         # `session.open()` raises `UnresolvableModel` for a name that is not a model
         # under any spelling, rather than falling back -- the fallback would score
@@ -4955,12 +4979,15 @@ def open_session(
         print(f"  engine: serving on {session.engine}"
               + (f" (llama.cpp unavailable, fell back: {session.fallback_reason})"
                  if session.fallback_engine else ""), flush=True)
-    if getattr(args, "harness", "native") == "opencode":
+    if getattr(args, "harness", "native") in ("claude", "opencode"):
         session.cli_backend_engine = session.engine
-        session.transport = CodingCLI(
+        cls = ClaudeCodeCLI if args.harness == "claude" else CodingCLI
+        common = (
             model, session.transport, args.coding_cli_bin,
             args.coding_cli_timeout, args.coding_cli_steps,
             args.coding_cli_root / model.replace("/", "_"))
+        session.transport = (cls(*common, version=getattr(args, "coding_cli_version", "unknown"))
+                             if args.harness == "claude" else cls(*common))
     return session
 
 
@@ -4994,7 +5021,8 @@ def run(args: argparse.Namespace, base_url: str, writer: TranscriptWriter | None
         with open(args.manifest, encoding="utf-8") as source:
             manifest = json.load(source)
         report = {
-            "benchmark": BENCHMARK_VERSION + ("-opencode-cli-v1" if getattr(args, "harness", "native") == "opencode" else ""),
+            "benchmark": BENCHMARK_VERSION + {"claude": "-claude-code-cli-v1",
+                "opencode": "-opencode-cli-v1"}.get(getattr(args, "harness", "native"), ""),
             "harness": getattr(args, "harness", "native"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "retention": {"class": "operator-side-verbose", "recommended_days": 30},
@@ -5041,7 +5069,8 @@ def run(args: argparse.Namespace, base_url: str, writer: TranscriptWriter | None
         return 0 if all(item.get("ok") for item in report["slots"].values()) else 1
 
     report = {
-        "benchmark": BENCHMARK_VERSION + ("-opencode-cli-v1" if getattr(args, "harness", "native") == "opencode" else ""),
+        "benchmark": BENCHMARK_VERSION + {"claude": "-claude-code-cli-v1",
+            "opencode": "-opencode-cli-v1"}.get(getattr(args, "harness", "native"), ""),
         "harness": getattr(args, "harness", "native"),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "base_url": base_url,
