@@ -436,7 +436,7 @@ mod tests {
             "",
             "not-a-url",
             "file:///tmp/hook",
-            "http://user:pass@adapter.internal/",
+            "http://user:pass@adapter.example.test/",
             "https://adapter.internal/#fragment",
         ] {
             assert!(adapter_webhook_url(value).is_none(), "accepted {value}");
