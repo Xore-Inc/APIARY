@@ -12,51 +12,64 @@ The image is pinned to the `galah-llm-broker` entry of the successful
 commit `81a8d5741359a23fdb4a56f1dbb7f2cdcbea96c3`. The broker build context
 has not changed since that commit.
 
-## Deployment gate
+## Live state (2026-10-12)
 
-**Do not deploy this stack yet.** GHCR currently returns 403 for the pinned
-private image with the workstation's `gh` credential (`repo` scope but no
-`read:packages`), Arcane currently has zero saved container registries, and
-neither manager has a GHCR pull credential. Docker
-Swarm requires registry credentials propagated to each node for a private
-image; `docker stack deploy --with-registry-auth` is the Docker CLI mechanism.
-GitHub Packages currently requires a **personal access token (classic)** with
-`read:packages`; the fine-grained `github_pat_...` credential tested on
-2026-10-12 authenticated to Arcane but failed an actual GHCR image pull with
-`permission_denied`. That registry entry was removed after the test. Before
-the live cutover, provision a classic, least-privilege `read:packages`
-credential through Arcane's registry integration (including its send-registry-
-authentication deploy option) or an equivalent approved Swarm deploy path,
-then prove a pinned-image pull and task start on **both**
-managers. Do not make the package public merely to bypass the credential gap.
+The first credential supplied was a fine-grained `github_pat_...` token. It
+passed Arcane's registry authentication test but a real GHCR image pull failed
+with `permission_denied`; its Arcane registry entry was removed. GitHub
+Packages requires a classic PAT with `read:packages` for external package
+pulls. The workstation's existing GitHub CLI OAuth token was then granted
+`read:packages` and saved as an **interim** Arcane `ghcr.io` registry credential.
+It has broader `repo`/`workflow` scopes and should be replaced with a classic
+read-only package token after the migration. Both managers pulled the exact
+pinned image through Arcane. Do not make the package public to bypass auth.
 
-The PR also changes the Compose definitions for Galah and Ollama. They must
-not be synced independently before this gate: each references an overlay that
-the new stack creates. No Ollama model, runtime setting, or model volume is
-changed.
+`ops/swarm/stackctl.py ensure galah-broker --branch feat/3591-swarm-canary`
+created the Arcane GitOps sync and converged at 2/2 on precision. The two
+encrypted, attachable overlays have MTU 1310. A temporary Swarm task on the
+normally Paused homeserver was needed to materialize each overlay before
+attaching standalone Compose containers. The task was removed and homeserver
+returned to Pause.
 
-## Ordered cutover after the gate
+Galah is now attached to `galah-broker_front`, and Ollama is attached to
+`galah-broker_back`; neither container was moved out of Compose. A direct
+request from Galah through the Swarm broker returned HTTP 200, then an actual
+Galah decoy request returned HTTP 200 with the legacy broker stopped. A later
+Arcane Galah sync initially failed while recreating its container because no
+Swarm task held the front overlay on homeserver. A temporary task materialized
+the overlay again; the Galah sync then succeeded and another decoy request
+returned HTTP 200. The temporary task was removed. Galah and Ollama are
+healthy, the legacy Compose broker is stopped, and the Swarm broker is 2/2.
 
-1. Check Galah, Ollama, and the legacy broker are healthy. Record their
-   Compose config and current image IDs. Confirm the pinned GHCR image is
-   pullable on homeserver and precision.
-2. Deploy this stack with `ops/swarm/stackctl.py ensure galah-broker --branch
-   <merged-branch>` (or `deploy` for an existing sync). Confirm two healthy
-   broker tasks and both encrypted, attachable overlays.
-3. Attach Ollama to `galah-broker_back` with its updated Compose definition.
-   Verify `ollama:11434` from each broker task before changing Galah. Keep the
-   existing `honeypot-llm` bridge and Ollama model volume untouched.
-4. Stop only the legacy `hp-galah-llm-broker` container. Apply the updated
-   Galah Compose definition, which puts `hp-galah` on `galah-broker_front`
-   and keeps the old broker behind the `legacy` profile. Verify Galah DNS
-   resolves `galah-llm-broker` to the Swarm VIP, and test a bounded request
-   through Galah. Confirm Galah cannot resolve or reach `ollama` directly.
-5. Temporarily set homeserver Active, force one broker task onto each manager,
-   and verify Galah-to-broker-to-Ollama from each placement. Drain each
-   manager in turn; restore precision Active and homeserver Pause when done.
-   Exercise a rolling update and an intentionally unhealthy update to prove
-   automatic rollback, as done for the synthetic canary. Leave the legacy
-   broker stopped and defined for rollback.
+An earlier decoy probe timed out while Ollama was busy. A separate full model
+benchmark is running on homeserver, so do not send further model probes or
+restart Ollama during that run. The Ollama container has kept its original
+start time, `2026-10-11T22:37:09Z`; its model roster, runtime settings, and
+model volume were not changed by this cutover. The live Ollama Compose file
+has only the back-overlay attachment added and retains its existing image and
+KV-cache settings; this differs from the older file in this PR checkout.
+
+With homeserver temporarily Active, scaling the broker to zero and back
+placed one task on each manager. Draining precision moved both broker tasks
+to homeserver; draining homeserver moved them back to precision. Homeserver
+was restored to Pause, and both the broker and existing canary returned to
+2/2 on precision. An Arcane GitOps rolling update of the broker completed
+with 2/2 replicas and no Ollama restart. An intentionally unhealthy broker
+update and automatic rollback remain untested.
+
+## Remaining work before closing #3591
+
+1. After the model benchmark finishes, exercise an intentionally unhealthy
+   broker update and verify automatic rollback without touching Ollama.
+2. Replace the interim Arcane GHCR credential with a classic PAT limited to
+   `read:packages`, then prove pulls on both managers.
+3. Merge this PR, point the canary and broker Arcane syncs at `main`, deploy,
+   and verify both stacks at 2/2. Keep homeserver at `Pause` in normal service.
+4. Confirm the updated Galah and Ollama Compose definitions are the source of
+   truth, including the live Ollama image and runtime settings. Test that a
+   later Galah recreation can reattach to the front overlay without a
+   temporary task on homeserver; otherwise implement a durable
+   network-materialization mechanism before treating the migration as stable.
 
 The old **Compose service** stays stopped. The old `honeypot-galah` **project**
 cannot stay stopped: it also owns the live Galah sensor. This is a literal
@@ -66,12 +79,11 @@ cutover and is not part of this change.
 
 ## Rollback
 
-If broker tasks fail before Galah cutover, leave Galah and Ollama Compose
-untouched and roll back or remove this stack through `stackctl.py`. After
-cutover, restore the previous Galah Compose definition and start its legacy
-broker, then remove the sensor's front-overlay attachment. Restore the
-previous Ollama Compose definition only after Galah uses the legacy broker.
-Keep the stack and overlays until no Compose container references them.
+If broker tasks fail, restore the previous Galah Compose definition and start
+its legacy broker, then remove the sensor's front-overlay attachment. Restore
+the previous Ollama Compose definition only after Galah uses the legacy
+broker. Keep the stack and overlays until no Compose container references
+them.
 
 Never use `docker compose down -v` here: the Ollama model volume and Galah
 logs/state must survive this migration.
