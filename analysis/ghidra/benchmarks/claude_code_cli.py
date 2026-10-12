@@ -71,9 +71,16 @@ def _cli_conversation(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     blocks.append(block)
             if blocks:
                 turns.append({"role": role, "content": blocks})
-        if event.get("type") == "result" and event.get("result"):
+        final = str(event.get("result") or "")
+        already_present = any(
+            block.get("type") == "text" and
+            str(block.get("text") or "").strip() == final.strip()
+            for turn in turns for block in turn.get("content", [])
+            if isinstance(block, dict)
+        )
+        if event.get("type") == "result" and final and not already_present:
             turns.append({"role": "assistant", "content": [
-                {"type": "text", "text": str(event["result"])}]})
+                {"type": "text", "text": final}]})
     return turns
 
 

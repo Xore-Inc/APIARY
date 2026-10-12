@@ -11,7 +11,7 @@ from pathlib import Path
 
 BENCH = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCH))
-from claude_code_cli import (ClaudeCodeCLI, _has_expected_prompt,
+from claude_code_cli import (ClaudeCodeCLI, _cli_conversation, _has_expected_prompt,
                              _to_anthropic_content, _to_backend_messages)
 
 RUN_CLAUDE = os.environ.get("APIARY_CLAUDE_INTEGRATION") == "1"
@@ -35,6 +35,14 @@ class ClaudeProtocolTest(unittest.TestCase):
         ]
         self.assertTrue(_has_expected_prompt(messages, "original benchmark prompt"))
         self.assertFalse(_has_expected_prompt(messages[1:], "original benchmark prompt"))
+
+    def test_final_result_does_not_duplicate_last_assistant_message(self):
+        events = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": " IMPLEMENTATION COMPLETE."}]}},
+            {"type": "result", "result": "IMPLEMENTATION COMPLETE."},
+        ]
+        self.assertEqual(len(_cli_conversation(events)), 1)
 
     def test_anthropic_tool_use_and_results_map_to_existing_backend_messages(self):
         messages = _to_backend_messages("system prompt", [
