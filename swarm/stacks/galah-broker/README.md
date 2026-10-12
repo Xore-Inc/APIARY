@@ -20,7 +20,11 @@ private image with the workstation's `gh` credential (`repo` scope but no
 neither manager has a GHCR pull credential. Docker
 Swarm requires registry credentials propagated to each node for a private
 image; `docker stack deploy --with-registry-auth` is the Docker CLI mechanism.
-Before the live cutover, provision a durable, least-privilege `read:packages`
+GitHub Packages currently requires a **personal access token (classic)** with
+`read:packages`; the fine-grained `github_pat_...` credential tested on
+2026-10-12 authenticated to Arcane but failed an actual GHCR image pull with
+`permission_denied`. That registry entry was removed after the test. Before
+the live cutover, provision a classic, least-privilege `read:packages`
 credential through Arcane's registry integration (including its send-registry-
 authentication deploy option) or an equivalent approved Swarm deploy path,
 then prove a pinned-image pull and task start on **both**
