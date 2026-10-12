@@ -48,6 +48,7 @@ networks:
     driver: overlay
     driver_opts:
       com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
 configs:
   page:
     external: true
