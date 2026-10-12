@@ -16,12 +16,14 @@ has not changed since that commit.
 
 **Do not deploy this stack yet.** GHCR currently returns 403 for the pinned
 private image with the workstation's `gh` credential (`repo` scope but no
-`read:packages`), and neither manager has a GHCR pull credential. Docker
+`read:packages`), Arcane currently has zero saved container registries, and
+neither manager has a GHCR pull credential. Docker
 Swarm requires registry credentials propagated to each node for a private
 image; `docker stack deploy --with-registry-auth` is the Docker CLI mechanism.
 Before the live cutover, provision a durable, least-privilege `read:packages`
-credential through Arcane's registry integration or an equivalent approved
-Swarm deploy path, then prove a pinned-image pull and task start on **both**
+credential through Arcane's registry integration (including its send-registry-
+authentication deploy option) or an equivalent approved Swarm deploy path,
+then prove a pinned-image pull and task start on **both**
 managers. Do not make the package public merely to bypass the credential gap.
 
 The PR also changes the Compose definitions for Galah and Ollama. They must
