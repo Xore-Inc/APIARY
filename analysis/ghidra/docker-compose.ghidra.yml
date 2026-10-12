@@ -89,6 +89,8 @@ services:
       # still has no listening port.
       llm_clients:
         aliases: [ollama]
+      broker_back:
+        aliases: [ollama]
     security_opt:
       - no-new-privileges:true
     environment:
@@ -322,3 +324,8 @@ networks:
   llm_clients:
     name: honeypot-llm
     internal: true
+  # Only the broker and Ollama join this encrypted, attachable Swarm overlay.
+  # Galah itself stays on the separate front overlay.
+  broker_back:
+    name: galah-broker_back
+    external: true
