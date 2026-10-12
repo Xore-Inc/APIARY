@@ -148,6 +148,9 @@ services:
       - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
       - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
       - CANARYTOKENS_API_URL=${CANARYTOKENS_API_URL:-}
+      # The minted token calls this adapter when fired. Override per host
+      # when the backend API moves to precision (#3576).
+      - CANARYTOKENS_ADAPTER_WEBHOOK_URL=${CANARYTOKENS_ADAPTER_WEBHOOK_URL:-http://canarytokens-adapter.internal:8090/}
       # #1612 misc write paths: honeyfs-implant credential provisioning/
       # rotation. Same reachability posture as CANARYTOKENS_API_URL above --
       # a plain HTTP URL over the WireGuard tunnel, off unless configured,
