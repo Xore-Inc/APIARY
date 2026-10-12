@@ -111,7 +111,9 @@ services:
     restart: unless-stopped
     environment:
       - LISTEN_ADDR=0.0.0.0:8081
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      # A remote API host needs the private authenticated ES transport from
+      # #3577; keep the same-host bridge address as this Compose default.
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
       # #2329: backs /api/v1/llm-search (llm_search.rs), which embeds the
       # operator's query via Ollama's /api/embed before the ES kNN lookup.
       # Left unset, ollama_url() returns None and the endpoint permanently
