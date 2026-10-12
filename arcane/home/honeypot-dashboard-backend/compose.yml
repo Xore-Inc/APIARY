@@ -112,6 +112,8 @@ services:
     environment:
       - LISTEN_ADDR=0.0.0.0:8081
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #2329: backs /api/v1/llm-search (llm_search.rs), which embeds the
       # operator's query via Ollama's /api/embed before the ES kNN lookup.
       # Left unset, ollama_url() returns None and the endpoint permanently

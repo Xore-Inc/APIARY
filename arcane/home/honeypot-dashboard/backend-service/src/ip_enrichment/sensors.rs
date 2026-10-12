@@ -12,7 +12,8 @@ use super::canonical::promote_canonical_fields;
 use super::tftp::is_tftp_relay_record;
 use super::viamap::{resolve, settled, Join, JoinQuery, Transport, ViaMap};
 
-pub const TUNNEL_PEER_IP: &str = "10.8.0.1";
+#[cfg(test)]
+pub const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 
 /// Loopback sources. A honeypot is reached from the network; nothing on this
 /// fleet is legitimately attacked from inside its own container.
@@ -197,7 +198,7 @@ fn set_if_changed(e: &mut Value, key: &str, value: impl Into<String>) -> bool {
 fn mark_join(e: &mut Value, join: &Join) -> bool {
     let mut changed = set_if_changed(e, "tunnel_attribution", join.label());
     if matches!(join, Join::Attributed(_)) {
-        changed |= set_if_changed(e, "fleet_peer", TUNNEL_PEER_IP);
+        changed |= set_if_changed(e, "fleet_peer", crate::fleet::tunnel_peer_ip());
     }
     changed
 }
@@ -347,7 +348,7 @@ pub fn enrich_line(line: &[u8], vm: &ViaMap, tftp_vm: &ViaMap, persona: &str) ->
     let ip = str(&e, "src_ip");
     let port = extract_src_port(&e);
     let line_at = extract_line_time(&e);
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         if !is_tftp_relay_record(&e, persona) {
             return (marshal_if_changed(line, &e, fields_changed), true); // already correct or genuinely unknown
         }
@@ -416,7 +417,7 @@ fn rewrite_dionaea_connections(v: &mut Value, vm: &ViaMap, line_at: i64) -> Dion
                 if LOOPBACK_IPS.contains(&ip.as_str()) {
                     walk.saw_loopback = true;
                 }
-                if ip == TUNNEL_PEER_IP {
+                if ip == crate::fleet::tunnel_peer_ip() {
                     if let Some(port) = map.get("remote_port").and_then(Value::as_f64) {
                         // #1917: the connection object says which of its own
                         // ports the attacker reached, and that is what makes
@@ -584,7 +585,7 @@ pub fn enrich_beelzebub_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _perso
     changed |= super::attck::promote_attck_technique_fields("beelzebub", &mut e);
 
     let ip = ev.get("SourceIp").and_then(Value::as_str).unwrap_or("").to_string();
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         if !ip.is_empty() {
             changed |= set_if_changed(&mut e, "src_ip", ip);
         }
@@ -650,7 +651,7 @@ pub struct SourceVerdict {
 pub fn adjudicate_source(observed: &str, relayed: Option<String>, claimed: Option<String>) -> SourceVerdict {
     // Not relayed: the sensor is looking straight at the client, so no join
     // applies and no header may override what the connection shows.
-    if observed != TUNNEL_PEER_IP {
+    if observed != crate::fleet::tunnel_peer_ip() {
         return SourceVerdict { ip: observed.to_string(), claimed: None, resolved: true };
     }
     match (relayed, claimed) {
@@ -877,7 +878,7 @@ pub fn enrich_hellpot_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona
     };
     changed |= mark_probe_from(&mut e, &ip);
 
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         changed |= set_if_changed(&mut e, "src_ip", ip);
         return (marshal_if_changed(line, &e, changed), true);
     }
@@ -1012,7 +1013,7 @@ pub fn enrich_galah_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona: 
 
     let ip = e.get("srcIP").and_then(Value::as_str).unwrap_or("").to_string();
     changed |= mark_probe_from(&mut e, &ip);
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         if !ip.is_empty() {
             changed |= set_if_changed(&mut e, "src_ip", ip);
         }
@@ -1123,7 +1124,7 @@ pub fn enrich_sentrypeer_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _pers
     };
     changed |= mark_probe_from(&mut e, &ip);
 
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         changed |= set_if_changed(&mut e, "src_ip", ip);
         return (marshal_if_changed(line, &e, changed), true);
     }

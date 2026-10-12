@@ -108,9 +108,8 @@ fn limit_aggs(mut body: Value, allowed: &HashSet<&str>) -> Value {
 
 const WINDOW: &str = "now-48h";
 
-/// The WireGuard tunnel endpoint. Never an attacker: it is what a sensor
-/// records when the via_port join could not recover the real client.
-const TUNNEL_PEER_IP: &str = "10.8.0.1";
+#[cfg(test)]
+const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 
 /// Addresses that belong to this fleet, and so can never be an attacker in
 /// its own data.
@@ -130,15 +129,21 @@ const TUNNEL_PEER_IP: &str = "10.8.0.1";
 /// always included, which preserves the exclusion this handler has always
 /// had.
 pub(crate) fn self_addresses() -> Vec<String> {
-    let mut addresses: Vec<String> = std::env::var("HONEYPOT_SELF_IPS")
-        .unwrap_or_default()
+    self_addresses_from(
+        &std::env::var("HONEYPOT_SELF_IPS").unwrap_or_default(),
+        crate::fleet::tunnel_peer_ip(),
+    )
+}
+
+fn self_addresses_from(raw: &str, tunnel_peer: &str) -> Vec<String> {
+    let mut addresses: Vec<String> = raw
         .split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(String::from)
         .collect();
-    if !addresses.iter().any(|value| value == TUNNEL_PEER_IP) {
-        addresses.push(TUNNEL_PEER_IP.to_string());
+    if !addresses.iter().any(|value| value == tunnel_peer) {
+        addresses.push(tunnel_peer.to_string());
     }
     addresses
 }
@@ -719,6 +724,18 @@ async fn map_points_from_rollup(state: &AppState) -> Option<Vec<MapPoint>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_different_relay_is_always_excluded_once() {
+        assert_eq!(
+            self_addresses_from("203.0.113.7,192.0.2.7", "192.0.2.7"),
+            vec!["203.0.113.7", "192.0.2.7"]
+        );
+        assert_eq!(
+            self_addresses_from("203.0.113.7", "192.0.2.7"),
+            vec!["203.0.113.7", "192.0.2.7"]
+        );
+    }
 
     /// The env var is process-global, so these run as one test rather than
     /// racing each other through the same variable. #2113: this is also the
