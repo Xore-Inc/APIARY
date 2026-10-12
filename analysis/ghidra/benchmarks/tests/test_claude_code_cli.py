@@ -11,7 +11,8 @@ from pathlib import Path
 
 BENCH = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCH))
-from claude_code_cli import ClaudeCodeCLI, _to_anthropic_content, _to_backend_messages
+from claude_code_cli import (ClaudeCodeCLI, _has_expected_prompt,
+                             _to_anthropic_content, _to_backend_messages)
 
 RUN_CLAUDE = os.environ.get("APIARY_CLAUDE_INTEGRATION") == "1"
 if RUN_CLAUDE:
@@ -25,6 +26,16 @@ if RUN_CLAUDE:
 
 
 class ClaudeProtocolTest(unittest.TestCase):
+    def test_original_prompt_survives_claude_continuation_messages(self):
+        messages = [
+            {"role": "user", "content": "original benchmark prompt"},
+            {"role": "assistant", "content": "partial"},
+            {"role": "user", "content": "[Please continue from the prior answer.]"},
+            {"role": "tool", "content": "tool output"},
+        ]
+        self.assertTrue(_has_expected_prompt(messages, "original benchmark prompt"))
+        self.assertFalse(_has_expected_prompt(messages[1:], "original benchmark prompt"))
+
     def test_anthropic_tool_use_and_results_map_to_existing_backend_messages(self):
         messages = _to_backend_messages("system prompt", [
             {"role": "user", "content": "write a file"},
@@ -63,7 +74,7 @@ class ClaudeProtocolTest(unittest.TestCase):
                         "id": "call_write", "type": "function", "function": {
                             "name": "write_file", "arguments": {"path": "main.c",
                                                                   "content": "int main(void){return 0;}\n"}}}]},
-                        "done_reason": "stop", "prompt_eval_count": 80, "eval_count": 12,
+                        "done_reason": "length", "prompt_eval_count": 80, "eval_count": 12,
                         "eval_duration": 1000000000}
                 return {"message": {"role": "assistant", "content": "IMPLEMENTATION COMPLETE"},
                         "done_reason": "stop", "prompt_eval_count": 90, "eval_count": 6,
@@ -79,6 +90,8 @@ class ClaudeProtocolTest(unittest.TestCase):
                 "options": {"temperature": 0, "seed": 144, "num_ctx": 16384,
                             "num_predict": 512}})
             self.assertEqual(result["done_reason"], "stop", result.get("error"))
+            self.assertEqual(result["backend_done_reasons"], ["length", "stop"])
+            self.assertEqual(result["cli_control_model"], "sonnet")
             self.assertGreaterEqual(len(calls), 2)
             self.assertEqual(set(backend_urls), {"ignored"})
             self.assertIn("IMPLEMENTATION COMPLETE", result["message"]["content"])
@@ -89,6 +102,9 @@ class ClaudeProtocolTest(unittest.TestCase):
             artifacts = Path(result["cli_artifacts"])
             self.assertTrue((artifacts / "session.jsonl").is_file())
             self.assertTrue((artifacts / "wire.jsonl").is_file())
+            self.assertTrue(any("IMPLEMENTATION COMPLETE" in str(turn)
+                                for turn in result["cli_conversation"]))
+            self.assertFalse((root / "artifact-index.jsonl").exists())
             self.assertFalse((artifacts / "home").exists())
             self.assertNotIn("metadata", result["cli_messages"])
             self.assertNotIn("user_id", (artifacts / "wire.jsonl").read_text())

@@ -120,7 +120,7 @@ ENGINES = (ENGINE_LLAMACPP, ENGINE_OLLAMA, ENGINE_COLIBRI)
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11435"
 
 
-BENCHMARK_VERSION = "honeypot-stack-issue-158-v2"
+BENCHMARK_VERSION = "honeypot-stack-issue-158-v3"
 # The parameters every slot is qualified under, apart from the two that vary
 # per slot and per run: the output budget (OUTPUT_BUDGETS, below) and the
 # context window. `output_tokens` used to be restated here as a literal 512
@@ -2486,6 +2486,14 @@ def missing_capability_reason(
 #     on rule-dense MITRE prompts (looping taxonomy second-guessing), which a
 #     wider anti-repetition window breaks without touching the prompt.
 HARMONY_FAMILY_MARKERS = ("gpt-oss",)
+BENCHMARK_SAMPLING = {
+    "temperature": 0.2,
+    "top_k": 40,
+    "top_p": 0.9,
+    "repeat_last_n": 256,
+    "repeat_penalty": 1.3,
+    "presence_penalty": 0.2,
+}
 HARMONY_SAMPLING = {"repeat_last_n": 256, "repeat_penalty": 1.3}
 # The seven revdeck failures on baronllm-llama3.1:q6_k were repetition loops,
 # not missing stop tokens. A 256-token window still let one loop consume all
@@ -2802,7 +2810,8 @@ def chat(
         # OpenAI-compatible request.
         "think": False,
         "keep_alive": "10m",
-        "options": {"temperature": 0, "num_ctx": context, "num_predict": num_predict, "seed": 144},
+        "options": {**BENCHMARK_SAMPLING, "num_ctx": context,
+                    "num_predict": num_predict, "seed": 144},
     }
     body["options"].update(sampling or {})
     started = time.monotonic()
@@ -2954,7 +2963,9 @@ def chat(
             result[key] = response[key]
     if response.get("cli_artifacts"):
         for key in ("cli_artifacts", "cli_artifacts_relative", "cli_session_id",
-                    "cli_wire_sha256", "cli_messages", "backend_options", "cli_version"):
+                    "cli_wire_sha256", "cli_messages", "cli_conversation",
+                    "backend_options", "backend_done_reasons", "cli_control_model",
+                    "cli_version"):
             result[key] = response.get(key)
     if tool_fallback_reason:
         result["tool_fallback_reason"] = tool_fallback_reason
@@ -3879,6 +3890,7 @@ def compile_check(source: Path, workdir: Path, retain_products: bool = False) ->
         if env is not None:
             if ext == ".py":
                 env["PYTHONPYCACHEPREFIX"] = str(pycache)
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
             if ext == ".ps1":
                 env["APIARY_COMPILE_INPUT"] = str(source.resolve())
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=120,
@@ -3901,10 +3913,10 @@ def compile_check(source: Path, workdir: Path, retain_products: bool = False) ->
             binary.unlink(missing_ok=True)
             shutil.rmtree(pycache, ignore_errors=True)
     products = []
-    if retain_products:
+    if retain_products and ext != ".py":
         products = [str(path) for path in (binary,) if path.is_file()]
-        if pycache.exists():
-            products.extend(str(path) for path in pycache.rglob("*") if path.is_file())
+    if pycache.exists():
+        shutil.rmtree(pycache, ignore_errors=True)
     return {"attempted": True, "ok": ok, "compiler": compiler,
             "returncode": returncode, "diagnostics": diagnostics,
             **({"command": argv, "stdout": stdout, "stderr": stderr,
@@ -4366,7 +4378,8 @@ def evaluate_slot(
             probe = {"passed": None, "not_required": True}
             timings = [item["output"] for item in cases]
         elif slot == "coder":
-            if writer is not None:
+            cli_mode = getattr(transport, "is_coding_cli", False)
+            if writer is not None and not cli_mode:
                 write_human_grades_template(writer, artifact)
             stream_state: dict[str, Any] = {}
             if writer is not None:
@@ -4384,21 +4397,26 @@ def evaluate_slot(
                         stream_state["compile"], stream_state["workdir"],
                         writer.directory / ARTIFACT_INDEX_FILENAME,
                         retain_products=getattr(transport, "is_coding_cli", False))
-                    (root / "compile-report.json").write_text(
+                    report_root = (writer.directory / "build-reports"
+                                   / artifact.get("tag", "unknown").replace("/", "_"))
+                    report_root.mkdir(parents=True, exist_ok=True)
+                    report_path = (report_root / "coder-compile-report.json" if cli_mode
+                                   else root / "compile-report.json")
+                    report_path.write_text(
                         json.dumps(stream_state["compile"], indent=2),
                         encoding="utf-8")
-                    if getattr(transport, "is_coding_cli", False):
+                    if cli_mode:
                         case_id = record["case"]
                         related = [root / "cases" / case_id,
                                    root / "compiled" / case_id]
                         files = [path for base in related if base.exists()
-                                 for path in base.rglob("*") if path.is_file()]
+                                 for path in base.rglob("*") if path.is_file()
+                                 and path.suffix.lower() not in {".json", ".jsonl"}]
                         language, declared = _coder_case_files().get(case_id, ("", ""))
                         ext = Path(declared).suffix or _EXT_BY_LANGUAGE.get(language, ".txt")
                         grade = root / (case_id if case_id.endswith(ext) else case_id + ext)
                         if grade.is_file():
                             files.append(grade)
-                        files.append(root / "compile-report.json")
                         with (writer.directory / ARTIFACT_INDEX_FILENAME).open(
                                 "a", encoding="utf-8") as index:
                             index.write(json.dumps({"slot": "coder", "case": case_id,
@@ -4406,7 +4424,8 @@ def evaluate_slot(
                                 "paths": sorted(str(path.relative_to(
                                     writer.directory / CODER_ARTIFACTS_DIRNAME))
                                     for path in files if path.is_file())}) + "\n")
-                    write_human_grades_template(writer, artifact, record)
+                    if not cli_mode:
+                        write_human_grades_template(writer, artifact, record)
 
                 cases = score_coder(base_url, model, context, recorder, _stream_one,
                                     transport)
@@ -4418,7 +4437,10 @@ def evaluate_slot(
             if writer is not None:
                 if not getattr(transport, "is_coding_cli", False):
                     write_coder_artifacts(writer, artifact, {c["case"]: c for c in cases})
-                report_path = (writer.directory / CODER_ARTIFACTS_DIRNAME
+                report_path = (writer.directory / "build-reports"
+                               / artifact.get("tag", "unknown").replace("/", "_")
+                               / "coder-compile-report.json" if cli_mode else
+                               writer.directory / CODER_ARTIFACTS_DIRNAME
                                / artifact.get("tag", "unknown").replace("/", "_")
                                / "compile-report.json")
                 if report_path.exists():
@@ -4874,7 +4896,7 @@ def main() -> int:
         writer = TranscriptWriter(
             args.transcript_dir,
             RunMetadata(
-                benchmark=BENCHMARK_VERSION + ({"claude": "-claude-code-cli-v1",
+                benchmark=BENCHMARK_VERSION + ({"claude": "-claude-code-cli-v2",
                                                  "opencode": "-opencode-cli-v1"}.get(args.harness, "")),
                 provenance=args.provenance,
                 operator=args.operator,
@@ -4882,7 +4904,7 @@ def main() -> int:
             ),
         )
         print(f"transcripts: {writer.path}", flush=True)
-    args.coding_cli_root = writer.directory / CODER_ARTIFACTS_DIRNAME if writer else None
+    args.coding_cli_root = writer.directory / "cli-sessions" if writer else None
     try:
         return run(args, base_url, writer)
     finally:

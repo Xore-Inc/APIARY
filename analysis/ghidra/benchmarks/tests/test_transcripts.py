@@ -146,6 +146,21 @@ class TranscriptWriterTest(unittest.TestCase):
         self.assertEqual(records[0]["response"]["tool_turns"], tool_turns)
         self.assertEqual(records[1]["response"]["tool_turns"], [])
 
+    def test_claude_conversation_and_backend_recovery_are_stored(self):
+        conversation = [{"role": "assistant", "content": [
+            {"type": "text", "text": "wrote source"}]}]
+        with self.writer() as writer:
+            writer.record(
+                slot="coder", case="case", workflow="coder_generation",
+                model=MODEL, request_body=BODY, reproducibility=Reproducibility(),
+                response={
+                    "content": "done", "cli_conversation": conversation,
+                    "cli_control_model": "sonnet", "backend_done_reasons": ["length", "stop"]})
+        records = read_records(writer)
+        self.assertEqual(records[0]["response"]["cli_conversation"], conversation)
+        self.assertEqual(records[0]["response"]["cli_control_model"], "sonnet")
+        self.assertEqual(records[0]["response"]["backend_done_reasons"], ["length", "stop"])
+
     def test_one_line_per_call_and_run_summary_is_hashed(self):
         writer = self.writer()
         for case in ("a", "b", "c"):

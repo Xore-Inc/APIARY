@@ -356,9 +356,8 @@ class CodingCLITest(unittest.TestCase):
         python_result = ev.compile_check(
             python_source, self.root / "python-retained", retain_products=True)
         self.assertTrue(python_result["ok"], python_result)
-        self.assertTrue(python_result["products"])
-        self.assertTrue(all(Path(path).is_file() for path in python_result["products"]))
-        self.assertTrue(any(path.endswith(".pyc") for path in python_result["products"]))
+        self.assertEqual(python_result["products"], [])
+        self.assertFalse((self.root / "python-retained" / "pycache").exists())
 
     def test_cli_case_keeps_source_manifest_and_compiled_product(self):
         if not shutil.which("gcc"):
@@ -436,9 +435,11 @@ class CodingCLITest(unittest.TestCase):
         self.assertTrue(all(path.startswith("real-model/") for path in paths))
         self.assertTrue(all((run_root / ev.CODER_ARTIFACTS_DIRNAME / path).is_file()
                             for path in paths))
-        self.assertTrue(any("source-manifest.json" in path for path in paths))
+        self.assertFalse(any(path.endswith((".json", ".jsonl", ".pyc")) for path in paths))
         self.assertTrue(any(path.endswith(".compile.bin") for path in paths))
-        self.assertIn("real-model/compile-report.json", paths)
+        self.assertNotIn("real-model/compile-report.json", paths)
+        self.assertTrue((run_root / "build-reports" / "real-model"
+                         / "coder-compile-report.json").is_file())
 
     def test_cli_errors_do_not_skip_later_cases_in_any_slot(self):
         class FailingCLI:

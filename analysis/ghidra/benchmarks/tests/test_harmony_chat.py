@@ -95,9 +95,9 @@ class TestHarmonyRequestShape(unittest.TestCase):
                                 evaluate_models.HARMONY_NUM_PREDICT)
 
     def test_shared_decoding_contract_intact(self):
-        # Only the harmony-mechanical knobs move; temperature and seed stay
-        # pinned like every other family or scores stop meaning the same thing.
-        self.assertEqual(self.body["options"]["temperature"], 0)
+        # The run-level decoding settings are explicit for every model.
+        for key, value in evaluate_models.BENCHMARK_SAMPLING.items():
+            self.assertEqual(self.body["options"][key], value)
         self.assertEqual(self.body["options"]["seed"], 144)
         self.assertEqual(self.body["options"]["num_ctx"], 16384)
 
@@ -113,13 +113,13 @@ class TestQwenShapeUnchanged(unittest.TestCase):
         body, result = capture_chat("qwen3:14b")
         self.assertEqual(body["format"], SCHEMA)
         self.assertFalse(body["think"])
-        # Only the harmony-mechanical knobs move; a calibrated family gets the
-        # shared slot budget and nothing else. Named, not the old inline 512.
+        # A calibrated family gets the shared sampling contract and named
+        # output budget; it does not inherit Harmony-only behavior.
         self.assertEqual(
             body["options"]["num_predict"], evaluate_models.ANALYSIS_NUM_PREDICT
         )
-        self.assertNotIn("repeat_last_n", body["options"])
-        self.assertNotIn("repeat_penalty", body["options"])
+        for key, value in evaluate_models.BENCHMARK_SAMPLING.items():
+            self.assertEqual(body["options"][key], value)
         self.assertEqual(result["parsed"], {"summary": "exfil over scp"})
 
 

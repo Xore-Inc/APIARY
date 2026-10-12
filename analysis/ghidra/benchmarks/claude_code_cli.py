@@ -37,6 +37,46 @@ def _canonical_tool(name: str) -> str:
     return name[len(prefix):] if name.startswith(prefix) else name
 
 
+def _has_expected_prompt(messages: list[dict[str, Any]], expected: str) -> bool:
+    """Check that the original benchmark prompt remains in the conversation."""
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        value = str(message.get("content", ""))
+        if expected and expected in value:
+            return True
+        try:
+            decoded = json.loads(value)
+        except (ValueError, TypeError):
+            continue
+        if decoded == expected:
+            return True
+    return False
+
+
+def _cli_conversation(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return readable user/assistant/tool turns from Claude's streamed events."""
+    turns: list[dict[str, Any]] = []
+    for event in events:
+        message = event.get("message") or {}
+        role = message.get("role")
+        content = message.get("content") or []
+        if role in ("user", "assistant"):
+            blocks = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind in ("text", "tool_use", "tool_result"):
+                    blocks.append(block)
+            if blocks:
+                turns.append({"role": role, "content": blocks})
+        if event.get("type") == "result" and event.get("result"):
+            turns.append({"role": "assistant", "content": [
+                {"type": "text", "text": str(event["result"])}]})
+    return turns
+
+
 def _to_backend_messages(system: Any, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Translate Anthropic content blocks into the existing chat message shape."""
     result: list[dict[str, Any]] = []
@@ -155,11 +195,11 @@ class ClaudeCodeCLI:
             root = self.artifact_root / self.slot / safe_case / f"round-{self.round:02d}"
             root.mkdir(parents=True, exist_ok=True)
             (root / "error.txt").write_text(error + "\n", encoding="utf-8")
-            coder_root = self.artifact_root.parent
+            run_root = self.artifact_root.parent.parent
             return {"message": {"role": "assistant", "content": ""},
                     "done_reason": "error", "error": error, "tool_turns": [],
                     "cli_artifacts": str(root),
-                    "cli_artifacts_relative": str(root.relative_to(coder_root)),
+                    "cli_artifacts_relative": str(root.relative_to(run_root)),
                     "cli_version": self.version}
 
     def _run(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -179,6 +219,7 @@ class ClaudeCodeCLI:
         requests: list[dict[str, Any]] = []
         answers: list[dict[str, Any]] = []
         backend_errors: list[str] = []
+        backend_done_reasons: list[str | None] = []
         backend = self.backend
         self_outer = self
         expected_user = prompt
@@ -237,16 +278,8 @@ class ClaudeCodeCLI:
                                      if item.get("role") == "user"]
                     if not user_messages:
                         raise ValueError("Claude Code request omitted benchmark user prompt")
-                    actual_user = str(user_messages[-1])
-                    if expected_user not in actual_user:
-                        try:
-                            decoded_user = json.loads(actual_user)
-                        except ValueError:
-                            decoded_user = None
-                        if decoded_user != expected_user:
-                            raise ValueError("Claude Code changed benchmark user prompt")
-                        # The system wrapper may JSON-encode a tool-repair prompt.
-                        forwarded["messages"][-1]["content"] = expected_user
+                    if not _has_expected_prompt(forwarded["messages"], expected_user):
+                        raise ValueError("Claude Code conversation omitted benchmark user prompt")
                     tool_defs = []
                     if not body.get("_cli_file_block_fallback"):
                         for tool in incoming.get("tools") or []:
@@ -268,7 +301,8 @@ class ClaudeCodeCLI:
                     content = _to_anthropic_content(message)
                     calls = message.get("tool_calls") or []
                     reason = answer.get("done_reason")
-                    if reason not in ("stop",):
+                    backend_done_reasons.append(reason)
+                    if reason not in ("stop", "length"):
                         backend_errors.append(f"backend done_reason {reason!r}")
                     stop_reason = ("max_tokens" if reason == "length" else
                                    "tool_use" if calls else "end_turn")
@@ -335,18 +369,20 @@ class ClaudeCodeCLI:
         mcp_config.write_text(json.dumps({"mcpServers": {"apiary": {
             "type": "stdio", "command": sys.executable,
             "args": [str(Path(__file__).with_name("mcp_tools_server.py"))],
-            "env": {"APIARY_WORKSPACE": str(workspace)}}}}), encoding="utf-8")
+            "env": {"APIARY_WORKSPACE": str(workspace),
+                    "PYTHONDONTWRITEBYTECODE": "1"}}}}), encoding="utf-8")
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
         env.update({"HOME": str(home), "CLAUDE_CONFIG_DIR": str(config_dir),
                     "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_port}",
                     "ANTHROPIC_AUTH_TOKEN": "benchmark-local",
-                    "ANTHROPIC_MODEL": model, "NO_COLOR": "1",
+                    "ANTHROPIC_MODEL": "sonnet", "NO_COLOR": "1",
+                    "PYTHONDONTWRITEBYTECODE": "1",
                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
                     "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
                     "DISABLE_AUTOUPDATER": "1"})
         session_id = str(uuid.uuid4())
         command = [self.binary, "--bare", "--restricted", "-p", "--input-format", "stream-json",
-                   "--output-format", "stream-json", "--verbose", "--model", model,
+                   "--output-format", "stream-json", "--verbose", "--model", "sonnet",
                    "--system-prompt-file", str(system_path), "--session-id", session_id,
                    "--max-turns", str(self.steps), "--permission-mode", "dontAsk",
                    "--mcp-config", str(mcp_config), "--tools", "",
@@ -382,7 +418,12 @@ class ClaudeCodeCLI:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
                 if error is None and proc.returncode:
+                    stderr_text = (root / "stderr.txt").read_text(encoding="utf-8",
+                                                                   errors="replace")
+                    detail = stderr_text.strip().splitlines()
                     error = f"Claude Code exited {proc.returncode}"
+                    if detail:
+                        error += f": {detail[-1][-500:]}"
         except OSError as exc:
             error = _exception_detail(exc)
         finally:
@@ -442,19 +483,16 @@ class ClaudeCodeCLI:
             error = "Claude Code made no benchmark model request"
         if not error and backend_errors:
             error = backend_errors[0]
-        if not error and any(item["response"].get("done_reason") != "stop" for item in answers):
-            reasons = [item["response"].get("done_reason") for item in answers]
-            error = f"backend done_reason not stop: {reasons!r}"
+        if not error and answers and answers[-1]["response"].get("done_reason") == "length":
+            error = "backend done_reason length (no completed recovery request)"
         if error:
             (root / "error.txt").write_text(error + "\n", encoding="utf-8")
-        coder_root = self.artifact_root.parent
-        paths = sorted(str(path.relative_to(coder_root)) for path in root.rglob("*") if path.is_file())
+        run_root = self.artifact_root.parent.parent
+        paths = sorted(str(path.relative_to(run_root)) for path in root.rglob("*") if path.is_file())
         with (self.artifact_root / "cli-index.jsonl").open("a", encoding="utf-8") as index:
             index.write(json.dumps({"slot": self.slot, "case": self.case, "round": self.round,
                                     "artifacts": str(root), "error": error}) + "\n")
-        with (coder_root.parent / "artifact-index.jsonl").open("a", encoding="utf-8") as index:
-            index.write(json.dumps({"slot": self.slot, "case": self.case, "model": self.model,
-                                    "round": self.round, "paths": paths}) + "\n")
+        conversation = _cli_conversation(events)
         return {"message": {"role": "assistant", "content": str(final)},
                 "done_reason": "error" if error else "stop", "error": error,
                 "tool_turns": turns,
@@ -463,11 +501,14 @@ class ClaudeCodeCLI:
                                           for item in answers),
                 "eval_duration": sum(item["response"].get("eval_duration") or 0 for item in answers),
                 "cli_artifacts": str(root),
-                "cli_artifacts_relative": str(root.relative_to(coder_root)),
+                "cli_artifacts_relative": str(root.relative_to(run_root)),
                 "cli_session_id": result_event.get("session_id") or session_id,
                 "cli_wire_sha256": hashlib.sha256(wire.read_bytes()).hexdigest()
                     if wire.exists() else None,
                 "cli_messages": requests[0] if requests else None,
+                "cli_conversation": conversation,
+                "backend_done_reasons": backend_done_reasons,
+                "cli_control_model": "sonnet",
                 "backend_options": [item["backend_request"]["options"] for item in answers],
                 "cli_version": self.version}
 
