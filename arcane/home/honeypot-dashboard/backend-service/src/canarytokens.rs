@@ -18,7 +18,6 @@ use serde_json::{json, Value};
 
 use crate::AppState;
 
-const ADAPTER_WEBHOOK_URL: &str = "http://canarytokens-adapter.internal:8090/";
 /// frontend/app.py's ROOT_API_ENDPOINT at the pinned CANARYTOKENS_REF —
 /// deliberately non-guessable (upstream anti-scraping), not "/api".
 const DEFAULT_API_ROOT: &str = "/d3aece8093b71007b5ccfedad91ebb11";
@@ -77,6 +76,19 @@ fn base_url() -> Option<String> {
     }
     let root = std::env::var("CANARYTOKENS_API_ROOT").unwrap_or_else(|_| DEFAULT_API_ROOT.into());
     Some(format!("{}{}", api.trim_end_matches('/'), root))
+}
+
+fn adapter_webhook_url(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some(url.to_string())
 }
 
 fn type_info(token_type: &str) -> Option<&'static TokenType> {
@@ -159,6 +171,13 @@ pub async fn create(
         StatusCode::SERVICE_UNAVAILABLE,
         "canarytoken creation is not configured on this host".to_string(),
     ))?;
+    let webhook = std::env::var("CANARYTOKENS_ADAPTER_WEBHOOK_URL")
+        .ok()
+        .and_then(|raw| adapter_webhook_url(&raw))
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "canarytoken adapter webhook is not configured on this host".to_string(),
+        ))?;
     let info = type_info(&body.token_type)
         .ok_or((StatusCode::BAD_REQUEST, "unsupported token_type".to_string()))?;
     let memo = body.memo.trim().to_string();
@@ -187,14 +206,14 @@ pub async fn create(
         let form = reqwest::multipart::Form::new()
             .text("token_type", body.token_type.clone())
             .text("memo", memo.clone())
-            .text("webhook_url", ADAPTER_WEBHOOK_URL)
+            .text("webhook_url", webhook.clone())
             .part(body.token_type.clone(), part);
         request.multipart(form).send().await
     } else {
         let mut payload = json!({
             "token_type": body.token_type,
             "memo": memo,
-            "webhook_url": ADAPTER_WEBHOOK_URL,
+            "webhook_url": webhook,
         });
         if info.supports_snippet && body.include_text_snippet {
             payload["include_text_snippet"] = json!(true);
@@ -398,6 +417,31 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapter_webhook_accepts_host_specific_http_endpoints() {
+        assert_eq!(
+            adapter_webhook_url("http://canarytokens-adapter.internal:8090/"),
+            Some("http://canarytokens-adapter.internal:8090/".into())
+        );
+        assert_eq!(
+            adapter_webhook_url("https://adapter.example.test/hooks/canary"),
+            Some("https://adapter.example.test/hooks/canary".into())
+        );
+    }
+
+    #[test]
+    fn adapter_webhook_rejects_missing_or_unsafe_endpoints() {
+        for value in [
+            "",
+            "not-a-url",
+            "file:///tmp/hook",
+            "http://user:pass@adapter.internal/",
+            "https://adapter.internal/#fragment",
+        ] {
+            assert!(adapter_webhook_url(value).is_none(), "accepted {value}");
+        }
+    }
 
     #[test]
     fn the_compose_placeholder_itself_is_named() {
