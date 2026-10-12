@@ -165,7 +165,9 @@ services:
     restart: unless-stopped
     environment:
       - LISTEN_ADDR=0.0.0.0:8082
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      # The mounted HTTP API can move separately from sensor-bound workers.
+      # Override only after #3577 provides a private authenticated ES path.
+      - ELASTICSEARCH_URL=${BACKEND_MOUNTED_ELASTICSEARCH_URL:-http://elasticsearch:9200}
       # #1801: reconcile workbench runs nobody is looking at.
       #
       # reconcile_run already times out a child that outlives its queue
