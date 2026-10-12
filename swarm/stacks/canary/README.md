@@ -4,8 +4,8 @@ This is an isolated HTTP service for proving the Arcane GitOps Swarm path.
 It is **not** the existing-service migration required to close #3591. It has
 no public route, host mount, or application dependency.
 
-The proposed real-service migration is in `swarm/stacks/galah-broker/`; its
-README records the private-GHCR pull gate and ordered cutover.
+The real-service migration is in `swarm/stacks/galah-broker/`; its README
+records the live cutover, benchmark constraint, and remaining stability work.
 
 The stack has two replicas on nodes labelled `role=manager`, an encrypted
 overlay with MTU 1310, a versioned external config, health checks, and
