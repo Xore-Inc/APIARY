@@ -2288,8 +2288,21 @@ def request_json(url: str, body: dict[str, Any] | None = None, timeout: int | No
         req.add_header("Content-Type", "application/json")
     if timeout is None:
         timeout = request_timeout(body)
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        parsed = json.loads(response.read())
+    # Ollama has intermittently returned a fast 404 for an installed model
+    # during this roster (the same tag succeeds in adjacent cases). A 404 has
+    # produced no answer, so re-sending this one chat request is safe. Keep
+    # retries local to Ollama chat: metadata and other engines must report
+    # their original failures, and a genuinely absent tag still fails quickly.
+    retry_404 = url.endswith("/api/chat") and isinstance(body, dict) and bool(body.get("model"))
+    for attempt in range(3 if retry_404 else 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                parsed = json.loads(response.read())
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404 or attempt == 2 or not retry_404:
+                raise
+            time.sleep((0.25, 1.0)[attempt])
     if not isinstance(parsed, dict):
         raise ValueError(f"expected object from {url}")
     return parsed
