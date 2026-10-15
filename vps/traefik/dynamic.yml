@@ -30,8 +30,10 @@
 # #2381.)
 # socat-hp-http           :8081   →  10.8.0.2:19081 (http-honeypot :8080)
 # socat-hp-snare          :8082   →  10.8.0.2:19082 (snare :8080)
-# socat-hp-dashboard      :8090   →  10.8.0.2:19090 (dashboard :8080)
-# socat-hp-dashboard-next :8092   →  10.8.0.2:19092 (standalone
+# socat-hp-dashboard      :8090   →  10.8.0.2:19090 (default; override with
+#                                     DASHBOARD_LEGACY_HOST/PORT)
+# socat-hp-dashboard-next :8092   →  10.8.0.2:19092 (default; override with
+#                                     DASHBOARD_CANDIDATE_HOST/PORT; standalone
 #                                     Xore/apiary-dashboard :3000, the
 #                                     staging path; historical name, no
 #                                     longer dashboard-next)
