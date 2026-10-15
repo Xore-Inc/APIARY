@@ -154,13 +154,12 @@ const MAX_DIAL_AGE_SECONDS: i64 = 6 * 3600;
 /// but does not remove it.
 const GRACE_SECONDS: i64 = 30 * 60;
 
-/// The WireGuard endpoints. A flow whose source is one of these is our own
-/// relay rather than an attacker, which is the whole reason this loop exists.
-///
-/// Only the via_port arm of the query needs them named: the community_id arm
-/// identifies its candidates by having a relayed key at all, but the via_port
-/// arm would otherwise match every unattributed flow in the window.
-const TUNNEL_ADDRESSES: [&str; 2] = ["10.8.0.1", "10.8.0.2"];
+// The WireGuard endpoints. A flow whose source is one of these is our own
+// relay rather than an attacker, which is the whole reason this loop exists.
+//
+// Only the via_port arm of the query needs them named: the community_id arm
+// identifies its candidates by having a relayed key at all, but the via_port
+// arm would otherwise match every unattributed flow in the window.
 
 /// One portbridge dial: when it actually happened, and who was behind it.
 ///
@@ -406,7 +405,7 @@ async fn resolve_once(state: &AppState) -> anyhow::Result<()> {
                             "should": [
                                 {"exists": {"field": "network.community_id"}},
                                 {"bool": {"filter": [
-                                    {"terms": {"source.ip": TUNNEL_ADDRESSES}},
+                                    {"terms": {"source.ip": [crate::fleet::tunnel_peer_ip(), crate::fleet::tunnel_sensor_ip()]}},
                                     {"exists": {"field": "source.port"}},
                                     {"exists": {"field": "destination.port"}}
                                 ]}}

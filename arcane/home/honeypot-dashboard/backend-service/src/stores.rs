@@ -268,11 +268,6 @@ pub async fn attackers(
 /// `size`, `duration_ms`, `session` — so there is no join and no per-row
 /// lookup. The replay pane still keys on `shasum` against `cowrie-ttylog-v1`,
 /// which remains the right place for the bytes: many sessions, one recording.
-/// The WireGuard tunnel endpoint. Wherever this shows up as a cowrie source
-/// address it means enrichment did not rewrite it, not that the tunnel
-/// attacked anything (#1714).
-const TUNNEL_IP: &str = "10.8.0.1";
-
 #[utoipa::path(
     get,
     path = "/api/v1/recordings",
@@ -334,9 +329,13 @@ pub async fn recordings(
             // enrichment did not rewrite the address (#1714). Rendering it as
             // the attacker invites an operator to investigate our own
             // infrastructure, so it is reported as no attribution at all.
-            let src_ip = match source["source"]["ip"].as_str().unwrap_or("") {
-                TUNNEL_IP | "" => "",
-                value => value,
+            // A relay address means enrichment did not recover the client;
+            // do not present the relay as the attacker (#1714).
+            let raw_ip = source["source"]["ip"].as_str().unwrap_or("");
+            let src_ip = if raw_ip.is_empty() || raw_ip == crate::fleet::tunnel_peer_ip() {
+                ""
+            } else {
+                raw_ip
             };
             json!({
                 "when": source["@timestamp"].as_str().unwrap_or(""),
