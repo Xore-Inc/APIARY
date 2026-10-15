@@ -385,6 +385,11 @@ class ClaudeCodeCLI:
                     "ANTHROPIC_MODEL": "sonnet", "NO_COLOR": "1",
                     "PYTHONDONTWRITEBYTECODE": "1",
                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                    # The backend may legitimately need up to 8000s for a
+                    # 16000-token answer. Claude's 600s default cancels it
+                    # first and retries the same expensive request.
+                    "API_TIMEOUT_MS": str(self.timeout * 1000),
+                    "CLAUDE_CODE_MAX_RETRIES": "0",
                     "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
                     "DISABLE_AUTOUPDATER": "1"})
         session_id = str(uuid.uuid4())

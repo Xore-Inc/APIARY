@@ -26,6 +26,29 @@ if RUN_CLAUDE:
 
 
 class ClaudeProtocolTest(unittest.TestCase):
+    @unittest.skipUnless(RUN_CLAUDE, "set APIARY_CLAUDE_INTEGRATION=1 to run Claude Code against a local stub")
+    def test_backend_500_is_reported_without_duplicate_model_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            def backend(_url, body):
+                calls.append(body)
+                raise RuntimeError("HTTPError 500: model backend failed")
+
+            root = Path(tmp)
+            cli = ClaudeCodeCLI("stub-model", backend, shutil.which("claude"), 90, 2,
+                                root / "coder-artifacts" / "stub-model", version="integration")
+            cli.set_case("coder", "backend-500")
+            result = cli("ignored", {"model": "stub-model", "messages": [
+                {"role": "system", "content": "Answer the user."},
+                {"role": "user", "content": "Say hello."}],
+                "options": {"num_predict": 16}})
+            self.assertEqual(result["done_reason"], "error")
+            self.assertIn("HTTPError 500", result["error"])
+            self.assertEqual(len(calls), 1)
+            events = (Path(result["cli_artifacts"]) / "cli.jsonl").read_text()
+            self.assertNotIn('"type":"api_retry"', events)
+
     def test_original_prompt_survives_claude_continuation_messages(self):
         messages = [
             {"role": "user", "content": "original benchmark prompt"},
