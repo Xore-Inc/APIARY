@@ -52,6 +52,22 @@ describe('applyTheme suppression ordering', () => {
     expect(document.documentElement.classList.contains(SUPPRESS_CLASS)).toBe(true)
   })
 
+  it('completes the asynchronous appearance side effects', async () => {
+    const { applyTheme } = await import('./prefs')
+    const cssVars = await import('./cssVar')
+    const resetCache = vi.spyOn(cssVars, 'resetCssVarCache')
+    document.cookie = 'hp_appearance=; Max-Age=0; Path=/'
+    expect(document.cookie).not.toContain('hp_appearance=')
+
+    applyTheme('dark', { sync: false })
+
+    await vi.waitFor(() => {
+      expect(resetCache).toHaveBeenCalled()
+      expect(document.cookie).toContain('hp_appearance=')
+    })
+    resetCache.mockRestore()
+  })
+
   it('does not release on the first frame — that is the bug it exists to prevent', async () => {
     const frames = makeFrameQueue()
     vi.stubGlobal('requestAnimationFrame', frames.raf)
