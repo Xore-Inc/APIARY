@@ -119,6 +119,8 @@ jobs:
           persist-credentials: false
       - name: Inspect the home Compose stack
         shell: bash
+        env:
+          DASHBOARD_HEALTH_URL: ${{ vars.DASHBOARD_HEALTH_URL }}
         run: |
           set -uo pipefail
           stack=/opt/stacks/apiary
@@ -173,10 +175,13 @@ jobs:
           bind=${bind:-10.8.0.2}
 
           section "Dashboard"
-          if curl -fsS --max-time 10 "http://$bind:19090/healthz" >/dev/null 2>&1; then
+          # The new dashboard listens on :19092. Set DASHBOARD_HEALTH_URL
+          # in the production-home environment when it moves to another host.
+          dashboard_health_url=${DASHBOARD_HEALTH_URL:-http://$bind:19092/healthz}
+          if curl -fsS --max-time 10 "$dashboard_health_url" >/dev/null 2>&1; then
             report "healthz: responding"
           else
-            alert fault "dashboard healthz" "healthz: **unreachable** — the dashboard container is down or not bound"
+            alert fault "dashboard healthz" "healthz: **unreachable** — the configured dashboard endpoint did not respond"
           fi
 
           # #3315: "green, healthy, running the old code" is indistinguishable
