@@ -1744,6 +1744,13 @@ jobs:
               # a single DoublePulsar connection produce ~643 documents and
               # 47.5% of everything the fleet ingested.
               python arcane/home/honeypot-dionaea/dionaea/tests/test_smb_exploit_patch.py
+          - name: "Dionaea TDS header length guard (#3658)"
+            home: true
+            run: |
+              # Runs mssql.py's receive loop before and after the patch: a TDS
+              # header declaring Length 1 or 2 used to spin the main thread
+              # forever, which stopped every dionaea protocol, SMB included.
+              python arcane/home/honeypot-dionaea/dionaea/tests/test_mssql_patch.py
           - name: Ghidra worker, spool discipline and AI triage
             home: true
             run: |
