@@ -144,6 +144,9 @@ fn render(document: &mut Value) {
     let info = root.entry("info").or_insert_with(|| json!({})).as_object_mut().expect("info is an object");
     info.insert("title".to_string(), json!("APIARY dashboard backend-service"));
     info.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
+    // The contract version a consumer pins against; the package version
+    // above moves on every release and says nothing about compatibility.
+    info.insert("x-api-version".to_string(), json!(crate::API_VERSION));
     // `info.summary` is OpenAPI 3.1 and utoipa's `Info` does not model it,
     // so it cannot be set on the model at all.
     info.insert("summary".to_string(), json!(INFO_SUMMARY));
@@ -548,6 +551,16 @@ mod tests {
     /// with no responses, or a secured operation that forgot its 401 all
     /// pass the two gates above -- and then leave a fuzzer doing nothing
     /// useful against it.
+    /// The contract version is published twice -- in the document a consumer
+    /// pins and on the liveness probe it reads at runtime -- and both come
+    /// from `API_VERSION`, so a dashboard comparing them is comparing one fact.
+    #[tokio::test]
+    async fn api_version_is_published_in_the_document_and_on_liveness() {
+        assert_eq!(document()["info"]["x-api-version"], json!(crate::API_VERSION));
+        let live = serde_json::to_value(crate::livez().await.0).expect("liveness serializes");
+        assert_eq!(live["api_version"], json!(crate::API_VERSION));
+    }
+
     #[test]
     fn document_is_well_formed() {
         let document = document();

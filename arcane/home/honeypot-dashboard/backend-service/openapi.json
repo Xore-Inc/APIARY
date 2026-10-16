@@ -13,7 +13,8 @@
     "description": "The /api surface of `backend-service/` (`apiary-backend`), the Rust service tier of the APIARY dashboard's modernization port (#1608). It is not a public API: the Nitro BFF in `frontend-next/` is the only intended caller and presents a shared service token on every /api/v1 route. /healthz and /metrics are the two exceptions, open on purpose for the container healthcheck and the #1972 metrics scrape.\n\nResponse bodies are deliberately left unconstrained here. The handlers return `Json<Value>` or a per-surface struct that nothing in this crate enforces, so restating 138 shapes would be 138 chances to publish something the code does not promise -- and a contract that lies about a response is worse than one that admits the gap. What this document does pin is the part that has been wrong before: the auth tier, the request parameters (including the enum-valued ones the handlers actually validate), the declared status codes, and the media type of every response. That is what `.github/workflows/weekly-schemathesis.yml` checks.\n\n`arcane/home/honeypot-dashboard/backend-service/src/openapi.rs` is the source of truth. Regenerate the committed copy with `cargo run --bin openapi > openapi.json`; the drift tests in that module and a diff step in `quality.yml` both fail if you forget.",
     "summary": "The dashboard's Rust service tier: Elasticsearch-backed read APIs over the honeypot event corpus.",
     "title": "APIARY dashboard backend-service",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "x-api-version": 1
   },
   "openapi": "3.1.0",
   "paths": {
