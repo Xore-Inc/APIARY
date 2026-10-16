@@ -698,13 +698,44 @@ impl Es {
     /// `_source`/`sort`) across up to `max_pages` pages of `page_size` each.
     /// Ported from attacker-identity-worker's own es.go
     /// (openPointInTime/closePointInTime/docScrollAll).
+    ///
+    /// Holds every hit in memory at once. A caller that can fold hits as
+    /// they arrive should use [`Es::search_paginated_pages`] instead (#3675).
     pub async fn search_paginated(
+        &self,
+        index_pattern: &str,
+        body_fn: impl FnMut(Option<&Value>) -> Value,
+        page_size: u64,
+        max_pages: u32,
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut out = Vec::new();
+        self.search_paginated_pages(index_pattern, body_fn, page_size, max_pages, |hits| {
+            out.extend(hits);
+            Ok(())
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// The same PIT + search_after walk as [`Es::search_paginated`], but
+    /// hands each page to `on_page` as soon as it arrives and keeps nothing
+    /// itself, so peak memory is one page rather than the whole result.
+    ///
+    /// #3675: attacker-identity collected a full 6h window of raw hits (up
+    /// to 50 pages of 10,000 `serde_json::Value`s) before reducing them to a
+    /// few thousand per-IP observations. When one source pushed ~120k events
+    /// an hour into `honeypot-v2-*`, the window passed 450k hits and the
+    /// worker container was OOM-killed at its 1.5 GiB limit every couple of
+    /// minutes. An `Err` from `on_page` stops the walk and is returned, after
+    /// the PIT is closed. Returns the number of hits delivered.
+    pub async fn search_paginated_pages(
         &self,
         index_pattern: &str,
         mut body_fn: impl FnMut(Option<&Value>) -> Value,
         page_size: u64,
         max_pages: u32,
-    ) -> anyhow::Result<Vec<Value>> {
+        mut on_page: impl FnMut(Vec<Value>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<u64> {
         // A PIT open on an index that doesn't exist yet returns 404 — the
         // expected state before a caller's very first successful write
         // (every dashboard-owned index here is created lazily on first
@@ -715,7 +746,7 @@ impl Es {
         // looping forever on a load failure.
         let exists = self.client.indices().exists(elasticsearch::indices::IndicesExistsParts::Index(&[index_pattern])).send().await?;
         if exists.status_code().as_u16() == 404 {
-            return Ok(Vec::new());
+            return Ok(0);
         }
 
         let open = self
@@ -730,7 +761,7 @@ impl Es {
             .ok_or_else(|| anyhow::anyhow!("open_point_in_time: no id in response: {open_json}"))?
             .to_string();
 
-        let mut out = Vec::new();
+        let mut delivered: u64 = 0;
         let mut search_after: Option<Value> = None;
         let result: anyhow::Result<()> = async {
             for _ in 0..max_pages {
@@ -739,17 +770,24 @@ impl Es {
                 body["pit"] = serde_json::json!({"id": pit_id, "keep_alive": "2m"});
                 let response = self.client.search(SearchParts::None).body(body).send().await?;
                 let status = response.status_code();
-                let json = response.json::<Value>().await?;
+                let mut json = response.json::<Value>().await?;
                 if !status.is_success() {
                     anyhow::bail!("elasticsearch pit search {status}: {json}");
                 }
-                let hits = json["hits"]["hits"].as_array().cloned().unwrap_or_default();
+                // Moved out, not cloned: a cloned page was a second copy of
+                // up to page_size hits alive next to the response it came from.
+                let hits = match json["hits"]["hits"].take() {
+                    Value::Array(hits) => hits,
+                    _ => Vec::new(),
+                };
+                drop(json);
                 if hits.is_empty() {
                     break;
                 }
                 let got = hits.len() as u64;
                 let last_sort = hits.last().and_then(|h| h.get("sort")).cloned();
-                out.extend(hits);
+                delivered += got;
+                on_page(hits)?;
                 if got < page_size {
                     break;
                 }
@@ -769,7 +807,7 @@ impl Es {
             .send()
             .await;
         result?;
-        Ok(out)
+        Ok(delivered)
     }
 }
 
@@ -796,6 +834,143 @@ pub fn warn_on_failed_shards(context: &str, response: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Loopback stand-in for the four Elasticsearch calls a PIT walk makes
+    /// (index exists, open PIT, search, close PIT). Search answers come from
+    /// `pages` in order; every request line + body is recorded. Handles
+    /// several requests per connection because the client keeps them alive.
+    async fn pit_stub(pages: Vec<Value>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind stub");
+        let url = format!("http://{}", listener.local_addr().expect("stub addr"));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let pages = Arc::new(Mutex::new(std::collections::VecDeque::from(pages)));
+        let (seen, queue) = (log.clone(), pages.clone());
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let (seen, queue) = (seen.clone(), queue.clone());
+                tokio::spawn(async move {
+                    let mut buf: Vec<u8> = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+                            match stream.read(&mut chunk).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            }
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                        let body_len: usize = head
+                            .to_lowercase()
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                            .unwrap_or(0);
+                        if buf.len() < header_end + 4 + body_len {
+                            match stream.read(&mut chunk).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            }
+                            continue;
+                        }
+                        let request_line = head.lines().next().unwrap_or("").to_string();
+                        let body = String::from_utf8_lossy(&buf[header_end + 4..header_end + 4 + body_len]).to_string();
+                        buf.drain(..header_end + 4 + body_len);
+                        seen.lock().unwrap().push(format!("{request_line} {body}"));
+                        let answer = if request_line.contains("/_pit") && request_line.starts_with("POST") {
+                            serde_json::json!({"id": "pit-1"})
+                        } else if request_line.contains("/_search") {
+                            queue.lock().unwrap().pop_front().unwrap_or(serde_json::json!({"hits": {"hits": []}}))
+                        } else {
+                            serde_json::json!({})
+                        };
+                        let text = answer.to_string();
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nx-elastic-product: Elasticsearch\r\ncontent-length: {}\r\n\r\n{}",
+                            text.len(),
+                            text
+                        );
+                        if stream.write_all(response.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, log)
+    }
+
+    fn page(ids: &[u64]) -> Value {
+        let hits: Vec<Value> =
+            ids.iter().map(|id| serde_json::json!({"_id": id.to_string(), "sort": [id]})).collect();
+        serde_json::json!({"hits": {"hits": hits}})
+    }
+
+    /// #3675: pages reach the callback one at a time, in order, and
+    /// search_after advances from each page's last sort value.
+    #[tokio::test]
+    async fn search_paginated_pages_hands_over_each_page_as_it_arrives() {
+        let (url, log) = pit_stub(vec![page(&[1, 2]), page(&[3, 4]), page(&[5])]).await;
+        let es = Es::connect(&url).expect("client");
+        let mut sizes = Vec::new();
+        let mut ids = Vec::new();
+        let delivered = es
+            .search_paginated_pages(
+                "idx",
+                |after| {
+                    let mut body = serde_json::json!({"query": {"match_all": {}}});
+                    if let Some(after) = after {
+                        body["search_after"] = after.clone();
+                    }
+                    body
+                },
+                2,
+                10,
+                |hits| {
+                    sizes.push(hits.len());
+                    ids.extend(hits.iter().map(|h| h["_id"].as_str().unwrap_or("").to_string()));
+                    Ok(())
+                },
+            )
+            .await
+            .expect("walk");
+        assert_eq!(delivered, 5);
+        assert_eq!(sizes, vec![2, 2, 1]);
+        assert_eq!(ids, vec!["1", "2", "3", "4", "5"]);
+        let log = log.lock().unwrap().clone();
+        let searches: Vec<&String> = log.iter().filter(|l| l.contains("/_search")).collect();
+        assert_eq!(searches.len(), 3, "a short page ends the walk: {log:?}");
+        assert!(searches[1].contains("\"search_after\":[2]"), "second page continues after the first: {log:?}");
+        assert!(log.iter().any(|l| l.starts_with("DELETE") && l.contains("/_pit")), "PIT closed: {log:?}");
+    }
+
+    /// An error from the page callback stops the walk, still closes the
+    /// PIT, and the wrapper that collects everything sees the same hits.
+    #[tokio::test]
+    async fn search_paginated_pages_stops_on_callback_error_and_wrapper_collects_all() {
+        let (url, log) = pit_stub(vec![page(&[1, 2]), page(&[3, 4])]).await;
+        let es = Es::connect(&url).expect("client");
+        let mut calls = 0;
+        let err = es
+            .search_paginated_pages("idx", |_| serde_json::json!({}), 2, 10, |_| {
+                calls += 1;
+                anyhow::bail!("stop here")
+            })
+            .await
+            .expect_err("callback error propagates");
+        assert_eq!(calls, 1);
+        assert!(err.to_string().contains("stop here"));
+        let log = log.lock().unwrap().clone();
+        assert_eq!(log.iter().filter(|l| l.contains("/_search")).count(), 1);
+        assert!(log.iter().any(|l| l.starts_with("DELETE") && l.contains("/_pit")), "PIT closed: {log:?}");
+
+        let (url, _) = pit_stub(vec![page(&[1, 2]), page(&[3, 4]), page(&[])]).await;
+        let es = Es::connect(&url).expect("client");
+        let all = es.search_paginated("idx", |_| serde_json::json!({}), 2, 10).await.expect("walk");
+        assert_eq!(all.len(), 4);
+    }
 
     #[test]
     fn failed_shards_are_detected_and_clean_responses_are_not() {

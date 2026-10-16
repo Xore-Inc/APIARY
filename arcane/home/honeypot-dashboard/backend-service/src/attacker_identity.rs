@@ -142,14 +142,37 @@ fn valid_credential_pair(user: &str, pass: &str) -> bool {
     true
 }
 
+/// What one cycle's evidence-window fetch reduces to: per-IP observations
+/// plus how many events were folded into them.
+struct RecentWindow {
+    observations: HashMap<String, IpObservation>,
+    events: u64,
+}
+
+/// Fetches the evidence window and folds it into per-IP observations one
+/// page at a time.
+///
+/// #3675: this used to collect every raw hit of the window (up to
+/// EVENT_MAX_PAGES x EVENT_PAGE_SIZE = 500k `serde_json::Value`s) plus a
+/// `CorrEvent` copy of each before reducing them. On 2026-10-16 a single
+/// source pushed ~120k events an hour into `honeypot-v2-*`, the 6h window
+/// passed 450k hits, and the worker was OOM-killed at its 1.5 GiB limit
+/// every couple of minutes. Folding each page as it arrives keeps peak
+/// memory at one page plus the observations, which grow with distinct
+/// IPs/signals rather than with raw event count. The fold is identical to
+/// folding the whole window at once because pages arrive in the same
+/// `@timestamp`-asc order the evidence ring relies on.
 async fn fetch_recent_events(
     state: &AppState,
     since: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<Vec<CorrEvent>> {
+) -> anyhow::Result<RecentWindow> {
     let since_str = since.to_rfc3339();
+    let tunnel_peer = crate::fleet::tunnel_peer_ip();
+    let mut observations: HashMap<String, IpObservation> = HashMap::new();
+    let mut events: u64 = 0;
     let hits = state
         .es
-        .search_paginated(
+        .search_paginated_pages(
             "honeypot-v2-*",
             |search_after| {
                 let mut body = json!({
@@ -175,54 +198,63 @@ async fn fetch_recent_events(
             },
             EVENT_PAGE_SIZE,
             EVENT_MAX_PAGES,
+            |page| {
+                let page: Vec<CorrEvent> =
+                    page.iter().filter_map(|hit| corr_event_from_hit(hit, tunnel_peer)).collect();
+                events += page.len() as u64;
+                build_ip_observations(&mut observations, &page);
+                Ok(())
+            },
         )
         .await?;
 
-    // search_paginated stops silently once EVENT_MAX_PAGES is reached; a
-    // completely full final page is indistinguishable from truncation by
+    // search_paginated_pages stops silently once EVENT_MAX_PAGES is reached;
+    // a completely full final page is indistinguishable from truncation by
     // anything cheaper than this equality, so say so when this cycle may
     // be building identities from a clipped window (#2043).
-    if hits.len() as u64 >= EVENT_PAGE_SIZE * u64::from(EVENT_MAX_PAGES) {
+    if hits >= EVENT_PAGE_SIZE * u64::from(EVENT_MAX_PAGES) {
         tracing::warn!(
-            events = hits.len(),
+            events = hits,
             cap = EVENT_PAGE_SIZE * u64::from(EVENT_MAX_PAGES),
             "attacker-identity event fetch hit its pagination cap; entities built from a truncated window"
         );
     }
 
-    let mut out = Vec::with_capacity(hits.len());
-    for hit in hits {
-        let src = &hit["_source"];
-        let ip = src["source"]["ip"].as_str().unwrap_or("").to_string();
-        if ip.is_empty() || ip == crate::fleet::tunnel_peer_ip() {
-            continue;
-        }
-        let when = src["@timestamp"]
-            .as_str()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.with_timezone(&chrono::Utc));
-        let techniques = src["honeypot"]["canonical_attck_techniques"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        out.push(CorrEvent {
-            id: hit["_id"].as_str().unwrap_or("").to_string(),
-            when,
-            src_ip: ip,
-            sensor: src["event"]["sensor"].as_str().unwrap_or("").to_string(),
-            dst_ip: src["destination"]["ip"].as_str().unwrap_or("").to_string(),
-            dst_port: any_to_string(&src["destination"]["port"]),
-            protocol: src["network"]["protocol"].as_str().unwrap_or("").to_string(),
-            user: src["honeypot"]["canonical_user"].as_str().unwrap_or("").to_string(),
-            pass: src["honeypot"]["canonical_pass"].as_str().unwrap_or("").to_string(),
-            shasum: src["honeypot"]["canonical_shasum"].as_str().unwrap_or("").to_string(),
-            fingerprint: src["honeypot"]["canonical_fingerprint"].as_str().unwrap_or("").to_string(),
-            techniques,
-        });
+    Ok(RecentWindow { observations, events })
+}
+
+/// One `honeypot-v2-*` hit as the identity fold needs it. `None` for a hit
+/// with no source address or whose source is this fleet's own tunnel peer.
+fn corr_event_from_hit(hit: &serde_json::Value, tunnel_peer: &str) -> Option<CorrEvent> {
+    let src = &hit["_source"];
+    let ip = src["source"]["ip"].as_str().unwrap_or("");
+    if ip.is_empty() || ip == tunnel_peer {
+        return None;
     }
-    Ok(out)
+    let when = src["@timestamp"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&chrono::Utc));
+    let techniques = src["honeypot"]["canonical_attck_techniques"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    Some(CorrEvent {
+        id: hit["_id"].as_str().unwrap_or("").to_string(),
+        when,
+        src_ip: ip.to_string(),
+        sensor: src["event"]["sensor"].as_str().unwrap_or("").to_string(),
+        dst_ip: src["destination"]["ip"].as_str().unwrap_or("").to_string(),
+        dst_port: any_to_string(&src["destination"]["port"]),
+        protocol: src["network"]["protocol"].as_str().unwrap_or("").to_string(),
+        user: src["honeypot"]["canonical_user"].as_str().unwrap_or("").to_string(),
+        pass: src["honeypot"]["canonical_pass"].as_str().unwrap_or("").to_string(),
+        shasum: src["honeypot"]["canonical_shasum"].as_str().unwrap_or("").to_string(),
+        fingerprint: src["honeypot"]["canonical_fingerprint"].as_str().unwrap_or("").to_string(),
+        techniques,
+    })
 }
 
 // --------------------------------------------------------------------
@@ -320,8 +352,11 @@ pub(crate) fn scan_shape(dst_ips: usize, ports: usize) -> &'static str {
     }
 }
 
-fn build_ip_observations(events: &[CorrEvent]) -> HashMap<String, IpObservation> {
-    let mut out: HashMap<String, IpObservation> = HashMap::new();
+/// Folds `events` into `out`, one observation per source IP. Callable once
+/// per page (#3675): the only order-sensitive part is the evidence ring,
+/// and pages arrive oldest-first, so folding page by page gives exactly
+/// what folding the whole window at once would.
+fn build_ip_observations(out: &mut HashMap<String, IpObservation>, events: &[CorrEvent]) {
     for e in events {
         let o = out.entry(e.src_ip.clone()).or_insert_with(|| IpObservation {
             ip: e.src_ip.clone(),
@@ -384,7 +419,6 @@ fn build_ip_observations(events: &[CorrEvent]) -> HashMap<String, IpObservation>
             }
         }
     }
-    out
 }
 
 /// `attackers-v1`'s own persisted document shape.
@@ -1305,14 +1339,13 @@ async fn run_cycle(state: &AppState, window: Duration) {
     let start = chrono::Utc::now();
     let since = start - chrono::Duration::from_std(window).unwrap_or(chrono::Duration::hours(6));
 
-    let events = match fetch_recent_events(state, since).await {
-        Ok(events) => events,
+    let RecentWindow { observations, events } = match fetch_recent_events(state, since).await {
+        Ok(window) => window,
         Err(error) => {
             tracing::warn!(%error, "attacker-identity: fetching recent events failed, skipping this cycle");
             return;
         }
     };
-    let observations = build_ip_observations(&events);
 
     let existing = match load_candidate_entities(state, &observations).await {
         Ok(existing) => existing,
@@ -1382,7 +1415,7 @@ async fn run_cycle(state: &AppState, window: Duration) {
     }
 
     tracing::info!(
-        events = events.len(),
+        events,
         ips_observed = observations.len(),
         changed = changed.len(),
         absorbed = absorbed.len(),
@@ -1598,6 +1631,93 @@ pub async fn entity_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit(n: u64, ip: &str) -> serde_json::Value {
+        let ts = chrono::DateTime::from_timestamp(1_760_000_000 + n as i64, 0).unwrap().to_rfc3339();
+        json!({"_id": format!("ev-{n}"), "_source": {
+            "@timestamp": ts,
+            "source": {"ip": ip},
+            "event": {"sensor": if n.is_multiple_of(2) { "cowrie" } else { "multipot" }},
+            "destination": {"ip": format!("10.0.0.{}", n % 7), "port": 22 + (n % 3)},
+            "network": {"protocol": "ssh"},
+            "honeypot": {
+                "canonical_user": "root",
+                "canonical_pass": format!("pw{}", n % 11),
+                "canonical_shasum": if n.is_multiple_of(5) { format!("sha{}", n % 4) } else { String::new() },
+                "canonical_fingerprint": format!("fp{}", n % 3),
+                "canonical_attck_techniques": ["T1110"]
+            }
+        }})
+    }
+
+    fn observation_digest(o: &IpObservation) -> String {
+        let sorted = |set: &HashSet<String>| {
+            let mut v: Vec<_> = set.iter().cloned().collect();
+            v.sort();
+            v.join(",")
+        };
+        let evidence: Vec<String> = o.evidence.iter().map(|p| format!("{}@{}", p.id, p.ts)).collect();
+        format!(
+            "{} events={} first={:?} last={:?} sensors={} counts={:?} tech={} dst={} ports={} proto={} fp={} pay={} creds={} evidence={}",
+            o.ip,
+            o.events,
+            o.first,
+            o.last,
+            sorted(&o.sensors),
+            o.sensor_counts,
+            sorted(&o.techniques),
+            sorted(&o.dst_ips),
+            sorted(&o.ports),
+            sorted(&o.protocols),
+            sorted(&o.signals.fingerprints),
+            sorted(&o.signals.payloads),
+            sorted(&o.signals.creds),
+            evidence.join(",")
+        )
+    }
+
+    fn digest(map: &HashMap<String, IpObservation>) -> Vec<String> {
+        let mut out: Vec<String> = map.values().map(observation_digest).collect();
+        out.sort();
+        out
+    }
+
+    /// #3675: folding the window one fetch page at a time must build exactly
+    /// the observations the old collect-everything-then-fold path built,
+    /// including the evidence ring once an IP passes EVIDENCE_CAP.
+    #[test]
+    fn page_by_page_fold_matches_folding_the_whole_window() {
+        let ips = ["198.51.100.7", "203.0.113.9", "192.0.2.44"];
+        let hits: Vec<serde_json::Value> = (0..1_700u64)
+            .map(|n| hit(n, ips[if n % 10 < 7 { 0 } else { (n % 2 + 1) as usize }]))
+            .collect();
+        let events: Vec<CorrEvent> = hits.iter().filter_map(|h| corr_event_from_hit(h, "")).collect();
+        assert_eq!(events.len(), hits.len());
+
+        let mut whole = HashMap::new();
+        build_ip_observations(&mut whole, &events);
+
+        let mut paged = HashMap::new();
+        for page in hits.chunks(97) {
+            let page: Vec<CorrEvent> = page.iter().filter_map(|h| corr_event_from_hit(h, "")).collect();
+            build_ip_observations(&mut paged, &page);
+        }
+
+        assert_eq!(digest(&whole), digest(&paged));
+        let busiest = &paged[ips[0]];
+        assert!(busiest.events as usize > EVIDENCE_CAP, "the test must cross the evidence cap");
+        assert_eq!(busiest.evidence.len(), EVIDENCE_CAP);
+        assert_eq!(busiest.evidence.back().map(|p| p.id.as_str()), Some("ev-1696"));
+    }
+
+    #[test]
+    fn corr_event_from_hit_drops_missing_source_and_tunnel_peer() {
+        assert!(corr_event_from_hit(&json!({"_id": "a", "_source": {}}), "10.8.0.1").is_none());
+        assert!(corr_event_from_hit(&hit(1, "10.8.0.1"), "10.8.0.1").is_none());
+        let e = corr_event_from_hit(&hit(3, "198.51.100.7"), "10.8.0.1").expect("kept");
+        assert_eq!((e.id.as_str(), e.src_ip.as_str(), e.dst_port.as_str()), ("ev-3", "198.51.100.7", "22"));
+        assert_eq!(e.techniques, vec!["T1110".to_string()]);
+    }
 
     #[test]
     fn apply_verdicts_formats_labels_exactly_as_the_per_hash_lookup_did() {
