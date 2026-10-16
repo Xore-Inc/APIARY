@@ -151,6 +151,20 @@ services:
       # the override below is the one sanctioned dev escape hatch.
       - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
       - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
+      # #3577: rotation overlap and verified actor assertions. All optional;
+      # unset keeps the pre-#3577 behaviour (ACTOR_ASSERTION_MODE=off).
+      # Runbook: docs/BACKEND-TRUST-BOUNDARY.md.
+      - SERVICE_TOKEN_PREVIOUS=${DASHBOARD_SERVICE_TOKEN_PREVIOUS:-}
+      - SERVICE_TOKEN_PREVIOUS_UNTIL=${DASHBOARD_SERVICE_TOKEN_PREVIOUS_UNTIL:-}
+      # Export-only credential (x-export-token): GET /api/v1/ip-block-export
+      # and nothing else. Only this instance serves the blocklist pull.
+      - EXPORT_TOKEN=${BACKEND_EXPORT_TOKEN:-}
+      - EXPORT_TOKEN_PREVIOUS=${BACKEND_EXPORT_TOKEN_PREVIOUS:-}
+      - EXPORT_TOKEN_PREVIOUS_UNTIL=${BACKEND_EXPORT_TOKEN_PREVIOUS_UNTIL:-}
+      - ACTOR_ASSERTION_MODE=${ACTOR_ASSERTION_MODE:-off}
+      - ACTOR_ASSERTION_PUBLIC_KEY=${ACTOR_ASSERTION_PUBLIC_KEY:-}
+      - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS:-}
+      - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL:-}
       - CANARYTOKENS_API_URL=${CANARYTOKENS_API_URL:-}
       # The minted token calls this adapter when fired. Override per host
       # when the backend API moves to precision (#3576).

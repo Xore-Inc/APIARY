@@ -25,6 +25,7 @@ kind of truth it holds.
 | [BACKUP-ESSENTIALS.md](BACKUP-ESSENTIALS.md) | backup scope and restore expectations |
 | [CONTAINER-UPDATES.md](CONTAINER-UPDATES.md) | updating images without breaking pinned contracts |
 | [KEYCLOAK-OPERATIONS.md](KEYCLOAK-OPERATIONS.md) | identity-tier administration |
+| [BACKEND-TRUST-BOUNDARY.md](BACKEND-TRUST-BOUNDARY.md) | backend credentials, actor assertions, enforcement modes; install/rotate/revoke/rollback |
 | [vps/SSH-ACCESS.md](vps/SSH-ACCESS.md) | VPS admin SSH key inventory; the direct alias vs. the homeserver-hop route |
 | [CI-CD.md](CI-CD.md) | how CI validates and ships changes |
 | [TESTING.md](TESTING.md) | test surfaces per tier |
