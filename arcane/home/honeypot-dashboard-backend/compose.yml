@@ -111,7 +111,11 @@ services:
     restart: unless-stopped
     environment:
       - LISTEN_ADDR=0.0.0.0:8081
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      # A remote API host needs the private authenticated ES transport from
+      # #3577; keep the same-host bridge address as this Compose default.
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #2329: backs /api/v1/llm-search (llm_search.rs), which embeds the
       # operator's query via Ollama's /api/embed before the ES kNN lookup.
       # Left unset, ollama_url() returns None and the endpoint permanently
@@ -148,6 +152,9 @@ services:
       - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
       - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
       - CANARYTOKENS_API_URL=${CANARYTOKENS_API_URL:-}
+      # The minted token calls this adapter when fired. Override per host
+      # when the backend API moves to precision (#3576).
+      - CANARYTOKENS_ADAPTER_WEBHOOK_URL=${CANARYTOKENS_ADAPTER_WEBHOOK_URL:-http://canarytokens-adapter.internal:8090/}
       # #1612 misc write paths: honeyfs-implant credential provisioning/
       # rotation. Same reachability posture as CANARYTOKENS_API_URL above --
       # a plain HTTP URL over the WireGuard tunnel, off unless configured,
