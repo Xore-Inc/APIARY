@@ -172,7 +172,7 @@ Order used on 2026-10-10:
 ## Runbook: restart after a precision storage migration or reboot
 
 Lesson from #3584: Docker and the runners must never start on empty mountpoints.
-1. **Before** starting Docker or runners: `findmnt /var/lib/precision-storage /var/lib/docker /var/lib/github-runners /var/lib/github-runner-data` shows the XFS volume and the three binds from `/var/lib/precision-storage/live/*`, matching `hosts/precision-fstab.fragment`. If one is missing, **stop**: starting on the root filesystem creates divergent state.
+1. **Before** starting Docker or runners: compare the storage UUID in `hosts/precision-fstab.fragment` and `/etc/fstab` with `blkid -s UUID -o value /dev/md126p1` (a reinstall can change it). Run `findmnt --mountpoint PATH -o TARGET,SOURCE,FSTYPE` separately for `/var/lib/precision-storage`, `/var/lib/docker`, `/var/lib/github-runners`, and `/var/lib/github-runner-data`. The first must be the XFS volume and the other three binds from `/var/lib/precision-storage/live/*`. If one is missing, **stop**: starting on the root filesystem creates divergent state.
 2. Network: `nm-profiles.sh check hosts/precision.nm`; `wg show` for `wg0`, `wg-fibre` and `wg-lan`; `systemctl is-active peer-route.service`; `ip route show exact 10.8.0.2/32` via `wg-fibre`; `firewall-cmd --get-active-zones` lists `enp4s0f1 wg0 wg-fibre wg-lan` in `apiary-swarm`.
 3. Docker: `docker info` (swarm `active`, NodeAddr `10.8.0.3`, manager), and `docker node ls` from both managers.
 4. Arcane: `systemctl --user is-active arcane-fibre-tunnel`, `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13552/api/health` → 200, and environment `precision` `online` in the manager.
