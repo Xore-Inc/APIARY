@@ -849,7 +849,10 @@ impl Notifier {
     /// Rust tier doesn't track, so this covers the filebeat half faithfully
     /// rather than inventing an ingest-staleness computation.
     async fn filebeat_alerts(&mut self, mark_only: bool) {
-        let url = env_or("FILEBEAT_URL", "");
+        // Unset or blank: Filebeat is not co-located with this backend
+        // (#3576), so there is nothing to alert on. Skipping is not a
+        // healthy report; source-health shows the card as "disabled".
+        let url = env_or("FILEBEAT_URL", "").trim().to_string();
         if url.is_empty() {
             return;
         }
