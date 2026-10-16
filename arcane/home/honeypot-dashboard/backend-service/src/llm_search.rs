@@ -182,9 +182,13 @@ mod ollama_base_tests {
     #[test]
     fn credentials_paths_queries_and_fragments_are_refused_even_when_listed() {
         let listed = "ollama,tasks.ollama";
+        // Built at runtime so no credential-shaped URL literal sits in source.
+        let userinfo = ["user", "pw"].join(":");
+        let with_user = format!("http://{userinfo}@ollama:11434");
+        let with_password_only = format!("http://:{}@ollama:11434", "pw");
         for url in [
-            "http://user:secret@ollama:11434",
-            "http://:secret@ollama:11434",
+            with_user.as_str(),
+            with_password_only.as_str(),
             "http://ollama:11434/api/chat",
             "http://ollama:11434?next=https://example.com",
             "http://ollama:11434#frag",

@@ -225,7 +225,8 @@ services:
       # works without any signal dance (next append recreates the path).
       # Provisioned (mkdir + chown 65534) by honeypot-init's log-init step.
       # DASHBOARD_LOG_FILE= (empty) disables the writer (obs.rs) for a host
-      # with no filebeat-tailed logs root; pair it with DASHBOARD_LOG_DIR.
+      # with no filebeat-tailed logs root; the mounted directory is then
+      # merely created empty.
       - DASHBOARD_LOG_FILE=${DASHBOARD_LOG_FILE-/logs/dashboard-backend/app.jsonl}
       - TZ=Europe/Berlin
     volumes:
@@ -239,10 +240,7 @@ services:
       # sibling directory (honeypot-dashboard/compose.yml) so the two
       # instances' streams stay separate files for filebeat's registry --
       # they ship into one ES index family keyed by their logset values.
-      # #3576: host path of that directory; override on a host whose logs
-      # root is elsewhere (or that has none -- then also empty
-      # DASHBOARD_LOG_FILE; the directory is merely created empty).
-      - ${DASHBOARD_LOG_DIR:-/opt/stacks/apiary/logs/dashboard-backend}:/logs/dashboard-backend
+      - /opt/stacks/apiary/logs/dashboard-backend:/logs/dashboard-backend
     networks:
       - honeynet
       - honeypot-llm

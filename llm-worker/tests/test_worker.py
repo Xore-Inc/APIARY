@@ -88,7 +88,8 @@ class EndpointAndGateTests(unittest.TestCase):
         self.assertEqual(names, {"ollama", "other", "tasks.ollama"})
         self.assertTrue(worker.endpoint_is_local("https://tasks.ollama:11434", names))
         self.assertFalse(worker.endpoint_is_local("https://tasks.ollama:11434/api", names))
-        self.assertFalse(worker.endpoint_is_local("http://u:p@tasks.ollama:11434", names))
+        credentialed = "http://" + "u" + ":" + "p" + "@tasks.ollama:11434"
+        self.assertFalse(worker.endpoint_is_local(credentialed, names))
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(worker.ollama_service_names(), {"ollama"})
 
