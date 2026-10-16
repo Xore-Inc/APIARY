@@ -23,7 +23,7 @@
 
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
 
@@ -102,6 +102,9 @@ pub mod ics_severity;
 pub mod ioc_correlation;
 pub mod threat_intel;
 pub mod topology;
+pub mod trust;
+#[cfg(test)]
+mod trust_router_tests;
 pub mod webhook_delivery;
 pub mod zeek_proxy_attribution;
 pub mod worker;
@@ -116,13 +119,23 @@ pub mod contract;
 #[derive(Clone)]
 pub struct AppState {
     pub es: Arc<es::Es>,
-    pub service_token: Arc<Option<String>>,
+    /// #3577: the scoped credentials, their rotation windows, and the
+    /// actor-assertion key and mode. Replaces the single `service_token`;
+    /// `trust::Trust::bff_only` is that old shape.
+    pub trust: Arc<trust::Trust>,
     pub audit: Arc<audit::AuditLogger>,
     pub config_history: Arc<config_history::ConfigHistory>,
     /// #1972: request metrics + where durable JSONL request lines land
     /// (empty = durable shipping disabled; stdout tracing unaffected).
     pub observability: Arc<obs::Obs>,
 }
+
+/// The version of the `/api/v1` HTTP contract. Bump it on a breaking change
+/// (a removed or renamed route, field or parameter, or a changed meaning);
+/// additive changes keep it. Published on `/livez`, `/healthz` and as
+/// `info.x-api-version` in `openapi.json`; the dashboard's supported set
+/// lives in its `src/server/backendContract.ts`.
+pub const API_VERSION: u32 = 1;
 
 /// /livez — the process is up and its HTTP stack is answering. Says nothing
 /// about Elasticsearch, and must never ask it.
@@ -137,6 +150,11 @@ pub struct AppState {
 #[derive(Serialize)]
 struct Liveness {
     live: bool,
+    /// The version of the HTTP contract this binary serves (`API_VERSION`).
+    /// Unlike `revision` it says what a caller may rely on, so an
+    /// independently released dashboard can refuse a backend whose contract
+    /// it does not speak. Dependency-free like the rest of this probe.
+    api_version: u32,
     /// build.rs's compile stamp, so a probe can answer "is the running
     /// binary newer than the merge" without a second round trip. Same
     /// field main logs at boot.
@@ -276,7 +294,7 @@ fn readiness_verdict(
 /// GET /livez, and GET /healthz — the same handler under two names. See
 /// `Liveness` for why the response carries no Elasticsearch signal.
 async fn livez() -> Json<Liveness> {
-    Json(Liveness { live: true, built: build_stamp(), revision: git_revision() })
+    Json(Liveness { live: true, api_version: API_VERSION, built: build_stamp(), revision: git_revision() })
 }
 
 #[utoipa::path(
@@ -408,28 +426,96 @@ pub fn allow_unauth_dev_from_env(raw: Option<&str>) -> bool {
     raw == Some("1")
 }
 
-/// Every /api/v1 route requires the BFF's service token (constant-time
-/// comparison; header X-Service-Token). /healthz stays open for the
-/// container healthcheck, same as the Go dashboard's -healthcheck probe.
+/// Every /api/v1 route requires a credential (constant-time comparison).
+/// /healthz, /livez, /readyz and /metrics stay open for the container
+/// healthcheck and the scrape, same as the Go dashboard's -healthcheck probe.
+///
+/// #3577 split the one shared token into scoped credentials and stopped
+/// believing plain actor headers. In order:
+///
+/// 1. No accepted credential: 401, as before. `x-service-token` carries the
+///    BFF credential (current, or the previous one inside its rotation
+///    window); `x-export-token` carries the export-only one.
+/// 2. The export credential reaches `GET /api/v1/ip-block-export` and
+///    nothing else: every other route is a 403, before any handler runs.
+/// 3. The BFF credential then meets the actor gate, per
+///    `ACTOR_ASSERTION_MODE`: `off` changes nothing (the pre-#3577
+///    behaviour), `log` warns with `[E-ACTOR-ASSERTION]` about every request
+///    `enforce` would refuse and changes nothing, and `enforce` refuses them.
+///    Under `enforce` the client's `x-actor-username`/`x-actor-role` are
+///    dropped and, for a verified assertion, rewritten from it, and the
+///    `trust::VerifiedActor` is attached as a request extension.
 async fn require_service_token(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if let Some(expected) = state.service_token.as_ref() {
-        let presented = headers
-            .get("x-service-token")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("");
-        let expected = expected.as_bytes();
-        let presented = presented.as_bytes();
-        let mut diff = expected.len() ^ presented.len();
-        for i in 0..expected.len().min(presented.len()) {
-            diff |= (expected[i] ^ presented[i]) as usize;
+    let trust = state.trust.as_ref();
+    let now = chrono::Utc::now();
+    let Some(principal) = trust.principal(request.headers(), now) else {
+        return (StatusCode::UNAUTHORIZED, "service token required").into_response();
+    };
+    let matched = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|path| path.as_str().to_string());
+    let method = request.method().clone();
+    if principal == trust::Principal::Export {
+        if !trust::export_may(&method, matched.as_deref()) {
+            return (
+                StatusCode::FORBIDDEN,
+                "the export credential only reads GET /api/v1/ip-block-export",
+            )
+                .into_response();
         }
-        if diff != 0 {
-            return (StatusCode::UNAUTHORIZED, "service token required").into_response();
+        return next.run(request).await;
+    }
+    if trust.mode == trust::AssertionMode::Off {
+        return next.run(request).await;
+    }
+    let path = request.uri().path().to_string();
+    let verdict = trust.evaluate(&method, &path, matched.as_deref(), request.headers(), now);
+    if trust.mode == trust::AssertionMode::Log {
+        match &verdict {
+            trust::Verdict::Deny(status, reason) => tracing::warn!(
+                %method, route = matched.as_deref().unwrap_or(path.as_str()), status = status.as_u16(),
+                "[E-ACTOR-ASSERTION] log mode: enforce would refuse this request: {reason}"
+            ),
+            trust::Verdict::Actor(actor) => {
+                let claimed = request
+                    .headers()
+                    .get(trust::ACTOR_USERNAME_HEADER)
+                    .and_then(|value| value.to_str().ok());
+                if claimed.is_some_and(|claimed| claimed != actor.username) {
+                    tracing::warn!(
+                        %method, route = matched.as_deref().unwrap_or(path.as_str()),
+                        "[E-ACTOR-ASSERTION] log mode: x-actor-username differs from the assertion; \
+                         enforce will use the assertion's username"
+                    );
+                }
+            }
+            trust::Verdict::Anonymous => {}
+        }
+        return next.run(request).await;
+    }
+    let headers = request.headers_mut();
+    headers.remove(trust::ACTOR_USERNAME_HEADER);
+    headers.remove(trust::ACTOR_ROLE_HEADER);
+    match verdict {
+        trust::Verdict::Deny(status, reason) => return (status, reason).into_response(),
+        trust::Verdict::Anonymous => {}
+        trust::Verdict::Actor(actor) => {
+            // from_bytes, not from_str: a non-ASCII name is still the
+            // verified name, and handlers that need text read it with
+            // to_str() exactly as they did the BFF's header.
+            if let Ok(value) = axum::http::HeaderValue::from_bytes(actor.username.as_bytes()) {
+                headers.insert(trust::ACTOR_USERNAME_HEADER, value);
+            }
+            headers.insert(
+                trust::ACTOR_ROLE_HEADER,
+                axum::http::HeaderValue::from_static(actor.role.as_str()),
+            );
+            request.extensions_mut().insert(actor);
         }
     }
     next.run(request).await

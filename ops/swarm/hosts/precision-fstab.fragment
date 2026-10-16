@@ -1,5 +1,7 @@
 # Existing data stays on this XFS volume; bind mounts require it.
-UUID=1439bb06-3116-4490-9450-9678eb26cdf5 /var/lib/precision-storage xfs defaults,noatime 0 0
+# Verified after the 2026-10-12 reboot. Before reusing after a reinstall,
+# compare this UUID with `blkid -s UUID -o value /dev/md126p1` on precision.
+UUID=ae02013b-6a20-4f22-85b4-d28a5cc8d00c /var/lib/precision-storage xfs defaults,noatime,discard 0 2
 /var/lib/precision-storage/live/docker /var/lib/docker none bind,noatime,x-systemd.requires-mounts-for=/var/lib/precision-storage 0 0
 /var/lib/precision-storage/live/github-runners /var/lib/github-runners none bind,noatime,x-systemd.requires-mounts-for=/var/lib/precision-storage 0 0
 /var/lib/precision-storage/live/github-runner-data /var/lib/github-runner-data none bind,noatime,x-systemd.requires-mounts-for=/var/lib/precision-storage 0 0

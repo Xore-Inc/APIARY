@@ -310,7 +310,8 @@ services:
 
   # #252: a narrow, safe subset of what T-Pot's own daily cron does (full
   # container/image/volume prune + forced reboot) -- age-bounded dangling-
-  # image prune and stopped-container prune only, no volumes (real
+  # image prune and prune of stopped containers that no compose project
+  # owns (#3658) only, no volumes (real
   # long-lived state lives there), no downtime, no destructive updates.
   # See analysis/docker-hygiene.sh's own header for the full reasoning.
   # Same trust boundary as autoheal: talks to docker-socket-proxy only,

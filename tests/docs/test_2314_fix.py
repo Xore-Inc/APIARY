@@ -136,8 +136,8 @@ SAME_VERSION_REFRESHES = {
     },
     "debian:bookworm-slim": {
         "old": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241",
-        "superseded": "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
-        "new": "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "superseded": "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "new": "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
         "files": [
             "arcane/home/honeypot-cowrie/cowrie/Dockerfile",
             "arcane/home/honeypot-galah/galah/Dockerfile",
