@@ -193,10 +193,19 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "from 147"
     ),
     "rust:1-slim-bookworm": (
-        "sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e",
+        "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
         "build stage only -- backend-service names it `AS build` and ships a "
-        "debian:bookworm-slim final image; measured 1 fixable CRITICAL/HIGH "
-        "after the pin moved to the tag's current digest, down from 74"
+        "debian:bookworm-slim final image. Re-pinned to the tag's current "
+        "digest (#3667): the pcre2 finding is gone, and 7 fixable findings "
+        "remain, all in the perl packages (perl-base, perl, perl-modules-5.36, "
+        "libperl5.36) at 5.36.0-7+deb12u4. Debian has fixed these in its "
+        "archive, but no bookworm image tag carries the fix yet. perl-base is "
+        "an essential package the base image cannot drop. None of the "
+        "flagged code runs in the shipped image: it is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which only run when a "
+        "perl script loads them, and the backend-service final stage runs only "
+        "its own Rust binary. Retires itself when a bookworm rebuild lands "
+        "deb12u4 and the pin moves."
     ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
@@ -226,21 +235,29 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # instead and no entry was written -- see the entries' "moved to"
     # comments in REPORT.md.
     "debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
-        "measured 1 fixable CRITICAL/HIGH (CVE-2026-103111 libpcre2-8-0), and "
-        "every point release of this tag measures the same 1: bookworm-slim, "
-        "bookworm-20260918-slim, 13.7-slim and trixie-slim were each scanned, "
-        "and trixie is worse at 5 (it trades this one for openssl 3.5.7 and "
-        "libssl3t64). Bookworm is what the tree targets -- the exemption "
-        "would have to become a distro migration, not a pin bump. Retires "
-        "itself when a bookworm rebuild lands the pcre2 fix."
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
+        "re-pinned from 3783cc01 to the tag's current digest (#3667). The "
+        "pcre2 finding (CVE-2026-103111) is gone, but 7 fixable CRITICAL/HIGH "
+        "remain, all in perl (perl-base, perl-modules-5.36, libperl5.36) at "
+        "5.36.0-7+deb12u4: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 "
+        "(CRITICAL), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, "
+        "CVE-2026-57433 (HIGH). Debian has fixed them in its archive, but no "
+        "bookworm tag carries the fix yet (bookworm-slim and "
+        "bookworm-20261005-slim share this digest). perl-base is Essential, so "
+        "the base cannot drop it. The flagged code is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which run only when a "
+        "perl script loads them; none of the images that use this base "
+        "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
+        "attacker-controlled input. Retires itself when a bookworm rebuild "
+        "lands deb12u4 and the pin moves."
     ),
     "docker.io/library/debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
         "same artifact as the debian:bookworm-slim entry above, reached "
         "through a `docker.io/library/`-qualified FROM; the two keys are "
         "kept separate because main() emits them as two distinct references "
-        "and the matching rule is exact. Same measurement, same 1."
+        "and the matching rule is exact. Same measurement: 7 perl findings, "
+        "no pcre2."
     ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
@@ -642,6 +659,56 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # The 1.26 and 1.27 alpine toolchains need no entry for the same
     # reason: re-pinned to the 1.26.9 / 1.27.2 digests, measured clean.
     # The entry above is the one that had to be argued rather than bumped.
+    # --- #3667: drift after #3668 -------------------------------------------
+    # technitium/dns-server:15.6.0 is held here because no fixed build exists.
+    # 15.6.1, the newest release (2026-10-11), was scanned and carries the same
+    # 12 findings: the ASP.NET Core and .NET 10.0.12 runtime bundled in the
+    # image, fixed in 10.0.13. The 15.6.1 changelog lists no runtime bump. It is
+    # not taken because it does not clear the gate. The DNS server runs on the
+    # homeserver LAN address only (technitium/compose.yml binds 53, 5380 and
+    # 53443 to ${LAN_IP}), so nothing is published to the internet. The
+    # advisory text was taken from third-party databases, not the MSRC
+    # entries, and whether this image's Kestrel accepts HTTP/2 or HTTP/3 on
+    # the console was not verified. CVE-2026-70188 is an HTTP/2 and HTTP/3
+    # request-trailer issue, so its reachability depends on that. The other
+    # advisory titles are ASP.NET Core bypass, DoS and privilege-escalation
+    # issues; the console requires an admin login. Digest-keyed: the exemption
+    # retires when Technitium ships a build on runtime 10.0.13 or later.
+    "technitium/dns-server:15.6.0": (
+        "sha256:1045db38fd2f2e4d9578f9168b7eb4862575469ed0ffc79e03f36bdc772a93b5",
+        "measured 12 fixable CRITICAL/HIGH, all ASP.NET Core / .NET runtime "
+        "advisories against the bundled 10.0.12 runtime (fixed in 10.0.13): "
+        "CVE-2026-70188 and CVE-2026-88092 (CRITICAL), plus 10 HIGH. Latest "
+        "15.6.1 (2026-10-11) measures the same 12. Exposure is LAN-only: "
+        "53, 5380 and 53443 are bound to ${LAN_IP} in technitium/compose.yml, "
+        "and nothing is published to the internet. The advisory text is from "
+        "third-party databases, not the MSRC entries. CVE-2026-70188 is an "
+        "HTTP/2 and HTTP/3 request-trailer issue whose reachability on this "
+        "console was not verified. The other ten are not individually "
+        "verified either, so this rests on the LAN-only exposure alone and "
+        "should be revisited if Technitium publishes a runtime-10.0.13 build. "
+        "Digest-keyed."
+    ),
+    # sdk:10.0.402 is the newest 10.0 SDK. Its four findings are NuGet-packaged
+    # System.Security.Cryptography.Pkcs and .Xml bundled in the SDK. Every
+    # sdk reference in this tree is a build stage that is not shipped:
+    # Dockerfile.api-prep and Dockerfile.client-win (final stage is aspnet /
+    # runtime), and Dockerfile-api (verbatim, not built). The GHOSTS source
+    # never uses SignedXml, EnvelopedCms or the Pkcs API, so these libraries
+    # are not exercised at runtime.
+    "mcr.microsoft.com/dotnet/sdk:10.0.402": (
+        "sha256:0d99ebf1ccad15037b5c98c9fe8979d6b8dbac23812feae2277a0b277b5c5ffa",
+        "measured 4 fixable HIGH, all in SDK-bundled NuGet packages: "
+        "System.Security.Cryptography.Pkcs (CVE-2026-84008) and "
+        "System.Security.Cryptography.Xml (CVE-2026-96958, -96959, -96960), "
+        "fixed in 10.0.13 and later. Down from 40 at 10.0.401. The SDK is "
+        "build-stage only: sandbox/ghosts/Dockerfile.api-prep and "
+        "Dockerfile.client-win end in aspnet:10.0 and runtime:10.0, which "
+        "measure 0, and the vendored Dockerfile-api is not built. "
+        "The GHOSTS source does not reference SignedXml, EnvelopedCms or the "
+        "Pkcs API, so the flagged parsers do not run. Retires on the next "
+        "SDK digest move."
+    ),
 }
 
 
