@@ -80,6 +80,18 @@ class EndpointAndGateTests(unittest.TestCase):
         for url in rejected:
             self.assertFalse(worker.endpoint_is_local(url, {"ollama", "elasticsearch"}), url)
 
+    def test_https_and_listed_hosts_need_an_explicit_allowlist(self):
+        self.assertTrue(worker.endpoint_is_local("https://ollama:11434", {"ollama"}))
+        self.assertFalse(worker.endpoint_is_local("http://tasks.ollama:11434", {"ollama"}))
+        with patch.dict(os.environ, {"OLLAMA_ALLOWED_HOSTS": "other, Tasks.Ollama,"}, clear=True):
+            names = worker.ollama_service_names()
+        self.assertEqual(names, {"ollama", "other", "tasks.ollama"})
+        self.assertTrue(worker.endpoint_is_local("https://tasks.ollama:11434", names))
+        self.assertFalse(worker.endpoint_is_local("https://tasks.ollama:11434/api", names))
+        self.assertFalse(worker.endpoint_is_local("http://u:p@tasks.ollama:11434", names))
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(worker.ollama_service_names(), {"ollama"})
+
     def test_dry_run_is_the_default_and_needs_no_endpoint(self):
         with patch.dict(os.environ, {}, clear=True):
             parsed = worker.Config.from_env()

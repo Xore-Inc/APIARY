@@ -110,25 +110,89 @@ pub struct SearchQuery {
     pub source: String,
 }
 
-/// Mirrors llm-worker's endpoint_is_local(): plain http, bare host, and a
-/// known service name / localhost / private address only.
+/// Comma-separated extra hostnames/addresses the operator accepts as the
+/// Ollama endpoint, beyond the built-in local set (#3576).
+const OLLAMA_ALLOWED_HOSTS_ENV: &str = "OLLAMA_ALLOWED_HOSTS";
+
+/// Mirrors llm-worker's endpoint_is_local() (same `OLLAMA_ALLOWED_HOSTS`).
+///
+/// The model sees captured attacker data, so the endpoint stays an explicit
+/// decision: http or https, bare host (no credentials, path, query or
+/// fragment), and the host must be `ollama`, `localhost`, a loopback /
+/// private / link-local address, or named in `OLLAMA_ALLOWED_HOSTS`. A
+/// Swarm service name or a remote HTTPS endpoint is therefore accepted only
+/// when the operator lists it; an unrecognised DNS name is never trusted
+/// because of how it looks, since it can resolve anywhere.
 pub(crate) fn ollama_url() -> Option<String> {
     let raw = std::env::var("OLLAMA_URL").ok().filter(|value| !value.is_empty())?;
-    let url = reqwest::Url::parse(&raw).ok()?;
-    if url.scheme() != "http" || !url.username().is_empty() || url.query().is_some() {
+    let allowed = std::env::var(OLLAMA_ALLOWED_HOSTS_ENV).unwrap_or_default();
+    ollama_base(&raw, &allowed)
+}
+
+fn ollama_base(raw: &str, allowed_hosts: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         return None;
     }
     if !matches!(url.path(), "" | "/") {
         return None;
     }
     let host = url.host_str()?.to_lowercase();
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    let listed = allowed_hosts
+        .split(',')
+        .map(|entry| entry.trim().trim_matches(|c| c == '[' || c == ']').to_lowercase())
+        .any(|entry| !entry.is_empty() && entry == host);
     let local = host == "ollama"
         || host == "localhost"
         || host.parse::<IpAddr>().map(|ip| match ip {
             IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
             IpAddr::V6(v6) => v6.is_loopback(),
         }).unwrap_or(false);
-    local.then(|| raw.trim_end_matches('/').to_string())
+    (local || listed).then(|| raw.trim_end_matches('/').to_string())
+}
+
+#[cfg(test)]
+mod ollama_base_tests {
+    use super::ollama_base;
+
+    #[test]
+    fn builtin_local_hosts_are_accepted_over_http_and_https() {
+        for url in ["http://ollama:11434", "https://ollama:11434/", "http://localhost:11434", "http://10.8.0.2:11434", "http://[::1]:11434"] {
+            assert!(ollama_base(url, "").is_some(), "{url}");
+        }
+        assert_eq!(ollama_base("http://ollama:11434/", "").as_deref(), Some("http://ollama:11434"));
+    }
+
+    #[test]
+    fn other_hosts_need_an_explicit_allowlist_entry() {
+        assert!(ollama_base("http://tasks.ollama:11434", "").is_none());
+        assert!(ollama_base("https://api.openai.com", "").is_none());
+        assert!(ollama_base("http://203.0.113.8:11434", "").is_none());
+        assert!(ollama_base("http://tasks.ollama:11434", "other, Tasks.Ollama").is_some());
+        assert!(ollama_base("https://ollama.example.test", "ollama.example.test").is_some());
+        assert!(ollama_base("http://203.0.113.8:11434", "203.0.113.8").is_some());
+    }
+
+    #[test]
+    fn credentials_paths_queries_and_fragments_are_refused_even_when_listed() {
+        let listed = "ollama,tasks.ollama";
+        for url in [
+            "http://user:secret@ollama:11434",
+            "http://:secret@ollama:11434",
+            "http://ollama:11434/api/chat",
+            "http://ollama:11434?next=https://example.com",
+            "http://ollama:11434#frag",
+            "ftp://ollama:11434",
+        ] {
+            assert!(ollama_base(url, listed).is_none(), "{url}");
+        }
+    }
 }
 
 pub(crate) async fn embed(base: &str, model: &str, text: &str) -> anyhow::Result<Vec<f64>> {
