@@ -244,15 +244,24 @@ pub struct ActionQuery {
     ),
     security(("serviceToken" = [])),
 )]
+/// #3577: under `ACTOR_ASSERTION_MODE=enforce` the trust middleware has
+/// already refused anyone but a verified admin, and the audit entry names
+/// that verified actor; the `actor_*` query fields are only the labels for
+/// the `off`/`log` modes, where nothing was verified.
 pub async fn action(
     State(state): State<AppState>,
     Path((name, action)): Path<(String, String)>,
     Query(actor): Query<ActionQuery>,
+    verified: Option<axum::Extension<crate::trust::VerifiedActor>>,
 ) -> impl axum::response::IntoResponse {
+    let (actor_subject, actor_username) = match verified {
+        Some(axum::Extension(verified)) => (verified.subject, verified.username),
+        None => (actor.actor_subject, actor.actor_username),
+    };
     let (ok, status, reason) = perform_service_action(&name, &action).await;
     state.audit.log(AuditEvent {
-        actor_subject: actor.actor_subject,
-        actor_username: actor.actor_username,
+        actor_subject,
+        actor_username,
         action: format!("services.{action}"),
         fields: vec![name.clone()],
         result: if ok { "success" } else { "error" }.into(),
