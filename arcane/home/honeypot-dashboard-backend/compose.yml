@@ -111,7 +111,11 @@ services:
     restart: unless-stopped
     environment:
       - LISTEN_ADDR=0.0.0.0:8081
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      # A remote API host needs the private authenticated ES transport from
+      # #3577; keep the same-host bridge address as this Compose default.
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #2329: backs /api/v1/llm-search (llm_search.rs), which embeds the
       # operator's query via Ollama's /api/embed before the ES kNN lookup.
       # Left unset, ollama_url() returns None and the endpoint permanently
@@ -124,7 +128,14 @@ services:
       # own ollama service publishes on the honeypot-llm network (joined
       # below) -- the same address honeypot-galah's galah-llm-broker and
       # llm-worker's captured-data override already reach it by.
-      - OLLAMA_URL=http://ollama:11434
+      # #3576: the default is the co-located homeserver address. On a host
+      # without Ollama (honeypot-llm not attached, see the network below)
+      # set OLLAMA_URL= (empty) and the endpoint reports available:false;
+      # for an overlay service name or an HTTPS endpoint set OLLAMA_URL and
+      # list its host in OLLAMA_ALLOWED_HOSTS. Plain `-` (not `:-`) so an
+      # explicitly empty value is honoured.
+      - OLLAMA_URL=${OLLAMA_URL-http://ollama:11434}
+      - OLLAMA_ALLOWED_HOSTS=${OLLAMA_ALLOWED_HOSTS:-}
       # #2292: /api/v1/vault-rag's generation model and per-request
       # keep_alive. Same keys llm-worker already uses
       # (llm-worker/docker-compose.yml, llm-worker/.env.example), so the
@@ -148,6 +159,9 @@ services:
       - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
       - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
       - CANARYTOKENS_API_URL=${CANARYTOKENS_API_URL:-}
+      # The minted token calls this adapter when fired. Override per host
+      # when the backend API moves to precision (#3576).
+      - CANARYTOKENS_ADAPTER_WEBHOOK_URL=${CANARYTOKENS_ADAPTER_WEBHOOK_URL:-http://canarytokens-adapter.internal:8090/}
       # #1612 misc write paths: honeyfs-implant credential provisioning/
       # rotation. Same reachability posture as CANARYTOKENS_API_URL above --
       # a plain HTTP URL over the WireGuard tunnel, off unless configured,
@@ -198,7 +212,11 @@ services:
       # not backend-service-mounted -- a first attempt wired this onto the
       # wrong service in honeypot-dashboard/compose.yml and it silently
       # read empty (reported "disabled" instead of failing loudly).
-      - FILEBEAT_URL=${FILEBEAT_URL:-http://filebeat:5066}
+      # #3576: default is the homeserver's co-located Filebeat. On a backend
+      # host without Filebeat set FILEBEAT_URL= (empty): source-health then
+      # reports the pipeline card as "disabled" and no ingestion alert is
+      # raised. `-` (not `:-`) so an explicitly empty value is honoured.
+      - FILEBEAT_URL=${FILEBEAT_URL-http://filebeat:5066}
       # #1972 durable per-request app log: obs.rs writes one JSONL line per
       # served request here, onto the filebeat-tailed logs root, so an API
       # incident can be reconstructed from Elasticsearch after the container
@@ -206,7 +224,10 @@ services:
       # opened per write and never held open, so a plain rename rotation
       # works without any signal dance (next append recreates the path).
       # Provisioned (mkdir + chown 65534) by honeypot-init's log-init step.
-      - DASHBOARD_LOG_FILE=${DASHBOARD_LOG_FILE:-/logs/dashboard-backend/app.jsonl}
+      # DASHBOARD_LOG_FILE= (empty) disables the writer (obs.rs) for a host
+      # with no filebeat-tailed logs root; the mounted directory is then
+      # merely created empty.
+      - DASHBOARD_LOG_FILE=${DASHBOARD_LOG_FILE-/logs/dashboard-backend/app.jsonl}
       - TZ=Europe/Berlin
     volumes:
       - dashboard-state:/state
@@ -241,6 +262,17 @@ networks:
   honeynet:
     name: honeynet
     driver: bridge
+  # #3576: this declaration stays required, deliberately. Compose cannot
+  # attach an external network conditionally without profiles (retired,
+  # #1655) or a second compose file the single-file Arcane sync would not
+  # load, so `external: true` makes `up` fail on a host where the network
+  # does not exist. A backend host without Ollama creates an empty
+  # placeholder once (`docker network create --internal honeypot-llm`) and
+  # sets OLLAMA_URL= (empty); /api/v1/llm-search and /api/v1/vault-rag then
+  # answer available:false/503 instead of the stack failing to start.
+  # When the backend moves behind a Swarm overlay, Ollama is reached by its
+  # service name instead (OLLAMA_URL + OLLAMA_ALLOWED_HOSTS).
+  #
   # #2329: shared with analysis/ghidra/docker-compose.ghidra.yml, which owns
   # this network (internal: true there -- no internet egress for the LLM
   # containers on it) and gives its ollama service the `ollama` alias

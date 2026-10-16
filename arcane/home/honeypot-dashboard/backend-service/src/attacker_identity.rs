@@ -48,7 +48,6 @@ const CANDIDATE_TERMS_CHUNK: usize = 4_096;
 /// Pages of `CANDIDATE_PAGE_SIZE` per terms chunk.
 const CANDIDATE_PAGE_SIZE: u64 = 10_000;
 const CANDIDATE_MAX_PAGES: u32 = 10;
-const TUNNEL_PEER_IP: &str = "10.8.0.1";
 const MERGE_THRESHOLD: usize = 2;
 const EVENT_PAGE_SIZE: u64 = 10_000;
 const EVENT_MAX_PAGES: u32 = 50;
@@ -195,7 +194,7 @@ async fn fetch_recent_events(
     for hit in hits {
         let src = &hit["_source"];
         let ip = src["source"]["ip"].as_str().unwrap_or("").to_string();
-        if ip.is_empty() || ip == TUNNEL_PEER_IP {
+        if ip.is_empty() || ip == crate::fleet::tunnel_peer_ip() {
             continue;
         }
         let when = src["@timestamp"]

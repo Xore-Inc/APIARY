@@ -59,6 +59,7 @@ below cross-checks the reader against it on the real files.
 """
 import ipaddress
 import pathlib
+import re
 import urllib.parse
 
 import pytest
@@ -372,11 +373,20 @@ def test_reader_agrees_with_pyyaml_on_the_real_files(path):
         assert _environment(_service(parsed, name)) == _environment(service), name
 
 
+def _rendered_ollama_url(backend) -> str:
+    """The OLLAMA_URL a default deploy gets: compose interpolation
+    `${OLLAMA_URL-default}` / `${OLLAMA_URL:-default}` evaluated with the
+    variable unset (#3576 made the value operator-overridable)."""
+    raw = _environment(_service(backend, "backend-service")).get("OLLAMA_URL", "")
+    match = re.fullmatch(r"\$\{OLLAMA_URL:?-(.*)\}", raw)
+    return match.group(1) if match else raw
+
+
 # ---------------------------------------------------------------------
 # Part 1: OLLAMA_URL on backend-service
 # ---------------------------------------------------------------------
 def test_backend_service_sets_an_ollama_url_the_endpoint_accepts(backend):
-    raw = _environment(_service(backend, "backend-service")).get("OLLAMA_URL", "")
+    raw = _rendered_ollama_url(backend)
     assert raw, (
         "backend-service must set OLLAMA_URL -- unset is the pre-#2329 state, "
         "where ollama_url() returns None and /api/v1/llm-search permanently "
@@ -395,7 +405,7 @@ def test_ollama_url_host_is_the_cross_network_alias_not_loopback(backend):
     hardening gate and then resolve to backend-service's own container.
     Ollama's published port is loopback-bound on the *host*, so such a
     value would be accepted and still never reach it."""
-    raw = _environment(_service(backend, "backend-service")).get("OLLAMA_URL", "")
+    raw = _rendered_ollama_url(backend)
     host = (urllib.parse.urlsplit(raw).hostname or "").lower()
     assert host == OLLAMA_ALIAS, (
         f"OLLAMA_URL host must be {OLLAMA_ALIAS!r} -- the alias published on "
@@ -496,7 +506,7 @@ def test_ghidra_compose_still_publishes_the_ollama_alias_and_port(backend):
         f"{LLM_NETWORK} (found {aliases[LLM_NETWORK]}) -- it is the exact host "
         "ollama_url() allowlists"
     )
-    raw = _environment(_service(backend, "backend-service")).get("OLLAMA_URL", "")
+    raw = _rendered_ollama_url(backend)
     port = urllib.parse.urlsplit(raw).port
     assert str(port) in container_ports, (
         f"OLLAMA_URL port {port} is not a container port ollama listens on "

@@ -57,6 +57,7 @@ pub mod event_page;
 pub mod es_importer;
 pub mod events;
 pub mod facets;
+pub mod fleet;
 pub mod exports;
 pub mod fusion;
 pub mod ghidra_submit;

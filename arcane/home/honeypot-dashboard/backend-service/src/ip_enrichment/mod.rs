@@ -35,7 +35,7 @@ use pending::{EnrichFn, PendingQueue};
 use rotate::OutputWriter;
 use sensors::{
     enrich_beelzebub_line, enrich_dionaea_incident_line, enrich_galah_line, enrich_hellpot_line, enrich_line,
-    enrich_sentrypeer_line, TUNNEL_PEER_IP,
+    enrich_sentrypeer_line,
 };
 use viamap::{ViaMap, ViaMapBuilder};
 
@@ -257,8 +257,8 @@ fn process_source_tick(
     // reported no join statistics at all while it was in fact resolving
     // every line. A metric that stays silent looks exactly like a metric
     // with nothing to report.
-    let tunnel_peer_marker = format!("\"src_ip\":\"{TUNNEL_PEER_IP}\"");
-    let tunnel_peer_addr_marker = format!("\"REMOTE_ADDR\":\"{TUNNEL_PEER_IP}:");
+    let tunnel_peer_marker = format!("\"src_ip\":\"{}\"", crate::fleet::tunnel_peer_ip());
+    let tunnel_peer_addr_marker = format!("\"REMOTE_ADDR\":\"{}:", crate::fleet::tunnel_peer_ip());
     let mut ready = Vec::new();
     // Byte position of the line being processed, for poison attribution:
     // lines were read from `offset`, so numbering within the batch pins the

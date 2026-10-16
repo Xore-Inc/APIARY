@@ -168,12 +168,24 @@ def keep_alive_seconds(value: str) -> int:
     return seconds
 
 
+def ollama_service_names() -> set[str]:
+    """Hosts accepted for OLLAMA_URL: `ollama` plus the operator's explicit
+    OLLAMA_ALLOWED_HOSTS list (a Swarm service name or remote HTTPS host).
+    Mirrors backend-service's llm_search.rs::ollama_url() (#3576)."""
+    extra = {
+        entry.strip().strip("[]").lower().rstrip(".")
+        for entry in os.getenv("OLLAMA_ALLOWED_HOSTS", "").split(",")
+    }
+    return {"ollama"} | {entry for entry in extra if entry}
+
+
 def endpoint_is_local(url: str, service_names: set[str]) -> bool:
-    """Reject credentials, redirects-to-be-followed, and non-local endpoints."""
+    """Reject credentials, redirects-to-be-followed, and endpoints that are
+    neither local nor explicitly named in `service_names`."""
     try:
         parsed = urlsplit(url)
         if (
-            parsed.scheme != "http"
+            parsed.scheme not in {"http", "https"}
             or parsed.username
             or parsed.password
             or parsed.query
@@ -320,8 +332,8 @@ class Config:
             raise ValueError("non-dry-run mode requires at least one explicitly enabled job type")
         if not endpoint_is_local(self.es_host, {"elasticsearch"}):
             raise ValueError("ES_HOST must be an uncredentialed local/internal HTTP endpoint")
-        if not endpoint_is_local(self.ollama_url, {"ollama"}):
-            raise ValueError("OLLAMA_URL must be an uncredentialed local/internal HTTP endpoint")
+        if not endpoint_is_local(self.ollama_url, ollama_service_names()):
+            raise ValueError("OLLAMA_URL must be an uncredentialed local/internal or OLLAMA_ALLOWED_HOSTS endpoint")
         if not self.expected_model_digest:
             raise ValueError("captured-data mode requires LLM_EXPECTED_MODEL_DIGEST")
 
@@ -333,8 +345,8 @@ class Config:
             raise ValueError("synthetic canary requires LLM_ALLOW_CAPTURED_DATA=false")
         if self.session_enabled or self.payload_enabled or self.daily_report_enabled:
             raise ValueError("synthetic canary requires every captured-data job flag to remain false")
-        if not endpoint_is_local(self.ollama_url, {"ollama"}):
-            raise ValueError("OLLAMA_URL must be an uncredentialed local/internal HTTP endpoint")
+        if not endpoint_is_local(self.ollama_url, ollama_service_names()):
+            raise ValueError("OLLAMA_URL must be an uncredentialed local/internal or OLLAMA_ALLOWED_HOSTS endpoint")
         if not self.expected_model_digest:
             raise ValueError("synthetic canary requires LLM_EXPECTED_MODEL_DIGEST")
 
@@ -359,7 +371,7 @@ class ModelResponseError(RuntimeError):
 
 class OllamaClient:
     def __init__(self, config: Config):
-        if not endpoint_is_local(config.ollama_url, {"ollama"}):
+        if not endpoint_is_local(config.ollama_url, ollama_service_names()):
             raise ValueError("refusing non-local Ollama endpoint")
         self.base_url = config.ollama_url
         self.model = config.model

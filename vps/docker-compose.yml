@@ -766,7 +766,7 @@ services:
     image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
     container_name: socat-hp-dashboard
     restart: unless-stopped
-    command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:10.8.0.2:19090
+    command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:${DASHBOARD_LEGACY_HOST:-10.8.0.2}:${DASHBOARD_LEGACY_PORT:-19090}
     networks: [oidc-dashboard]
 
   # Staging bridge, side by side with socat-hp-dashboard above (left
@@ -779,7 +779,7 @@ services:
     image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
     container_name: socat-hp-dashboard-next
     restart: unless-stopped
-    command: TCP4-LISTEN:8092,fork,reuseaddr TCP4:10.8.0.2:19092
+    command: TCP4-LISTEN:8092,fork,reuseaddr TCP4:${DASHBOARD_CANDIDATE_HOST:-10.8.0.2}:${DASHBOARD_CANDIDATE_PORT:-19092}
     networks: [oidc-dashboard]
 
   # Bridges the homeserver's Keycloak (Dockge-managed honeypot-keycloak
