@@ -130,6 +130,13 @@ pub struct AppState {
     pub observability: Arc<obs::Obs>,
 }
 
+/// The version of the `/api/v1` HTTP contract. Bump it on a breaking change
+/// (a removed or renamed route, field or parameter, or a changed meaning);
+/// additive changes keep it. Published on `/livez`, `/healthz` and as
+/// `info.x-api-version` in `openapi.json`; the dashboard's supported set
+/// lives in its `src/server/backendContract.ts`.
+pub const API_VERSION: u32 = 1;
+
 /// /livez — the process is up and its HTTP stack is answering. Says nothing
 /// about Elasticsearch, and must never ask it.
 ///
@@ -143,6 +150,11 @@ pub struct AppState {
 #[derive(Serialize)]
 struct Liveness {
     live: bool,
+    /// The version of the HTTP contract this binary serves (`API_VERSION`).
+    /// Unlike `revision` it says what a caller may rely on, so an
+    /// independently released dashboard can refuse a backend whose contract
+    /// it does not speak. Dependency-free like the rest of this probe.
+    api_version: u32,
     /// build.rs's compile stamp, so a probe can answer "is the running
     /// binary newer than the merge" without a second round trip. Same
     /// field main logs at boot.
@@ -282,7 +294,7 @@ fn readiness_verdict(
 /// GET /livez, and GET /healthz — the same handler under two names. See
 /// `Liveness` for why the response carries no Elasticsearch signal.
 async fn livez() -> Json<Liveness> {
-    Json(Liveness { live: true, built: build_stamp(), revision: git_revision() })
+    Json(Liveness { live: true, api_version: API_VERSION, built: build_stamp(), revision: git_revision() })
 }
 
 #[utoipa::path(
