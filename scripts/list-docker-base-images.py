@@ -193,10 +193,19 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "from 147"
     ),
     "rust:1-slim-bookworm": (
-        "sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e",
+        "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
         "build stage only -- backend-service names it `AS build` and ships a "
-        "debian:bookworm-slim final image; measured 1 fixable CRITICAL/HIGH "
-        "after the pin moved to the tag's current digest, down from 74"
+        "debian:bookworm-slim final image. Re-pinned to the tag's current "
+        "digest (#3667): the pcre2 finding is gone, and 7 fixable findings "
+        "remain, all in the perl packages (perl-base, perl, perl-modules-5.36, "
+        "libperl5.36) at 5.36.0-7+deb12u4. Debian has fixed these in its "
+        "archive, but no bookworm image tag carries the fix yet. perl-base is "
+        "an essential package the base image cannot drop. None of the "
+        "flagged code runs in the shipped image: it is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which only run when a "
+        "perl script loads them, and the backend-service final stage runs only "
+        "its own Rust binary. Retires itself when a bookworm rebuild lands "
+        "deb12u4 and the pin moves."
     ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
@@ -226,21 +235,29 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # instead and no entry was written -- see the entries' "moved to"
     # comments in REPORT.md.
     "debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
-        "measured 1 fixable CRITICAL/HIGH (CVE-2026-103111 libpcre2-8-0), and "
-        "every point release of this tag measures the same 1: bookworm-slim, "
-        "bookworm-20260918-slim, 13.7-slim and trixie-slim were each scanned, "
-        "and trixie is worse at 5 (it trades this one for openssl 3.5.7 and "
-        "libssl3t64). Bookworm is what the tree targets -- the exemption "
-        "would have to become a distro migration, not a pin bump. Retires "
-        "itself when a bookworm rebuild lands the pcre2 fix."
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
+        "re-pinned from 3783cc01 to the tag's current digest (#3667). The "
+        "pcre2 finding (CVE-2026-103111) is gone, but 7 fixable CRITICAL/HIGH "
+        "remain, all in perl (perl-base, perl-modules-5.36, libperl5.36) at "
+        "5.36.0-7+deb12u4: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 "
+        "(CRITICAL), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, "
+        "CVE-2026-57433 (HIGH). Debian has fixed them in its archive, but no "
+        "bookworm tag carries the fix yet (bookworm-slim and "
+        "bookworm-20261005-slim share this digest). perl-base is Essential, so "
+        "the base cannot drop it. The flagged code is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which run only when a "
+        "perl script loads them; none of the images that use this base "
+        "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
+        "attacker-controlled input. Retires itself when a bookworm rebuild "
+        "lands deb12u4 and the pin moves."
     ),
     "docker.io/library/debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
         "same artifact as the debian:bookworm-slim entry above, reached "
         "through a `docker.io/library/`-qualified FROM; the two keys are "
         "kept separate because main() emits them as two distinct references "
-        "and the matching rule is exact. Same measurement, same 1."
+        "and the matching rule is exact. Same measurement: 7 perl findings, "
+        "no pcre2."
     ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
