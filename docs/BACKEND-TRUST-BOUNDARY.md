@@ -148,6 +148,76 @@ Rollback, in this order:
   backend in `log` or `off`, then roll back the dashboard. Doing it the other
   way round turns every mutation into a 401 in between.
 
+## Workbench ownership migration (display names to usernames)
+
+Until the dashboard signs (Xore-Inc/apiary-dashboard#249), `owner` in
+`dashboard-workbench-runs-v1` and `dashboard-workbench-recipes-v1` is what
+the BFF sent as `x-actor-username`: the operator's **display name**. The
+signing dashboard sends the OIDC **username** in both the plain header and the
+assertion's `username` claim (Xore's decision on #249: stable and unique,
+where a display name is neither), and the backend scopes by it. A document
+still owned by a display name is invisible to its operator from then on.
+
+`scripts/workbench-owner-migration.py` rewrites `owner` in both indices. It
+changes nothing else: run ids (which hash the old owner) and recipe ids stay,
+so links and children keep working; a new submission of an identical payload by
+the same operator makes a fresh run instead of reusing the migrated one.
+
+**When.** After the signing dashboard is live (rollout step 3), and before the
+flip to `enforce` (step 5). Not before step 3: until then the dashboard still
+sends display names. The signing dashboard sends the username in the plain
+header too (a different value would make `log` mode warn on every request, and
+step 4 needs the log silent), so operators stop seeing their old runs and
+recipes as soon as it deploys, in `off` and `log` mode alike, until the
+migration has run. Run it right after that deploy.
+
+**The mapping** is supplied, never guessed. From Keycloak, with the
+already-authenticated `kcadm` of `docs/KEYCLOAK-OPERATIONS.md` (read-only; the
+script itself logs in to nothing):
+
+```bash
+sudo docker exec hp-keycloak /opt/keycloak/bin/kcadm.sh get users -r apiary \
+  --fields username,firstName,lastName -q max=1000 --config /tmp/kcadm.config > users.json
+```
+
+or a file of `display name<TAB>username` lines / a JSON object. Keep the file
+out of git. The display name is first plus last name, as Keycloak's `name`
+claim is; add a `--mapping` file for names that came from elsewhere.
+
+**Run** from a throwaway container on the honeynet network (Elasticsearch
+publishes no port):
+
+```bash
+docker run --rm --network honeynet -v "$PWD/scripts:/s:ro" -v "$PWD/map:/m:ro" \
+  python:3-alpine python /s/workbench-owner-migration.py --keycloak-users /m/users.json          # dry run
+docker run ... python /s/workbench-owner-migration.py --keycloak-users /m/users.json --apply
+```
+
+The dry run is the default and prints, per index, what would move and what is
+skipped. Read it before applying. Skipped, and never rewritten:
+
+- **ambiguous**: two users share the display name;
+- **collision**: the display name is also another user's username, so the
+  documents may already be theirs;
+- **unmapped**: an owner in the index that names nobody in the mapping.
+
+Resolve these by hand (add a mapping line once you know whose they are) and
+re-run. Re-running is safe: a second run changes nothing.
+
+**Write path.** One `_update_by_query` per name and index with
+`pipeline=_none`, because an index's `default_pipeline` re-runs on
+`_update_by_query`. Neither index has one (no `index.default_pipeline` in
+`elasticsearch-setup.sh`); the script checks anyway, bypasses a default
+pipeline, and refuses `--apply` on an index with a `final_pipeline`, which
+cannot be bypassed.
+
+**Roll back** (the dashboard goes back to display names, or the migration was
+wrong): run the same command with `--reverse` and the same mapping, which moves
+usernames back to display names for the unambiguous pairs. If the dashboard is
+being rolled back to a non-signing build, put the backend in `log` or `off`
+first (see above), then `--reverse`. Documents created after the flip under a
+username are moved too, which is what the rolled-back dashboard expects.
+
 ## Health and metrics exposure
 
 `/healthz`, `/livez`, `/readyz` and `/metrics` stay unauthenticated on the
