@@ -129,7 +129,7 @@ step_wireguard_config
         conf = (self.wg / "wg0.conf").read_text()
         self.assertIn("Address = 10.8.0.1/24\n", conf)
         self.assertIn("ListenPort = 51820\n", conf)
-        self.assertIn("MTU = 1280\n", conf)
+        self.assertIn("MTU = 1420\n", conf)
         peers = parse_peers(conf)
         self.assertEqual({p["AllowedIPs"]: p["PublicKey"] for p in peers},
                          {"10.8.0.2/32": HOME_PUB, "10.8.0.3/32": PREC_PUB})

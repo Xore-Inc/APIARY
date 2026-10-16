@@ -24,7 +24,8 @@ const CAMPAIGNS_INDEX: &str = "campaigns-v1";
 const CLUSTERS_INDEX: &str = "attacker-clusters-v1";
 pub(crate) const HONEYPOT_INDEX_PATTERN: &str = "honeypot-v2-*";
 const SURICATA_ALERT_INDEX_PATTERN: &str = "suricata-v2-alert-*";
-const TUNNEL_PEER_IP: &str = "10.8.0.1";
+#[cfg(test)]
+const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 const ALERT_BUCKET_CAP: u64 = 10_000;
 
 fn env_duration(name: &str, default: Duration) -> Duration {
@@ -420,7 +421,7 @@ async fn fetch_suricata_alert_counts(state: &AppState, since: chrono::DateTime<c
 fn alert_counts_by_cidr(alert_counts: &std::collections::HashMap<String, i64>) -> std::collections::HashMap<String, i64> {
     let mut out = std::collections::HashMap::new();
     for (ip, count) in alert_counts {
-        if ip == TUNNEL_PEER_IP {
+        if ip == crate::fleet::tunnel_peer_ip() {
             continue;
         }
         let Some(cidr) = campaign_cidr(ip) else { continue };

@@ -9,7 +9,7 @@
 //! says otherwise — see the library's `resolve_service_token`.
 
 use apiary_backend::{
-    allow_unauth_dev_from_env, audit, build_stamp, config_history, es, git_revision, obs,
+    allow_unauth_dev_from_env, audit, build_stamp, config_history, es, fleet, git_revision, obs,
     resolve_service_token, worker, AppState,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -22,6 +22,9 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "info,apiary_backend=debug".into()),
         )
         .init();
+
+    // Reject malformed fleet addresses before opening either HTTP listener.
+    let _ = (fleet::tunnel_peer_ip(), fleet::tunnel_sensor_ip());
 
     let es_url = std::env::var("ELASTICSEARCH_URL").unwrap_or_else(|_| "http://127.0.0.1:9200".into());
     let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());

@@ -353,7 +353,7 @@ step_wireguard_config() {
 Address = ${VPS_WG_ADDRESS}/24
 PrivateKey = ${priv}
 ListenPort = 51820
-MTU = 1280
+MTU = 1420
 EOF
   APIARY_WG_DIR=/etc/wireguard sh "$APIARY_HUB_PEER_SH" render \
     "$APIARY_HUB_PEERS" "$home_ip" "${HOME_WG_PUBLIC_KEY:-}" >>"$new" || rc=$?
