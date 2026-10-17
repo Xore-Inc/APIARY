@@ -180,7 +180,8 @@ func TestLoadToken(t *testing.T) {
 		wantErr string
 	}{
 		{"neither set", nil, "", ""},
-		{"blank env counts as unset", map[string]string{"IMPLANT_TOKEN": "  "}, "", ""},
+		{"empty env counts as unset", map[string]string{"IMPLANT_TOKEN": ""}, "", ""},
+		{"env used verbatim, like the client", map[string]string{"IMPLANT_TOKEN": " abc "}, " abc ", ""},
 		{"env only", map[string]string{"IMPLANT_TOKEN": "abc"}, "abc", ""},
 		{"file only, trailing newline", map[string]string{"IMPLANT_TOKEN_FILE": good}, "s3cret", ""},
 		{"both set", map[string]string{"IMPLANT_TOKEN": "abc", "IMPLANT_TOKEN_FILE": good}, "", "both IMPLANT_TOKEN and IMPLANT_TOKEN_FILE are set"},

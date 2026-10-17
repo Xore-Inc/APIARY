@@ -284,14 +284,14 @@ func healthzURL(addr string) string {
 
 // loadToken resolves the bearer token from IMPLANT_TOKEN or from the file
 // IMPLANT_TOKEN_FILE names, mirroring the backend's trust::secret (the
-// client side, #3680). An empty/blank IMPLANT_TOKEN counts as unset (the
-// documented default: neither set means the token check stays off). A file
-// is read once, with surrounding whitespace (echo's trailing newline)
-// trimmed. Setting both, or naming an unreadable or empty file, is an
+// client side, #3680). An empty IMPLANT_TOKEN counts as unset (the
+// documented default: neither set means the token check stays off); a set
+// one is used verbatim, as the client sends it. A file is read once, with
+// surrounding whitespace (echo's trailing newline) trimmed. Setting both, or naming an unreadable or empty file, is an
 // error: main refuses to start rather than serve without the auth the
 // operator configured.
 func loadToken(env func(string) string, read func(string) ([]byte, error)) (string, error) {
-	direct := strings.TrimSpace(env("IMPLANT_TOKEN"))
+	direct := env("IMPLANT_TOKEN")
 	path := strings.TrimSpace(env("IMPLANT_TOKEN_FILE"))
 	switch {
 	case direct != "" && path != "":
