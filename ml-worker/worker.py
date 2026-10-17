@@ -92,6 +92,16 @@ DISPOSITION_FIELDS = ("status", "disposition_reason", "disposition_by", "dispose
 DRIFT_WINDOW       = int(os.getenv("DRIFT_WINDOW", "500"))
 DRIFT_ANOMALY_RATE = float(os.getenv("DRIFT_ANOMALY_RATE", "0.15"))
 
+# #3168: at ~1300 events/min a full DRIFT_WINDOW refills within minutes, so
+# clearing recent_flags on trigger (below) let the same sustained drift
+# re-cross DRIFT_ANOMALY_RATE and re-trigger an "accepted" retrain every
+# couple of poll cycles -- 50+ in an hour on 2026-09-08, polluting
+# ml-anomalies. This does not touch the threshold (the rate really was
+# over it each time) or the window clear (removing that reintroduces the
+# every-cycle refire); it only damps how often a drift trigger is allowed
+# to actually retrain a given model.
+RETRAIN_COOLDOWN_SECONDS = float(os.getenv("RETRAIN_COOLDOWN_SECONDS", "3600"))
+
 # #190: the regular poll path had no cap, unlike the retrain path
 # (MAX_TRAIN_SAMPLES) -- a backlog large enough to need more than one
 # cycle (from downtime, a slow retrain blocking this same loop, or just a
@@ -760,6 +770,17 @@ def drift_rate_if_triggered(recent_flags, window: int, rate_threshold: float) ->
     return rate if rate > rate_threshold else None
 
 
+def retrain_cooldown_active(last_accepted: dict, model_name: str, now_ts: float, cooldown_seconds: float) -> bool:
+    """Pure decision function (#3168): true if model_name's last ACCEPTED
+    retrain happened within cooldown_seconds of now_ts. Only meant to gate
+    drift-triggered retrains -- scheduled slots are already >=RETRAIN_SLOTS_UTC
+    apart and deduped by last_fired_slot_id, so callers should not apply this
+    to the scheduled path."""
+    if model_name not in last_accepted:
+        return False
+    return (now_ts - last_accepted[model_name]) < cooldown_seconds
+
+
 def write_drift_metric(es: Elasticsearch, window: int, rate: float) -> None:
     """Evidence for one drift-detection trigger (#65, docs/ml-worker-plan.md
     §11.4). Best-effort, same rationale as write_retrain_metric()."""
@@ -1065,6 +1086,11 @@ def run_worker() -> None:
     last_fired_slot_id = load_last_fired_slot(es)  # #172: persisted, not restart-relative
     recent_flags = deque(maxlen=DRIFT_WINDOW)  # composite >= THRESHOLD, drift detection (#65)
     consecutive_es_failures = {idx: 0 for idx in SOURCE_INDICES}  # #188
+    # #3168: in-memory only, not persisted like last_fired_slot_id -- a
+    # worker restart resets the cooldown clock. Acceptable ceiling: restarts
+    # are rare next to the 1h+ default cooldown, and a full state doc for
+    # this would be over the top for what's a damping guard.
+    last_accepted_retrain: "dict[str, float]" = {}
 
     logger.info(f"Worker ready. Poll={POLL_INTERVAL}s Threshold={THRESHOLD}")
 
@@ -1210,10 +1236,38 @@ def run_worker() -> None:
 
             if len(all_events) > 100:
                 sources, dropped_count = quarantine_retrain_events(es, iso_model, all_events)
-                iso_result = iso_model.retrain(sources, source_index_counts=index_counts)
-                lstm_result = lstm_model.retrain(sources)
-                write_retrain_metric(es, "isolation_forest_hbos", iso_result, dropped_count=dropped_count)
-                write_retrain_metric(es, "lstm_ae", lstm_result, dropped_count=dropped_count)
+                now_ts = time.time()
+                # #3168: cooldown only damps the drift path -- a scheduled
+                # slot still retrains even if a drift window is also over
+                # threshold this cycle, it already has its own >=6h cadence.
+                drift_only = drift_rate is not None and not scheduled_due
+
+                if drift_only and retrain_cooldown_active(
+                    last_accepted_retrain, "isolation_forest_hbos", now_ts, RETRAIN_COOLDOWN_SECONDS
+                ):
+                    logger.info(
+                        "Drift-triggered retrain for isolation_forest_hbos suppressed: "
+                        f"within {RETRAIN_COOLDOWN_SECONDS:.0f}s cooldown of its last accepted retrain"
+                    )
+                else:
+                    iso_result = iso_model.retrain(sources, source_index_counts=index_counts)
+                    write_retrain_metric(es, "isolation_forest_hbos", iso_result, dropped_count=dropped_count)
+                    if iso_result.accepted:
+                        last_accepted_retrain["isolation_forest_hbos"] = now_ts
+
+                if drift_only and retrain_cooldown_active(
+                    last_accepted_retrain, "lstm_ae", now_ts, RETRAIN_COOLDOWN_SECONDS
+                ):
+                    logger.info(
+                        "Drift-triggered retrain for lstm_ae suppressed: "
+                        f"within {RETRAIN_COOLDOWN_SECONDS:.0f}s cooldown of its last accepted retrain"
+                    )
+                else:
+                    lstm_result = lstm_model.retrain(sources)
+                    write_retrain_metric(es, "lstm_ae", lstm_result, dropped_count=dropped_count)
+                    if lstm_result.accepted:
+                        last_accepted_retrain["lstm_ae"] = now_ts
+
                 logger.info(f"Retrain cycle on {len(all_events)} events complete ({dropped_count} dropped)")
 
             if scheduled_due:

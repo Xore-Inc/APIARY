@@ -272,3 +272,43 @@ class TestPersistenceWritesAreBestEffort:
 
         assert worker._persist_best_effort("save_checkpoint(hp)", write, "es", "hp", "ts", []) is True
         assert seen_args == ["es", "hp", "ts", []]
+
+
+class TestRetrainCooldown:
+    """#3168: at ~1300 events/min DRIFT_WINDOW (500) refills within minutes,
+    so clearing recent_flags on a drift trigger let the same sustained
+    drift re-cross DRIFT_ANOMALY_RATE and fire another "accepted" retrain
+    every couple of poll cycles -- 50+ in one hour on 2026-09-08, polluting
+    ml-anomalies. retrain_cooldown_active() is the extracted admission
+    predicate the drift-triggered path gates on; the driving while-loop in
+    run_worker() is untestable in place, same rationale as
+    drift_rate_if_triggered()'s extraction."""
+
+    def test_sustained_drift_yields_one_accepted_retrain_per_cooldown_window(self):
+        cooldown = worker.RETRAIN_COOLDOWN_SECONDS
+        last_accepted = {}
+        model = "isolation_forest_hbos"
+        accepted_at = []
+
+        # Sustained above-threshold drift: a trigger every poll tick for
+        # just over two cooldown windows.
+        tick_s = 0
+        while tick_s <= 2 * cooldown:
+            now_ts = float(tick_s)
+            if not worker.retrain_cooldown_active(last_accepted, model, now_ts, cooldown):
+                accepted_at.append(now_ts)
+                last_accepted[model] = now_ts
+            tick_s += 60
+
+        # Exactly one accepted retrain inside the first cooldown window,
+        # then exactly one more once it elapses -- not one per tick.
+        assert accepted_at == [0.0, cooldown, 2 * cooldown], accepted_at
+
+    def test_still_within_cooldown_stays_suppressed(self):
+        cooldown = worker.RETRAIN_COOLDOWN_SECONDS
+        last_accepted = {"lstm_ae": 1000.0}
+
+        assert worker.retrain_cooldown_active(last_accepted, "lstm_ae", 1000.0 + cooldown - 1, cooldown) is True
+        assert worker.retrain_cooldown_active(last_accepted, "lstm_ae", 1000.0 + cooldown, cooldown) is False
+        # A different, never-retrained model is never suppressed.
+        assert worker.retrain_cooldown_active(last_accepted, "isolation_forest_hbos", 1000.0, cooldown) is False
