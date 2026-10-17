@@ -218,14 +218,18 @@ services:
           memory: 256M
 
 networks:
-  # #269: outbound is allowed by default, matching this repo's previous de
-  # facto behavior (no honeypot's network has ever set internal: true) and
-  # T-Pot's own explicitly-named design choice for the same reason -- Cowrie
+  # #269: outbound is allowed by default on decoy and sensor networks,
+  # matching this repo's previous de facto behavior (no decoy's per-stack
+  # network has ever set internal: true) and T-Pot's own explicitly-named
+  # design choice for the same reason -- Cowrie
   # only captures the attacker's actual malware, not just the download
   # attempt, if its fake shell's wget/curl/tftp can really reach the
   # internet to fetch it. Set COWRIE_AIR_GAPPED=true (.env) for a stricter,
   # fully air-gapped deployment that trades that capability away; see
   # docs/persona-design.md for the full tradeoff.
+  # Scoped deliberately: management-plane networks in other arcane/home stacks
+  # (keycloak-data, oidc-session, honeypot-llm-data) do set internal: true,
+  # because those services want no egress. They are not sensor networks.
   cowrie_net:
     driver: bridge
     internal: ${COWRIE_AIR_GAPPED:-false}

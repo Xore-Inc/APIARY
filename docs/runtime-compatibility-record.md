@@ -43,6 +43,14 @@ homeserver. Hardware UUIDs are intentionally omitted.
 | GPU passthrough | `docker run --rm --network none --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader` | Same RTX 4000/driver/VRAM; image already cached | PASS |
 | Shared network | `docker network inspect honeynet --format 'name={{.Name}} driver={{.Driver}} internal={{.Internal}}'` | `honeynet`, bridge, `internal=false` | PASS with security correction |
 
+**Correction (2026-10-17):** the GPU row above is the 2026-08-01 measurement and
+is kept as recorded. It no longer describes the host. GPU 0 is an NVIDIA RTX 4000
+Ada Generation (20475 MiB, per `docs/gpu-llm-analysis-worker.md`), and a Quadro
+P2200 is passed to the Windows sandbox VM (#1539). `nvidia-smi` reported driver
+615.71.09 on 2026-10-17. `analysis/ghidra/models/approved-models.json` still
+records `approved_host.driver` 595.84 and needs re-recording at the next benchmark
+pin refresh. The "Quadro RTX 4000 / 8192 MiB" figures were corrected in #518.
+
 The host Python is 3.14.4, but it is not a worker dependency. The worker base
 resolved to `python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf`
 and reported Python 3.12.13.

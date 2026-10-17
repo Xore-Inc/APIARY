@@ -115,13 +115,13 @@ that already exists** (home is reachable at `10.8.0.2`,
   **corrected by #3403:** that posture assumed the frontend's unauthenticated
   passthrough, and it stopped being true. The route is now reached as
   `/api/v1/ip-block-export` behind `require_service_token` (#2183), so the
-  puller authenticates with the dashboard's shared service token rather than
-  relying on reachability alone. The data itself (a list of IPs an operator
+  puller authenticates rather than relying on reachability alone. The credential
+  is no longer the service token: see #3578 below. The data itself (a list of IPs an operator
   already chose to block) is still no more sensitive than the maltrail feed it
   sits alongside; what changed is that the *route* is no longer open. Reachable
-  from the VPS at `10.8.0.2:19090` — the `dashboard` service's real published port
-  (`arcane/home/honeypot-dashboard/compose.yml`, `${HP_BIND:-10.8.0.2}:19090:8080`), not an
-  assumed default.
+  from the VPS at `10.8.0.2:19092`, the standalone apiary-dashboard. The sidecar's
+  `MANUAL_BLACKHOLE_URL` is built from `DASHBOARD_CANDIDATE_HOST`/`_PORT` in
+  `vps/docker-compose.yml`, defaulting to `10.8.0.2:19092`.
 - A new sidecar, `vps/portbridge-manual-blackhole-refresh.sh`, is a near-
   verbatim copy of `portbridge-blackhole-refresh.sh` pointed at that URL
   instead of GitHub's maltrail mirror, writing to a second local file
