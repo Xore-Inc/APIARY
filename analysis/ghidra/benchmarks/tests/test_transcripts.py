@@ -109,6 +109,43 @@ class TranscriptWriterTest(unittest.TestCase):
         self.assertEqual(record["response"]["raw"], "I cannot help with that.")
         self.assertFalse(record["response"]["parse_ok"])
 
+    def test_upstream_message_distinguishes_empty_from_missing(self):
+        message = {"role": "assistant", "content": "", "tool_calls": []}
+        with self.writer() as writer:
+            writer.record(
+                slot="coder", case="empty", workflow="coder_generation",
+                model=MODEL, request_body=BODY, reproducibility=Reproducibility(),
+                response={"content": "", "message": message},
+            )
+            writer.record(
+                slot="coder", case="missing", workflow="coder_generation",
+                model=MODEL, request_body=BODY, reproducibility=Reproducibility(),
+                error="TimeoutError: timed out",
+            )
+        records = read_records(writer)
+        self.assertEqual(records[0]["response"]["message"], message)
+        self.assertIsNone(records[1]["response"]["message"])
+
+    def test_tool_turns_are_always_stored(self):
+        tool_turns = [{
+            "tool": "read_file", "arguments": {"path": "src/main.rs"},
+            "status": "ok", "reason": None, "result": "fn main() {}",
+        }]
+        with self.writer() as writer:
+            writer.record(
+                slot="coder", case="with-tools", workflow="coder_generation",
+                model=MODEL, request_body=BODY, reproducibility=Reproducibility(),
+                response={"content": "done", "tool_turns": tool_turns},
+            )
+            writer.record(
+                slot="coder", case="without-tools", workflow="coder_generation",
+                model=MODEL, request_body=BODY, reproducibility=Reproducibility(),
+                response={"content": "done"},
+            )
+        records = read_records(writer)
+        self.assertEqual(records[0]["response"]["tool_turns"], tool_turns)
+        self.assertEqual(records[1]["response"]["tool_turns"], [])
+
     def test_one_line_per_call_and_run_summary_is_hashed(self):
         writer = self.writer()
         for case in ("a", "b", "c"):
@@ -179,6 +216,66 @@ class TranscriptWriterTest(unittest.TestCase):
         run = RunMetadata(benchmark="test", started_at="2026-08-25T12:00:00Z", run_id="abcd")
         self.assertEqual(run.directory_name, "2026-08-25-abcd")
 
+    def test_the_placement_keys_are_emitted_and_default_to_none(self):
+        """Six keys, always present, all null unless something measured them.
+
+        Every replayed and rescored record predates the measurement, and a run
+        whose server log said nothing is in the same position. Those stay null:
+        the shape is fixed so two rows compare, and the values are not invented
+        to fill it.
+        """
+        for field in ("gpu_layers", "layers_total", "vram_mib", "kv_cache_mib",
+                      "n_ctx", "ram_offloaded"):
+            with self.subTest(field=field):
+                self.assertIn(field, Reproducibility().as_dict())
+                self.assertIsNone(Reproducibility().as_dict()[field])
+
+    def test_a_measured_placement_is_carried_through_verbatim(self):
+        measured = {"gpu_layers": 41, "layers_total": 42, "vram_mib": 17880.66,
+                    "kv_cache_mib": 480.00, "n_ctx": 24576, "ram_offloaded": True}
+        stored = Reproducibility(residency=measured).as_dict()
+        for field, value in measured.items():
+            with self.subTest(field=field):
+                self.assertEqual(stored[field], value)
+
+    def test_a_partial_measurement_leaves_the_rest_null(self):
+        """A server that printed only the layer line is a real run state, and
+        the fields it did not print are absent rather than zero."""
+        stored = Reproducibility(
+            residency={"gpu_layers": 33, "layers_total": 33, "ram_offloaded": False}
+        ).as_dict()
+        self.assertEqual(stored["gpu_layers"], 33)
+        self.assertIsNone(stored["vram_mib"])
+        self.assertIsNone(stored["n_ctx"])
+
+    def test_the_requested_context_reaches_the_record(self):
+        """The budgeted window has to survive to the transcript, not stop at the
+        serving record.
+
+        `placement_from()` keeps only the six residency keys, so a
+        `n_ctx_requested` added to the provenance dict is dropped there and a
+        transcript ends up carrying the served window alone -- next to a request
+        body that says something else. Run ...-3aee521a recorded `n_ctx: 98304`
+        against `options.num_ctx: 24576` with nothing stating which was which.
+        """
+        provenance = {
+            "gpu_layers": 33, "layers_total": 33, "vram_mib": 5871.99,
+            "kv_cache_mib": 12256.00, "n_ctx": 98048, "ram_offloaded": False,
+            "n_ctx_requested": 24576,
+        }
+        stored = Reproducibility(
+            residency=Reproducibility.placement_from(provenance),
+            n_ctx_requested=provenance["n_ctx_requested"],
+        ).as_dict()
+        # Both, under names that say which is which.
+        self.assertEqual(stored["n_ctx"], 98048)
+        self.assertEqual(stored["n_ctx_requested"], 24576)
+
+    def test_the_requested_context_is_present_and_null_when_unmeasured(self):
+        """Same rule as every other field: present, never invented."""
+        self.assertIn("n_ctx_requested", Reproducibility().as_dict())
+        self.assertIsNone(Reproducibility().as_dict()["n_ctx_requested"])
+
 
 class SlotRecorderTest(unittest.TestCase):
     def test_no_writer_is_a_silent_no_op(self):
@@ -206,6 +303,82 @@ class SlotRecorderTest(unittest.TestCase):
         self.assertEqual(record["model"], MODEL)
         self.assertEqual(record["reproducibility"]["tier"], "C")
         self.assertEqual(record["reproducibility"]["claim_pool_version"], "pool-v3")
+
+
+class RawCaptureTest(unittest.TestCase):
+    """A tool-calling turn answers in `tool_calls` with an empty `content`.
+
+    The whole path is driven here, chat() down to the JSONL line, so both the
+    derived raw text and the verbatim upstream message remain inspectable.
+    """
+
+    def _chat(self, response):
+        ev = _load_evaluator()
+        ev.request_json = lambda url, body=None, timeout=None: response
+        return ev.chat(
+            "http://x/api/chat", "qwen3:8b", "sys", "prompt", 4096, False,
+            num_predict=1024, case="c", workflow="coder_generation",
+        )
+
+    def test_tool_call_turn_is_stored_not_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = TranscriptWriter(tmp, RunMetadata(benchmark="test"))
+            recorder = SlotRecorder(
+                writer=writer, slot="coder", model=MODEL,
+                reproducibility=Reproducibility(),
+            )
+            ev = _load_evaluator()
+            ev.request_json = lambda url, body=None, timeout=None: {
+                "message": {"content": "", "tool_calls": [
+                    {"function": {"name": "write_file",
+                                  "arguments": '{"path": "main.rs", "content": "fn main(){}"}'}}]},
+                "done_reason": "stop", "prompt_eval_count": 900, "eval_count": 640,
+                "eval_duration": 10_000_000_000,
+            }
+            with tempfile.TemporaryDirectory() as sandbox:
+                import bench_tools as bt
+                bt.set_file_root(Path(sandbox))
+                ev.chat(
+                    "http://x/api/chat", "qwen3:8b", "sys", "prompt", 4096, False,
+                    num_predict=1024, recorder=recorder, case="c",
+                    workflow="coder_generation", tools=list(bt.FILE_TOOLS),
+                )
+                bt.set_file_root(None)
+            writer.close()
+            record = read_records(writer)[0]
+        self.assertEqual(record["outcome"], "ok")
+        self.assertTrue(record["response"]["raw"], "tool-call turn stored an empty raw")
+        self.assertIn("main.rs", record["response"]["raw"])
+        self.assertEqual(record["response"]["message"]["tool_calls"][0]["function"]["name"],
+                         "write_file")
+
+    def test_plain_text_turn_is_unchanged(self):
+        result = self._chat({"message": {"content": "here is the answer"},
+                             "done_reason": "stop", "eval_count": 10})
+        self.assertEqual(result["content"], "here is the answer")
+
+    def test_legacy_record_with_empty_raw_still_loads(self):
+        """Backward compatibility: an old run directory is never rewritten."""
+        line = json.dumps({
+            "schema_version": SCHEMA_VERSION, "response": {
+                "parse_ok": False, "parsed": None, "raw": ""}})
+        parsed = json.loads(line)
+        self.assertEqual(parsed["response"]["raw"], "")
+
+
+def _load_evaluator():
+    """evaluate-models.py is not importable by name (hyphen); load by path."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "evaluate-models.py"
+    spec = importlib.util.spec_from_file_location("bench_evaluator", str(path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load evaluator from {path}")
+    module = importlib.util.module_from_spec(spec)
+    # @dataclass resolves annotations via sys.modules; without this the
+    # decorators blow up on a module that was never registered.
+    sys.modules["bench_evaluator"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

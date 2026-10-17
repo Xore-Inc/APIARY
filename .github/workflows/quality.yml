@@ -1825,6 +1825,13 @@ jobs:
               # injection-resistance point, giving a model that returned nothing
               # a floor of 14/69 -- which is how a thinking model scoring its
               # empty-answer floor read as a fifth of a pass instead of a zero.
+              # #3172: run as a script rather than under pytest, so this row only
+              # sees the classes defined ABOVE its `if __name__` block. That
+              # block sat mid-file and reported 62 of 67 -- the four harmony
+              # tests, which are the only coverage of the #2233 refusal, never
+              # ran here while pytest said everything passed. The block is at the
+              # end of the file now; if you add a class below it, this row stops
+              # running your test and says nothing about it.
               python analysis/ghidra/benchmarks/tests/test_record_baseline.py
               # Session-slot critical gate (#2232). The rubric-vocabulary leg
               # no longer gates: only MITRE correctness, forbidden content,
@@ -1859,6 +1866,70 @@ jobs:
               python analysis/ghidra/benchmarks/tests/test_corpus_eval.py
               python analysis/ghidra/benchmarks/tests/test_run_real_corpus_eval.py
               python analysis/ghidra/benchmarks/tests/test_regenerate_pre_2393.py
+              # #3172: the output-cap change, and the same hand-enumeration
+              # trap as #2980 above -- a new test file is not collected by
+              # anything, so it runs on a developer machine and nowhere else.
+              # Both are stubbed (no model, no GPU, no Ollama): the first pins
+              # that a done_reason=length generation is neither stored as `ok`
+              # nor scored as an answer, the second pins the 940 committed
+              # records still awaiting a reclassification decision.
+              python analysis/ghidra/benchmarks/tests/test_truncation_outcome.py
+              python analysis/ghidra/benchmarks/tests/test_committed_reclassification.py
+              # Same hand-enumeration trap. Reads one committed run directory
+              # off disk and drives write_human_grades_template() through a
+              # temp-dir writer: no model, no GPU, no Ollama. Pins that a live
+              # coder run is labelled `live_model` -- synthetic input, live
+              # answers -- in run.json and in its grade-sheet sidecar, that the
+              # value is one of transcripts.PROVENANCES rather than a private
+              # string, that the recorded transcripts_sha256 still verifies the
+              # untouched transcript, and that `captured` is still refused
+              # inside the repository now that a third member is permitted
+              # there.
+              python analysis/ghidra/benchmarks/tests/test_run_provenance.py
+              # Same hand-enumeration trap, hit again by Q2/Q7: the corpus
+              # scorer is a second producer of model answers and could
+              # disagree with the harness that owns the rules -- it silently
+              # widened a harmony budget instead of refusing it, and a
+              # generation the output cap ended still collected corpus points
+              # and still fed the claim pool. Both are stubbed (no model, no
+              # GPU, no Ollama, no network): the first proves a harmony cell
+              # declaring less than the floor puts no request on the wire and
+              # that the floor has exactly one owner, the second proves a
+              # capped answer publishes no score and no claims while an answer
+              # that stopped on its own terms still does.
+              python analysis/ghidra/benchmarks/tests/test_harmony_budget_guard.py
+              python analysis/ghidra/benchmarks/tests/test_capped_downstream.py
+              # Same hand-enumeration trap, hit again by the #3172 close-out: a
+              # guard that exists in one producer and not its siblings. The four
+              # producers with no harmony adaptation would have accepted a
+              # gpt-oss tag and sent a budget below the floor, publishing the
+              # resulting empty answers as scores; the offline rescorer scored
+              # capped stored answers. Both are stubbed (no model, no GPU, no
+              # Ollama, no network). The first proves every one of those
+              # producers refuses a harmony-served model before a request is
+              # built, through the one shared refusal; the second proves a
+              # stored answer the cap ended -- or that recorded no finish reason
+              # at all -- earns nothing when rescored offline.
+              python analysis/ghidra/benchmarks/tests/test_harmony_producer_refusal.py
+              python analysis/ghidra/benchmarks/tests/test_rescore_cap_propagation.py
+              # Same trap, on the file the refusal above changed: the judge
+              # stability probe's own test file existed and ran only by hand, so
+              # its plan/run_repeats determinism logic had no CI coverage at all.
+              # Stubbed -- claims_mod._post_json is replaced, no network.
+              python analysis/ghidra/benchmarks/tests/test_probe_judge_repeat_stability.py
+              # Same trap, on the shared transport every model call in the
+              # benchmark goes through. request_json() defaulted to a flat
+              # timeout=300, so an 8-token context probe and the coder slot's
+              # 4096-token answer got the same wall clock, and any model below
+              # ~7 tok/s was excluded by the transport rather than by the
+              # benchmark -- a timeout is not a measurement. Stubbed
+              # (urllib.request.urlopen is replaced, no Ollama, no GPU, no
+              # network): it proves the allowance now follows the request's own
+              # output budget, that a short request keeps the old 300s floor so
+              # a dead server still fails fast, and that both ends clamp so no
+              # caller can buy an unbounded wait.
+              python analysis/ghidra/benchmarks/tests/test_request_timeout.py
+              python analysis/ghidra/benchmarks/tests/test_bench_tools.py
               # full_capabilities.py (#800): inventories env vars straight out of
               # the real pipeline source, so its own test runs against the real
               # tree rather than fixtures -- proving that stays true.

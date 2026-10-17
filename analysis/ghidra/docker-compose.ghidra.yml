@@ -120,6 +120,19 @@ services:
       # picks different models per slot again, and there's no latency cost
       # today since there's nothing to evict.
       OLLAMA_MAX_LOADED_MODELS: '1'
+      # Quantize the KV cache. f16 KV is 1.88x the size of q8_0, and it is the
+      # one lever that buys context back without a VRAM decision: llama.cpp
+      # already spills KV to system RAM off the card on its own (measured
+      # 0.97 GB offload at num_ctx 16384), so "offload to RAM" is not an
+      # option -- it is the default. What we can choose is how many bytes each
+      # token of context costs while it is resident.
+      #
+      # The sibling container pentagi-ollama-embedding runs this exact flag on
+      # the same ollama/ollama image, so it is proven on this host. Coder cases
+      # need num_ctx >= 18400 (16000 output + the widest recorded 2117-token
+      # prompt) to stop the window silently truncating the answer, and at f16
+      # that does not fit in 20475 MiB for most of the roster.
+      OLLAMA_KV_CACHE_TYPE: 'q8_0'
       # #568 re-evaluation, live-measured on this box's real RTX 4000 Ada
       # Generation card (20475 MiB) via
       # analysis/ghidra/benchmarks/probe-gpu-capabilities.py's context sweep:
