@@ -41,12 +41,14 @@ what a connection may do.
   Setting both refuses to boot. Values never enter git, issues or PRs.
 
 The export credential is the backend side of the export-only decision in
-Xore-Inc/apiary-dashboard#246. A VPS job that pulls the backend directly over
-the overlay sends `x-export-token: $BLACKHOLE_EXPORT_TOKEN`. The dashboard's
-own export route (#246) checks its own `EXPORT_TOKEN`; use a separate value
-for each so either can be revoked alone. Until #3578/#246 switch the VPS
-script, `vps/portbridge-manual-blackhole-refresh.sh` still sends
-`DASHBOARD_SERVICE_TOKEN` and its sidecar stays disabled.
+Xore-Inc/apiary-dashboard#246. The VPS job sends `X-Export-Token:
+$BLACKHOLE_EXPORT_TOKEN` to the rewrite dashboard's
+`/export/portbridge-manual-blackhole.txt` (#3578), which checks its own
+`EXPORT_TOKEN`; the dashboard no longer accepts `SERVICE_TOKEN` on that route.
+A job that pulled the backend directly over the overlay would send the same
+header to `/api/v1/ip-block-export` with the backend's export token. Use a
+separate value for each so either can be revoked alone. The VPS never holds
+`DASHBOARD_SERVICE_TOKEN`.
 
 ## Actor assertions
 
@@ -297,7 +299,7 @@ Where the values go:
 ### Export token
 
 - **Install:** generate, set `BACKEND_EXPORT_TOKEN` on `backend-service`
-  only, redeploy, then give the same value to the VPS job and re-enable it.
+  only, redeploy, then give the same value to the VPS job (`BLACKHOLE_EXPORT_TOKEN`, if it pulls the backend directly) and re-enable it.
   Check: `GET /api/v1/ip-block-export` with `x-export-token` is 200, and the
   same header on any other route is 403.
 - **Rotate:** as the service token, with `BACKEND_EXPORT_TOKEN_PREVIOUS` and

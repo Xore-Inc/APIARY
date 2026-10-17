@@ -828,6 +828,7 @@
         "composites": {
           "client": {
             "apiary-dashboard": ["access"],
+            "apiary-dashboard-rewrite": ["access"],
             "kibana": ["access"],
             "evebox": ["access"],
             "arkime": ["access"],
@@ -845,6 +846,7 @@
           "client": {
             "realm-management": ["manage-users", "view-users", "query-users"],
             "apiary-dashboard": ["admin"],
+            "apiary-dashboard-rewrite": ["admin"],
             "traefik-dashboard": ["admin"]
           }
         }
@@ -860,6 +862,19 @@
           "composites": {
             "client": {
               "apiary-dashboard": ["access"]
+            }
+          }
+        }
+      ],
+      "apiary-dashboard-rewrite": [
+        {"name": "access"},
+        {
+          "name": "admin",
+          "description": "#3578: same shape as apiary-dashboard's admin (composite of 'access'), for the rewrite dashboard, which reads resource_access.apiary-dashboard-rewrite.roles and treats anyone without 'admin' as a viewer",
+          "composite": true,
+          "composites": {
+            "client": {
+              "apiary-dashboard-rewrite": ["access"]
             }
           }
         }
@@ -883,6 +898,7 @@
       "realmRoles": ["apiary-user"],
       "clientRoles": {
         "apiary-dashboard": ["access"],
+        "apiary-dashboard-rewrite": ["access"],
         "kibana": ["access"],
         "evebox": ["access"],
         "arkime": ["access"],
@@ -895,6 +911,7 @@
       "realmRoles": ["apiary-user", "apiary-admin"],
       "clientRoles": {
         "apiary-dashboard": ["access", "admin"],
+        "apiary-dashboard-rewrite": ["access", "admin"],
         "kibana": ["access"],
         "evebox": ["access"],
         "arkime": ["access"],
@@ -941,6 +958,48 @@
           "consentRequired": false,
           "config": {
             "included.client.audience": "apiary-dashboard",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "apiary-dashboard-rewrite",
+      "name": "APIARY dashboard (rewrite)",
+      "description": "#3578: the rewrite dashboard's own client, with two redirect origins (production and beta). Roles access/admin are mapped as for apiary-dashboard.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://honeypot.example.invalid",
+      "baseUrl": "https://honeypot.example.invalid/",
+      "redirectUris": [
+        "https://honeypot.example.invalid/auth/callback",
+        "https://beta.honeypot.example.invalid/auth/callback"
+      ],
+      "webOrigins": [
+        "https://honeypot.example.invalid"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://honeypot.example.invalid/*##https://beta.honeypot.example.invalid/*"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "dashboard-self-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "apiary-dashboard-rewrite",
             "id.token.claim": "false",
             "access.token.claim": "true"
           }
