@@ -10,6 +10,8 @@ services:
       LISTEN_ADDR: :11434
       MAX_BODY_BYTES: "65536"
       UPSTREAM_TIMEOUT_SECONDS: "90"
+      # #3666: in-flight cap per replica; 2 replicas keep the compose total of 4.
+      MAX_INFLIGHT: "2"
       INJECTION_SHAPES: ""
     networks:
       front:
