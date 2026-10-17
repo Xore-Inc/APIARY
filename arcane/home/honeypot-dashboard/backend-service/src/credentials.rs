@@ -88,7 +88,7 @@ async fn get(state: &AppState, id: &str) -> Option<Value> {
 #[utoipa::path(
     get,
     path = "/api/v1/credentials",
-    summary = "HoneyFS implant credentials, with secrets redacted.",
+    summary = "HoneyFS implant credentials, including their bait passwords (not redacted).",
     responses(
         (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
     ),
