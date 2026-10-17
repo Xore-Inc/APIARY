@@ -26,12 +26,12 @@ x-oidc-gateway: &oidc-gateway
     OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
     # #3120: oauth2-proxy answers its default /ping path unauthenticated,
     # ahead of its own auth handler -- a property of oauth2-proxy, not of
-    # any one Traefik host, so all six gateways sharing this anchor (kibana,
-    # tanner, evebox, arkime, revdeck, traefik) exposed it. Neither
+    # any one Traefik host, so all seven gateways sharing this anchor (kibana,
+    # tanner, evebox, arkime, revdeck, unsloth, traefik) exposed it. Neither
     # healthcheck in this file depends on the default path: Traefik's own
     # liveness check hits the loopback traefik-local entrypoint directly
     # (not through this gateway), and oauth2-proxy's container healthcheck
-    # runs `--version`, not an HTTP call. One line here closes all six at
+    # runs `--version`, not an HTTP call. One line here closes all seven at
     # once instead of a per-host Traefik deny router.
     OAUTH2_PROXY_PING_PATH: /__apiary_ping
     OAUTH2_PROXY_EMAIL_DOMAINS: "*"
@@ -149,6 +149,7 @@ services:
       - oidc-arkime
       - oidc-tanner
       - oidc-revdeck
+      - oidc-unsloth
       - oidc-traefik
       - oidc-dashboard
     # #117: `traefik healthcheck` does a full binary re-exec (new Go runtime
@@ -914,6 +915,37 @@ services:
     labels:
       - autoheal=true
 
+  # #3689: Unsloth Studio (arcane/home/unsloth/compose.yml on the home server,
+  # container hp-unsloth-studio :8000, published on 8899 via UNSLOTH_BIND,
+  # default 10.8.0.2, the WireGuard address). Same gateway pattern as Kibana/TANNER/
+  # Rev·Deck: gated by oidc-unsloth, Keycloak client `unsloth`, role
+  # unsloth:access. The upstream Studio is not deployed at the time of
+  # writing, so every request after login fails upstream until it is.
+  socat-hp-unsloth:
+    image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
+    container_name: socat-hp-unsloth
+    restart: unless-stopped
+    command: TCP4-LISTEN:8899,fork,reuseaddr TCP4:10.8.0.2:8899
+    networks: [oidc-unsloth]
+
+  oidc-unsloth:
+    <<: *oidc-gateway
+    container_name: oidc-unsloth
+    environment:
+      <<: *oidc-gateway-environment
+      OAUTH2_PROXY_CLIENT_ID: unsloth
+      OAUTH2_PROXY_CLIENT_SECRET_FILE: /run/oidc-secrets/client-secret
+      OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/oidc-secrets/cookie-secret
+      OAUTH2_PROXY_REDIRECT_URL: https://unsloth.${OIDC_PUBLIC_DOMAIN:?set OIDC_PUBLIC_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_ALLOWED_ROLES: unsloth:access
+      OAUTH2_PROXY_COOKIE_NAME: __Host-apiary-unsloth
+      OAUTH2_PROXY_UPSTREAMS: http://socat-hp-unsloth:8899
+    volumes:
+      - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/unsloth:/run/oidc-secrets:ro
+    networks: [oidc-unsloth]
+    labels:
+      - autoheal=true
+
   # #1185: Arcane, the homeserver's stack-management UI (Dockge's
   # replacement -- Dockge itself decommissioned, see the commit that
   # removed its socat-hp-dockge/oidc-dockge pair here). Same root-equivalent
@@ -1266,6 +1298,8 @@ networks:
   oidc-tanner:
     driver: bridge
   oidc-revdeck:
+    driver: bridge
+  oidc-unsloth:
     driver: bridge
   oidc-traefik:
     driver: bridge

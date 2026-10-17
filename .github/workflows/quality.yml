@@ -2224,7 +2224,7 @@ jobs:
             run: ./scripts/test-keycloak-realm-import.sh
 
           # #977: proves the isolated oauth2-proxy gateway pattern every
-          # protected app (Kibana/EveBox/Arkime/TANNER/RevDeck/Dockge/Traefik)
+          # protected app (Kibana/EveBox/Arkime/TANNER/RevDeck/Unsloth/Dockge/Traefik)
           # uses against a real disposable Keycloak + real oauth2-proxy --
           # unauthenticated redirect target, forged-callback rejection, role
           # enforcement, upstream network isolation, and gateway-outage

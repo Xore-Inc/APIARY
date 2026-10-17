@@ -78,7 +78,7 @@ Two ways in, chosen per protocol:
 | Auth for UIs | oauth2-proxy forward-auth (6 services), Keycloak-backed | n/a |
 | Dashboard exception | native OIDC (#1026): Traefik passes straight through, PKCE exchange happens homeserver-local | n/a |
 | Attribution | XFF / PROXY-aware sensors see the real IP in-band | PROXY v1 where the sensor supports it; otherwise the via_port join ([PIPELINES.md](PIPELINES.md#1a-write-path-sensor-log--index)) |
-| Sensors served | http-honeypot, snare/tanner, galah (`hub.`), hellpot (catch-all), canarytokens HTTP channel, Keycloak, protected UIs (Kibana/EveBox/Arkime/TANNER/Rev·Deck/Traefik dashboard) | cowrie, dionaea, conpot ×6, dnp3, dicompot, dns, citrix, cisco-asa, rdp, multipot's ports, api-honeypot, endlessh (:202 public — not 2222, the VPS's own sshd), beelzebub, hellpot raw, elasticpot, sentrypeer (:5070), mailoney (:25), galah raw |
+| Sensors served | http-honeypot, snare/tanner, galah (`hub.`), hellpot (catch-all), canarytokens HTTP channel, Keycloak, protected UIs (Kibana/EveBox/Arkime/TANNER/Rev·Deck/Unsloth Studio/Traefik dashboard) | cowrie, dionaea, conpot ×6, dnp3, dicompot, dns, citrix, cisco-asa, rdp, multipot's ports, api-honeypot, endlessh (:202 public — not 2222, the VPS's own sshd), beelzebub, hellpot raw, elasticpot, sentrypeer (:5070), mailoney (:25), galah raw |
 
 Port-selection rules worth keeping: public ports avoid the VPS's own
 sshd (2022≠2222) and Cloudflare's non-standard-port allowlist drives which

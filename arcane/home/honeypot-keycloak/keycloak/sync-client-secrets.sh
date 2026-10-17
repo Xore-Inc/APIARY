@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # sync-client-secrets.sh -- after a fresh `--import-realm` (apiary-realm.json
 # pins no client "secret", so Keycloak generates a new random one for every
-# confidential client on each import), fetches the 6 VPS oauth2-proxy gateway
+# confidential client on each import), fetches the 7 VPS oauth2-proxy gateway
 # clients' fresh secrets from Keycloak on the homeserver and writes them into
 # the matching `vps/secrets/oidc/<client>/client-secret` file on the VPS,
 # then restarts each gateway. Replaces the fully-manual per-client procedure
 # in docs/KEYCLOAK-OPERATIONS.md -- run this instead of copy-pasting kcadm
-# commands six times by hand.
+# commands seven times by hand.
 #
-# The realm has 10 confidential clients total (#2368, #3578); the other 4 are NOT
+# The realm has 11 confidential clients total (#2368, #3578); the other 4 are NOT
 # handled here because none of them sit behind a VPS oauth2-proxy gateway.
 # Each of those has its own idempotent provisioner script and must be run
 # separately, alongside this one, as part of the same clean-rebuild pass --
@@ -60,6 +60,7 @@ declare -A CLIENT_CONTAINERS=(
   [arkime]=oidc-arkime                # Arkime's oauth2-proxy gateway
   [tanner]=oidc-tanner                # TANNER's oauth2-proxy gateway
   [revdeck]=oidc-revdeck              # RevDeck's oauth2-proxy gateway
+  [unsloth]=oidc-unsloth              # Unsloth Studio's oauth2-proxy gateway (#3689)
   [traefik-dashboard]=oidc-traefik    # Traefik dashboard's oauth2-proxy gateway
 )
 CLIENTS=("${!CLIENT_CONTAINERS[@]}")
