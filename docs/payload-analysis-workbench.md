@@ -69,6 +69,8 @@ Parent runs live as documents in `dashboard-workbench-runs-v1`. The idempotency 
 
 Child lifecycle states are `queued`, `claimed`, `running`, `completed`, `skipped`, `failed`, `timed_out`, and `cancelled`. Polling reconciles request markers, existing worker status files, and native result timestamps. One failed child produces a `partial` parent when another child completed, and every completed child links to its native escaped result.
 
+Runs nobody is viewing are reconciled by the `workbench-reconcile` worker loop (#1801), which runs in `backend-worker` on the homeserver (moved out of `backend-service-mounted` in #3685, so the mounted HTTP API can later move off the spool host). It mounts the analyzer spools read-only, never writes or moves markers, and writes only `dashboard-workbench-runs-v1`. Marker removal on cancel stays in the mounted API.
+
 `/payload-workbench/results` is the owner-isolated cross-payload review surface. It reconciles retained runs before rendering, summarizes active/completed/partial/failed states, supports bounded server-side search by hash, recipe, analyzer, or state, and links every child to its canonical native report when one exists. Retry and cancellation remain on the selected payload's workbench page so operational mutations stay contextual.
 
 ```mermaid
