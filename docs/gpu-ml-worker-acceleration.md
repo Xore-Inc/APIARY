@@ -93,11 +93,13 @@ authority in
   `count: 1` reservation picks an arbitrary card, which is the same class of
   bug `count: all` caused. Pin `device_ids` to the Ada's UUID, as
   `analysis/ghidra/docker-compose.ghidra.gpu.yml` already does.
-- Driver **595.84**, per the `approved_host.driver` field in that same
-  `approved-models.json` — the authority this section nominated above. (This
-  document previously said 580.173.02 / CUDA 13.0; that pair is not in the
-  approved-host record. `docs/runtime-compatibility-record.md:39` still carries
-  the same stale host, including the retired Quadro RTX 4000 / 8192 MiB figures
+- Driver: `approved-models.json` records **595.84** as `approved_host.driver`,
+  the authority this section nominated above. The live host has moved past
+  that record: `nvidia-smi` reported **615.71.09** on 2026-10-17, so check
+  `nvidia-smi` rather than trusting either figure, and re-record the approved
+  host when the benchmark pin is next refreshed. (This document previously said
+  580.173.02 / CUDA 13.0; `docs/runtime-compatibility-record.md:39` still carries
+  that stale host, including the retired Quadro RTX 4000 / 8192 MiB figures
   that #602 already corrected.)
 - nvidia-container-toolkit 1.19.1 present; `docker run --rm --gpus all
   nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi -L` succeeds.
