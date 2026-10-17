@@ -833,8 +833,7 @@
             "evebox": ["access"],
             "arkime": ["access"],
             "tanner": ["access"],
-            "revdeck": ["access"],
-            "unsloth": ["access"]
+            "revdeck": ["access"]
           }
         }
       },
@@ -885,7 +884,9 @@
       "arkime": [{"name": "access"}],
       "tanner": [{"name": "access"}],
       "revdeck": [{"name": "access"}],
-      "unsloth": [{"name": "access"}],
+      "unsloth": [
+        {"name": "access", "description": "#3689: granted to the administrators group only, not to apiary-user/users like the read-only viewers -- Unsloth Studio runs training jobs on the homeserver GPU"}
+      ],
       "traefik-dashboard": [
         {"name": "admin", "description": "#1014: distinctly named (not 'access') because this grants root-equivalent control of the homeserver's reverse proxy -- must never be conflated with the ordinary low-privilege 'access' role used by Kibana/EveBox/Arkime/TANNER/RevDeck/Unsloth"}
       ],
@@ -905,8 +906,7 @@
         "evebox": ["access"],
         "arkime": ["access"],
         "tanner": ["access"],
-        "revdeck": ["access"],
-        "unsloth": ["access"]
+        "revdeck": ["access"]
       }
     },
     {
