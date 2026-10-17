@@ -177,6 +177,29 @@ status codes:
    missing file as "no blocklist yet", and the first non-empty export replaces
    the stale one.
 
+### #3578 (2026-10-17): the puller holds an export-only token, not the service token
+
+Correction to point 2 above and to the "no second auth mechanism" line: the
+shared service token reaches the whole backend API, including service actions
+(#3577), so a VPS that holds it can do far more than read a blocklist. The
+decision on apiary-dashboard#246 is a second, narrower credential:
+
+- The rewrite dashboard's `/export/portbridge-manual-blackhole.txt` accepts
+  `X-Export-Token` equal to its `EXPORT_TOKEN` (or a signed-in session) and no
+  longer accepts `SERVICE_TOKEN`. The dashboard refuses to boot if the two are
+  equal. Unset `EXPORT_TOKEN` turns machine access off.
+- The sidecar sends `X-Export-Token: $BLACKHOLE_EXPORT_TOKEN` to that route
+  (host and port from `DASHBOARD_CANDIDATE_HOST`/`_PORT`, default
+  `10.8.0.2:19092`). `DASHBOARD_SERVICE_TOKEN` is gone from the VPS compose
+  file, script and `.env.example`.
+- The failure rules are unchanged: a 401 (wrong or missing token), a 5xx, a
+  login page, an empty body or an unreachable tunnel are each refused with a
+  named `[E-*]` marker and the last good list stays in place.
+- Rollout: deploy the dashboard with `EXPORT_TOKEN`, put the same value in the
+  VPS `.env` as `BLACKHOLE_EXPORT_TOKEN`, then enable the `blackhole` profile
+  service. Verify the export answers 200 with the export token and 401 with
+  the service token.
+
 ## What "first step" deliberately leaves out
 
 - No CIDR blocking, no rate limit on how often an IP can be toggled — neither

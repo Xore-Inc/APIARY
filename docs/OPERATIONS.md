@@ -489,6 +489,27 @@ So the honest summary of what a pause buys you: CPU scheduling, and the
 *appearance* of a dark decoy. On a CPU-starved leg that is real. On a
 RAM-starved leg it is close to nothing.
 
+### Where `autoheal=true` actually does something (#3578)
+
+The label restarts nothing by itself. It is read by an autoheal container
+(`willfarrell/autoheal`) that polls the Docker daemon it is attached to, so it
+only covers containers on that one host:
+
+| Host | Autoheal | State |
+|---|---|---|
+| homeserver | `hp-autoheal`, defined in `arcane/home/honeypot-utilities/compose.yml` | Not running at the 2026-10-10 check: the container was removed, so every `autoheal=true` label on the host was inert (#3585, #3658). Recreate it only after the dionaea health check is fixed, or it will restart dionaea in a loop. |
+| VPS | `autoheal` in `vps/docker-compose.yml`, behind a docker-socket-proxy (#2762) | Part of the VPS compose project. |
+| precision | none | Labels on a service deployed there do nothing until an autoheal or a swarm `restart_policy` exists there (#3583). |
+
+A new label on a host without an autoheal container gives a service that stays
+`unhealthy` forever, so check `docker ps --filter name=autoheal` on that host
+before relying on it. Autoheal also only reacts to the container's own health
+status: a service whose check fails because a remote dependency is down will be
+restarted too, so keep health checks local to the container.
+
+The longer-term plan replaces the label with swarm `restart_policy` once the
+hosts form one swarm (#3587, #3585); until then autoheal is per host.
+
 ### Why `hp-autoheal` is paused first and resumed last
 
 This is the part that will bite you if you improvise. Every decoy on this

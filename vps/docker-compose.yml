@@ -627,15 +627,14 @@ services:
   # same portbridge-blackhole volume as the maltrail refresh -- both write
   # different filenames into the same directory portbridge reads both from.
   #
-  # #3403: MANUAL_BLACKHOLE_URL pointed at /export/portbridge-manual-blackhole
-  # .txt, which the dashboard does not serve. The frontend answers an unknown
-  # path with an auth redirect, so curl -fsSL exited 0 on a 200 whose body was
-  # a login page and this sidecar replaced a working blocklist with nothing
-  # every 300s, with nothing in the log to say so. It now points at the route
-  # that actually serves the export -- backend-service's ip_block::export,
-  # reached through the BFF's /bff/* proxy, the same seam
-  # scripts/github-ci-runner/dashboard-source-health.sh uses to reach the Rust
-  # tier from a shell. That route is auth-gated (#2183), hence the token below.
+  # #3578 / apiary-dashboard#246: this sidecar holds an export-only token
+  # (BLACKHOLE_EXPORT_TOKEN), never the dashboard's SERVICE_TOKEN, which
+  # reaches the whole backend. It fetches the rewrite dashboard's own export
+  # route over the WireGuard tunnel; the host and port follow
+  # DASHBOARD_CANDIDATE_HOST/PORT, the same pair the staging bridge uses. An
+  # auth error or an outage keeps the last good list (see the script header).
+  # Enable only after the dashboard runs with EXPORT_TOKEN and this host's
+  # .env carries the same value.
   portbridge-manual-blackhole-refresh:
     image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-portbridge-manual-blackhole-refresh
@@ -644,20 +643,14 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/portbridge-manual-blackhole-refresh.sh"]
     environment:
       - BLACKHOLE_MANUAL_LIST=/blackhole/manual.txt
-      - MANUAL_BLACKHOLE_URL=http://10.8.0.2:19090/bff/api/v1/ip-block-export
+      - MANUAL_BLACKHOLE_URL=http://${DASHBOARD_CANDIDATE_HOST:-10.8.0.2}:${DASHBOARD_CANDIDATE_PORT:-19092}/export/portbridge-manual-blackhole.txt
       - MANUAL_REFRESH_INTERVAL_SECONDS=300
-      # The dashboard's shared service token, by the name the home stack
-      # already uses for it: arcane/home/honeypot-dashboard/compose.yml maps
-      # the same DASHBOARD_SERVICE_TOKEN to SERVICE_TOKEN for every tier. Set
-      # it in vps/.env (git-ignored, chmod 600) to the identical value; it is
-      # never written to the list file and never printed. Passed with the
-      # same ${VAR:-} the home stack's own compose uses rather than ${VAR:?}:
-      # an unset value must not take down an unrelated compose profile, and
-      # the sidecar's own [E-NO-SERVICE-TOKEN] refusal is the loud signal --
-      # the same split the Rust and BFF tiers draw in #2183. Without it the
-      # request is refused rather than sent, because an unauthenticated one
-      # answers 307 to /auth/login -- the #3403 failure, re-created on purpose.
-      - DASHBOARD_SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
+      # The dashboard's EXPORT_TOKEN. Set it in vps/.env (git-ignored, chmod
+      # 600); it is never written to the list file and never printed. Passed
+      # with ${VAR:-} rather than ${VAR:?}: an unset value must not take down
+      # an unrelated compose profile, and the script's own [E-NO-EXPORT-TOKEN]
+      # refusal is the loud signal.
+      - BLACKHOLE_EXPORT_TOKEN=${BLACKHOLE_EXPORT_TOKEN:-}
     volumes:
       - ./portbridge-manual-blackhole-refresh.sh:/usr/local/bin/portbridge-manual-blackhole-refresh.sh:ro
       - portbridge-blackhole:/blackhole

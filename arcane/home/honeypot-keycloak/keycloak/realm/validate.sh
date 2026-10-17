@@ -28,7 +28,7 @@ jq -e '
   ([.authenticationFlows[] | select(.alias == "Browser - Conditional 2FA") |
     .authenticationExecutions[] | select(.authenticator == "webauthn-authenticator") |
     .requirement] == ["ALTERNATIVE"]) and
-  ([.clients[].clientId] | sort == ["apiary-dashboard", "arcane", "arkime", "auth-events-poller", "evebox", "kibana", "revdeck", "tanner", "traefik-dashboard"]) and
+  ([.clients[].clientId] | sort == ["apiary-dashboard", "apiary-dashboard-rewrite", "arcane", "arkime", "auth-events-poller", "evebox", "kibana", "revdeck", "tanner", "traefik-dashboard"]) and
   (all(.clients[] | select(.clientId != "auth-events-poller");
     .publicClient == false and
     .standardFlowEnabled == true and
@@ -36,11 +36,22 @@ jq -e '
     .directAccessGrantsEnabled == false and
     .serviceAccountsEnabled == false and
     .attributes["pkce.code.challenge.method"] == "S256" and
-    (if .clientId == "apiary-dashboard" then (.redirectUris | length == 2) else (.redirectUris | length == 1) end) and
+    (if (.clientId == "apiary-dashboard" or .clientId == "apiary-dashboard-rewrite") then (.redirectUris | length == 2) else (.redirectUris | length == 1) end) and
     (all(.redirectUris[]; startswith("https://") and (contains("*") | not))) and
     (.webOrigins | length == 1) and
     (all(.webOrigins[]; startswith("https://") and (contains("*") | not)))
   )) and
+  # #3578: the rewrite dashboard client maps the same access/admin roles as
+  # apiary-dashboard: client roles, the realm-role composites that carry them,
+  # and both groups. Without these a fresh realm signs everyone in as a viewer.
+  (.roles.client["apiary-dashboard-rewrite"] | map(.name) | sort == ["access", "admin"]) and
+  (.roles.realm[] | select(.name == "apiary-user") | .composites.client["apiary-dashboard-rewrite"] == ["access"]) and
+  (.roles.realm[] | select(.name == "apiary-admin") | .composites.client["apiary-dashboard-rewrite"] == ["admin"]) and
+  (.groups[] | select(.name == "users") | .clientRoles["apiary-dashboard-rewrite"] == ["access"]) and
+  (.groups[] | select(.name == "administrators") | .clientRoles["apiary-dashboard-rewrite"] == ["access", "admin"]) and
+  (.clients[] | select(.clientId == "apiary-dashboard-rewrite") |
+    (.redirectUris | sort == ["https://beta.honeypot.example.invalid/auth/callback", "https://honeypot.example.invalid/auth/callback"])
+  ) and
   # auth-events-poller (#1066) is deliberately shaped differently -- a
   # machine-only service-account client with no browser flow, so none of
   # the redirect/webOrigin/PKCE assertions above apply to it. Its own
