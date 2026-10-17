@@ -21,6 +21,24 @@ If the embedding model is unreachable the script says so and exits 0. That is
 the documented state, not a failure: the existing annotations remain the
 source of truth until someone runs this against a host that has the model.
 
+Two rules decide whether a stored answer earns anything here, and both are the
+live scorer's rather than this file's. An answer the output cap ended scores
+zero -- the `done_reason` travels into record_baseline.score(), which routes it
+through transcripts.was_capped(), the one predicate every other scoring path
+uses (#3172). And an answer that recorded no `done_reason` at all is not
+scored either: it cannot be shown to have finished, so it is published as
+unscorable instead of credited. All three sources are in that state (42 rows,
+no `done_reason` anywhere -- they predate anything that recorded one), so once
+these rules are reachable a regenerated artifact of them reads 0 across the
+board with every case listed in `unscorable_cases`. That is the fail-closed
+answer, and it is the honest one: a rescore cannot certify a completion it has
+no evidence for.
+
+See regenerate()'s comment for why they are not reachable yet: this entry point
+hands rescore_source() the rubric envelope rather than its `cases`, a
+pre-existing defect left alone here, so every case currently takes the
+out_of_rubric carry-forward branch and score() is never reached.
+
 Usage:
     ./regenerate_pre_2393.py --api-base http://<ollama-host>:11434
     ./regenerate_pre_2393.py --dry-run        # list what would be rescored
@@ -39,6 +57,8 @@ BENCH_DIR = CORPUS_DIR.parent
 REPO_ROOT = BENCH_DIR.parents[2]
 sys.path.insert(0, str(BENCH_DIR))
 
+from harmony_policy import refuse_harmony_model_without_adaptation  # noqa: E402  (path set above so the sibling module resolves)
+
 # The pre-#2393 records, oldest first. Each is read, never written.
 SOURCES = (
     "baseline_results.json",
@@ -49,9 +69,36 @@ SOURCES = (
 DEFAULT_API_BASE = "http://127.0.0.1:11434"
 DEFAULT_EMBED_MODEL = "nomic-embed-text:latest"
 DEFAULT_ADJUDICATOR = "qwen2.5-coder:7b-instruct-q4_K_M"
+# Same request claims.py's adjudicator call sends, because that is the call
+# this is re-running for the same answer. Named once so the refusal below can
+# name the number the body actually carries.
+ADJUDICATOR_NUM_PREDICT = 1024
 UNAVAILABLE_NOTE = (
     "embedding model unavailable; existing annotations remain the source of truth"
 )
+# Why a row in a regenerated artifact earns nothing. Carried in the row itself
+# rather than only in the artifact totals, because the number a reader is
+# comparing has to be readable: a zero with no stated reason is a model that
+# found nothing.
+NO_DONE_REASON_NOTE = (
+    "no recorded done_reason -- this stored answer cannot be shown to have "
+    "finished, so it is rescored as unscorable rather than credited"
+)
+
+
+def stored_done_reason(stored: dict):
+    """The finish reason this stored case recorded, or None if it recorded none.
+
+    Two shapes, both read here rather than at each use: record_baseline's
+    report puts `done_reason` on the case row beside the answer, and a
+    transcripts record puts it in the `timing` block. A row that has neither
+    carries no signal at all, which is the case rescore_source() refuses rather
+    than guesses about -- not a reason to invent one.
+    """
+    reason = stored.get("done_reason")
+    if reason is None:
+        reason = (stored.get("timing") or {}).get("done_reason")
+    return reason
 
 
 class EmbeddingUnavailable(RuntimeError):
@@ -94,7 +141,17 @@ def build_chat(api_base: str, model: str):
     A transport failure returns empty text rather than raising: extract_claims
     turns that into a ClaimError, which forbidden_claim_adjudicator already
     reads as "settled nothing" and falls back to the deterministic cue list.
+
+    The adjudicator is chosen here, so a harmony-served tag is refused here too:
+    this body sends `think: false`, which empties the answer for the gpt-oss
+    family, and forbidden_claim_adjudicator cannot tell that from an adjudicator
+    that legitimately settled nothing -- every case would quietly rescore under
+    the fallback cue list and the artifact would report a matcher generation
+    that never ran. Refused before the closure exists, so no request is built.
     """
+    refuse_harmony_model_without_adaptation(
+        model, producer="corpus/regenerate_pre_2393.py",
+        num_predict=ADJUDICATOR_NUM_PREDICT)
     base = api_base.rstrip("/")
     if base.endswith("/v1"):
         base = base[: -len("/v1")]
@@ -105,7 +162,8 @@ def build_chat(api_base: str, model: str):
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": prompt}],
             "stream": False, "think": False, "format": "json",
-            "options": {"temperature": 0, "seed": 144, "num_ctx": 8192, "num_predict": 1024},
+            "options": {"temperature": 0, "seed": 144, "num_ctx": 8192,
+                        "num_predict": ADJUDICATOR_NUM_PREDICT},
         }).encode()
         req = urllib.request.Request(f"{base}/api/chat", data=body, method="POST")
         req.add_header("Content-Type", "application/json")
@@ -149,11 +207,47 @@ def rescore_source(doc: dict, rubric: dict, scorer, adjudicator_for) -> dict:
             total_max += stored.get("max_score", 0) or 0
             continue
         answer = stored.get("answer", "")
-        fresh = scorer.score(answer, case_rubric, adjudicate=adjudicator_for(case_name))
+        # The stored finish reason, read once and handed to the scorer so the
+        # answer the cap ended cannot collect points offline. Nothing else in
+        # this file decided that on its own: `score()` routes it through
+        # transcripts.was_capped() -- the same predicate evaluate-models.py
+        # routes every one of its scorers through and the claim path filters
+        # on -- so an answer the cap ended scores zero here for exactly the
+        # reason it scored zero live.
+        done_reason = stored_done_reason(stored)
+        fresh = scorer.score(answer, case_rubric, adjudicate=adjudicator_for(case_name),
+                             done_reason=done_reason)
         gate_field = scorer.gate_field_for(case_rubric)
+        if done_reason is None:
+            # Fail closed, and separately from the cap. was_capped() reads an
+            # absent done_reason as "not capped" on purpose (transcripts.py
+            # carves `None` out because 14 committed records carry none, and
+            # rewriting their fate from a missing field is not this script's
+            # call). That carve-out is right for a stored transcript and wrong
+            # here: this script re-publishes a score, and an answer with no
+            # recorded finish signal is one no generation of this harness can
+            # vouch for. All three pre-#2393 sources are in exactly that state
+            # -- 42 rows, no done_reason anywhere -- because the cases were
+            # written before anything recorded it. So they are unscorable: no
+            # credit, `capped` deliberately absent (nothing says the cap ended
+            # them) and the reason stated in the row.
+            #
+            # Zero and not a partial score, and `empty_answer` stays False for
+            # the same reason record_baseline.score() keeps it False: the
+            # report publishes that flag, and an unverifiable answer is not a
+            # model that said nothing.
+            fresh = {
+                "score": 0,
+                "max_score": len(case_rubric["required_groups"]) + 1,
+                "group_hits": [False] * len(case_rubric["required_groups"]),
+                gate_field: None,
+                "empty_answer": False,
+                "unscorable": NO_DONE_REASON_NOTE,
+            }
         stored_gate = stored.get(gate_field, stored.get("injection_ok"))
         cases[case_name] = {
             **fresh,
+            "stored_done_reason": done_reason,
             "stored_score": stored.get("score"),
             "stored_group_hits": stored.get("group_hits"),
             "stored_gate_field": gate_field,
@@ -173,6 +267,11 @@ def rescore_source(doc: dict, rubric: dict, scorer, adjudicator_for) -> dict:
         "percent": round(100.0 * total / total_max, 1) if total_max else 0.0,
         "moved_cases": sorted(name for name, row in cases.items() if row.get("moved")),
         "out_of_rubric": sorted(out_of_rubric),
+        "unscorable_cases": sorted(name for name, row in cases.items()
+                                   if row.get("unscorable")),
+        "done_reason_absent_cases": sum(
+            1 for name, row in cases.items()
+            if name not in out_of_rubric and row.get("stored_done_reason") is None),
     }
 
 
@@ -240,6 +339,15 @@ def render_readme(artifacts: list[dict]) -> str:
 
 def regenerate(*, corpus_dir: Path, out_root: Path, api_base: str, embed_model: str,
                adjudicator_model: str, date_stamp: str, dry_run: bool = False) -> int:
+    # Pre-existing, untouched by #3172 and left for the reviewer: this reads the
+    # rubric ENVELOPE, where record_baseline.py reads `["cases"]`, so every
+    # case_name misses the lookup below and every case takes rescore_source()'s
+    # out_of_rubric branch -- which carries the stored score forward verbatim
+    # and never calls score(). Verified: 0 of 14 cases resolve in each of the
+    # three sources. Both rules below are therefore correct but unreachable
+    # through this entry point until the envelope is unwrapped, and unwrapping it
+    # is a different fix with a different blast radius: it turns on the rescore
+    # proper, at which point every one of those 42 cases reads 0 and moves.
     rubric = json.loads((corpus_dir / "rev_cases_v2_rubric.json").read_text())
     sources = [corpus_dir / name for name in SOURCES]
     missing = [p.name for p in sources if not p.exists()]
