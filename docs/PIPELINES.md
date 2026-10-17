@@ -90,9 +90,11 @@ consume those files, never each other:
 2. **The enrichment worker** rewrites watched sensors' files into
    `logs/enriched/` before Filebeat sees them. That watch list began as
    the five sensor families of #37/#38 (cowrie, dionaea, the conpot
-   personas, dns-honeypot, cisco-asa-honeypot) and has grown to 16 named
+   personas, dns-honeypot, cisco-asa-honeypot) and has grown to 17 named
    sources plus every conpot persona discovered on disk (six live,
-   2026-08-27) — 22 sources in all.
+   2026-08-27) — 23 sources in all. The list is
+   `discover_sources` in
+   `arcane/home/honeypot-dashboard/backend-service/src/ip_enrichment/mod.rs`;
 
 Which sensors the worker watches, and whether their files need rewriting
 at all, follows one question per sensor: **does the sensor see the
@@ -100,8 +102,8 @@ attacker's real IP?**
 
 | Group | Sensors | Why | Fix |
 |---|---|---|---|
-| PROXY-aware | http, api-honeypot, multipot, tanner, dnp3, dicompot, citrix, rdp, endlessh, cisco-asa (WebVPN side), galah (proxied door, XFF), hellpot (proxied door, XFF) | the VPS-side portbridge (`vps/portbridge`) speaks HAProxy PROXY v1, or Traefik sets XFF in-band | none for attribution. Five of them (multipot, tanner, http-honeypot, citrix-honeypot, rdp-honeypot) are watched anyway, solely so canonical-field promotion (#1217) runs on their lines |
-| Tunnel-blind (joined) | cowrie, dionaea + its incident variant (#623), every conpot persona, dns-honeypot, cisco-asa (IKE side), elasticpot, mailoney, hellpot (raw door), beelzebub, sentrypeer, galah (raw door) | raw TCP relay; the log records the WireGuard peer (`10.8.0.1`, the VPS-side tunnel address) | `via_port` join against the portbridge connection log — the generic join for flat `src_ip`/`src_port` shapes (cowrie, dionaea, the conpot personas, dns-honeypot, cisco-asa IKE, elasticpot, mailoney); bespoke join paths for the rest (dionaea-incident's nested rewrite; beelzebub and sentrypeer derive their own address field, then join; hellpot and galah's raw door is joined and adjudicated against their forwarded-header claim) |
+| PROXY-aware | http, api-honeypot, multipot, tanner, dnp3, dicompot, citrix, rdp, endlessh, cisco-asa (WebVPN side), sonicwall-sma, conpot (its TCP personas — every one of the six sets `CONPOT_PROXY_PROTOCOL=1` and portbridge carries the `pp` flag on their TCP rules), galah (proxied door, XFF), hellpot (proxied door, XFF) | the VPS-side portbridge (`vps/portbridge`) speaks HAProxy PROXY v1, or Traefik sets XFF in-band | none for attribution. Six of them (multipot, tanner, http-honeypot, citrix-honeypot, rdp-honeypot, sonicwall-sma-honeypot) are watched anyway, solely so canonical-field promotion (#1217) runs on their lines |
+| Tunnel-blind (joined) | cowrie, dionaea + its incident variant (#623), conpot's UDP personas only (SNMP 161, BACnet 47808, IPMI 623 — PROXY v1 has no UDP form, so those three listeners get no prefix), dns-honeypot, cisco-asa (IKE side), elasticpot, mailoney, hellpot (raw door), beelzebub, sentrypeer, galah (raw door) | raw TCP relay; the log records the WireGuard peer (`10.8.0.1`, the VPS-side tunnel address) | `via_port` join against the portbridge connection log — the generic join for flat `src_ip`/`src_port` shapes (cowrie, dionaea, the conpot personas, dns-honeypot, cisco-asa IKE, elasticpot, mailoney); bespoke join paths for the rest (dionaea-incident's nested rewrite; beelzebub and sentrypeer derive their own address field, then join; hellpot and galah's raw door is joined and adjudicated against their forwarded-header claim) |
 
 The join runs **at ingest time, not read time** (#37/#38): the networkless
 `backend-worker-enrichment` container reads both files off disk and writes
@@ -133,11 +135,19 @@ Order (1:1 with `arcane/home/honeypot-init/analysis/elasticsearch-setup.sh`):
    p0f OS guess. Stripped/empty sources write nothing — no empty-string
    pollution — so ES-side terms aggs reproduce what the dashboard's
    read-time classification produced without the dashboard running.
-3–5. GeoIP on suricata src/dst fields (`ignore_missing` no-ops elsewhere)
-6–9. GeoIP on honeypot/portbridge src fields
-10. Dionaea incident hash extraction (plain scan, no regex)
-11. Network-type classification from ASN org (scanner/cloud/hosting)
-12. Log4Shell deobfuscation flag (bounded depth/length)
+3. Traefik wire-tuple `community_id` (#1765) — hashes the tuple the request
+   was actually accepted on (`ClientAddr` → VPS address/entrypoint port), not
+   the client Traefik resolved after forwarded-header trust, so a Traefik
+   record and huginn's sidecar observation of the same TLS connection share
+   a key
+4. Generic `community_id` (#1742) — derives the key for any record that has a
+   5-tuple but none of its own (Zeek's ~20 protocol logs carry `uid`; only
+   `conn.log` carries `community_id`), seed 0 to match `suricata.yaml`
+5–7. GeoIP on suricata src/dst fields (`ignore_missing` no-ops elsewhere)
+8–11. GeoIP on honeypot/portbridge src fields
+12. Dionaea incident hash extraction (plain scan, no regex)
+13. Network-type classification from ASN org (scanner/cloud/hosting)
+14. Log4Shell deobfuscation flag (bounded depth/length)
 
 No processor makes a network call — GeoIP reads local `.mmdb` files.
 
@@ -170,6 +180,7 @@ flowchart TB
     zpa["zeek-proxy-attribution<br/>every 120s · time-bounded join"]
     alert["alert-notifier<br/>webhook fan-out, cooldown-gated"]
     roll["dashboard-rollups<br/>every ROLLUP_RUN_INTERVAL_SECS (default 300s)"]
+    tint["threat-intel<br/>every 15m · 24h lookback"]
   end
 
   subgraph out["Durable entities"]
@@ -187,6 +198,8 @@ flowchart TB
   raw --> zpa
   atk & cmp & aic --> alert --> st
   raw --> roll --> rll
+  raw --> tint
+  tint -.->|"rewrites source.as.type in place"| raw
 ```
 
 | Loop | Reads | Writes | Cadence | Notes |
@@ -195,9 +208,10 @@ flowchart TB
 | correlator | raw events | `campaigns-v1`, `attacker-clusters-v1` | every cycle | pure aggregations, recomputed from scratch; groups ≥2 IPs sharing fingerprint/hash/ASN/provider-class |
 | agent-intrusion | raw events | `agent-intrusion-campaigns` | 300s | deterministic criticality rules escalate; LLM never gates escalation; deterministic sha256 campaign_id ⇒ upsert not duplicate |
 | zeek-proxy-attribution | zeek flows + portbridge log | flow docs | 120s | attributes relayed flows to attackers; ordering rule above applies here too |
+| threat-intel | raw event indices | `source.as.type` in place | 15m run, 5m CIDR reload, 24h lookback | classifies source IPs against `threat-cidrs.csv`; intel labels win over the ingest pipeline's provider class, reproducing the retired Go dashboard's `firstNonEmpty(e.Intel, e.Provider)` precedence at the data layer |
 | dashboard-rollups (#2046) | raw event indices (default pattern) | `overview-rollup-v1`, `geo-rollup-v1`, `attack-rollup-v1` | `ROLLUP_RUN_INTERVAL_SECS`, default 300s | pure-ES derived overviews the dashboard's overview/map/kill-chain reads slice cheaply instead of re-aggregating raw events per request |
-| ml-worker / llm-worker | payloads + events | anomaly scores + `dashboard-ml-anomaly-ack-v1` | continuous | scoring semantics tracked in #1969/#1974 |
-| payload-inventory | disk stores | `dashboard-payload-inventory-v1/-bytes-v1` | periodic scan | HEAD-exists fast path (#1221) |
+| ml-worker / llm-worker | payloads + events | `ml-anomalies` + `dashboard-ml-anomaly-ack-v1` | continuous | scoring semantics tracked in #1969/#1974 |
+| payload-inventory | disk stores | `dashboard-payload-inventory-v1`, `dashboard-payload-bytes-v1` | periodic scan | HEAD-exists fast path (#1221) |
 | es-results-importer | root-owned result spools | `*-analysis-v1` | continuous | read-only mirror, shard-partitionable |
 | vault-worker (#2290) | `*-analysis-v1`, `llm-analysis` | markdown notes under the knowledge-vault directory (#2289) | `VAULT_POLL_INTERVAL_SECONDS`, default 900s | one note per payload/session entity, sha256-keyed filename ⇒ upsert not duplicate; checkpointed via `knowledge-vault-state-v1`, batch-run so a capture flood can't swamp the vault |
 
@@ -223,7 +237,7 @@ flowchart LR
   store & store2 & store3 --> yara["YARA scanner<br/>networkless · read-only"]
   yara --> yout[("yara-results/results.json")]
 
-  store & store2 & store3 & yout --> inv["inventory worker"] --> ix[("dashboard-payload-inventory-v1<br/>+ -bytes-v1")]
+  store & store2 & store3 & yout --> inv["inventory worker"] --> ix[("dashboard-payload-inventory-v1<br/>dashboard-payload-bytes-v1")]
 
   ix --> wb{"Analyst dispatch:<br/>payload workbench"}
   wb -->|"hash-only .request markers"| spools["analysis spools:<br/>ghidra · linux sandbox · windows sandbox<br/>GHOSTS · revdeck · CAPE"]
@@ -262,16 +276,16 @@ index has exactly one writer):
 | `attackers-v1` | attacker-identity-worker | backend-service (attackers, overview, graphs) |
 | `campaigns-v1`, `attacker-clusters-v1` | correlator-worker | backend-service (clusters, kill-chain, investigate) |
 | `agent-intrusion-campaigns` | backend-service agent_intrusion loop | agent-campaigns page |
-| `ghidra-analysis-v1`, `sandbox-analysis-v1`, `github-analysis-v1`, `cape-analysis-v1`, `revdeck-analysis-v1` | es-results-importer | identity worker, investigate/payload surfaces |
+| `ghidra-analysis-v1`, `sandbox-analysis-v1`, `github-analysis-v1`, `workbench-runs-v1`, `cape-analysis-v1`, `revdeck-analysis-v1` | es-results-importer | identity worker, investigate/payload surfaces |
 | `yara-analysis-v1` | YARA join via inventory | backend-service charts + investigate |
-| `dashboard-payload-inventory-v1`, `-bytes-v1` | payload-inventory-worker | payloads page, charts |
+| `dashboard-payload-inventory-v1`, `dashboard-payload-bytes-v1` | payload-inventory-worker | payloads page, charts |
 | `dashboard-canarytokens-v1` | canarytokens-adapter | canarytokens page + settings pane |
 | `cowrie-ttylog-v1` | Filebeat | tty-replay, recordings |
 | `mailoney-mail-v1` | Filebeat | sessions/mail views |
 | `reporter-metrics-v1` | reporter | settings stats pane |
 | `dashboard-alert-state-v1` | alert-notifier loop | alerts page |
 | `overview-rollup-v1`, `geo-rollup-v1`, `attack-rollup-v1` | dashboard-rollups loop (#2046) | overview/map/kill-chain dashboard reads |
-| anomaly score + ack indices | ml/llm workers | ml-anomalies page, composite score |
+| `ml-anomalies`, `dashboard-ml-anomaly-ack-v1` | ml/llm workers | ml-anomalies page, composite score |
 | `dashboard-users-v1`, `dashboard-workbench-runs-v1`, report/problem-report indices | backend-service itself | their pages |
 
 Retention specifics (ILM, pcap ceilings, snapshots) live in

@@ -56,7 +56,7 @@ flowchart TD
   prompt["System + user prompt<br/>evidence named as data, not instructions"]
   local{"endpoint_is_local()?"}
   refuse["Refused before any request is made<br/>ai_triage left null, reason logged"]
-  call["POST /v1/chat/completions"]
+  request["POST /v1/chat/completions"]
   usage["token usage reported by the server"]
   truncated{"prompt_tokens indicates<br/>the prompt was truncated?"}
   discard["Answer discarded<br/>ai_triage left null, reason logged"]
@@ -69,7 +69,7 @@ flowchart TD
   imports --> budget
   budget --> evidence --> prompt --> local
   local -->|no| refuse
-  local -->|yes| call --> usage --> truncated
+  local -->|yes| request --> usage --> truncated
   truncated -->|yes| discard
   truncated -->|no| parse --> normalise --> result
 ```

@@ -18,17 +18,20 @@ traps hit on the first live run — read it before trusting the script blind,
 and definitely before doing any of this by hand on the VPS side, which the
 script doesn't touch.
 
-Since #258 split the stack into ~19 independent Arcane-managed projects
+Since #258 split the stack into independent Arcane-managed projects
 (`honeypot-init`, `honeypot-conpot`, `honeypot-cowrie`, `honeypot-multipot`,
 `honeypot-http`, `honeypot-dnp3`, `honeypot-dionaea`, `honeypot-dicompot`,
-`honeypot-dns-honeypot`, `honeypot-citrix`, `honeypot-cisco-asa`,
-`honeypot-rdp`, `honeypot-endlessh`,
+`honeypot-dns-honeypot`, `honeypot-citrix-honeypot`, `honeypot-cisco-asa-honeypot`,
+`honeypot-rdp-honeypot`, `honeypot-endlessh`,
 `honeypot-payload-analysis`, `honeypot-tanner`, `honeypot-elk`,
-`honeypot-dashboard`, `honeypot-utilities`, plus the now-empty
+`honeypot-dashboard`, `honeypot-utilities`, plus the then-empty
 `APIARY`), a full reset is no longer "stop the stack, `docker compose
 down -v`, start it again" — it's an ordered sequence across projects with a
-couple of real circular-dependency traps. This doc exists because the first
-live run of this sequence (2026-08-02) hit three of them.
+couple of real circular-dependency traps. That 19-project list was
+accurate for the day; the fleet is now **33 manifest entries under
+`arcane/home/`**, and the two loops below are written against the full
+current set rather than that original nineteen. This doc exists because
+the first live run of this sequence (2026-08-02) hit three of them.
 
 `honeypot-keycloak` (the identity stack, `docs/KEYCLOAK-OPERATIONS.md`)
 is intentionally handled separately below rather than folded into the
@@ -81,7 +84,7 @@ confusing at best.
 ```bash
 ssh vps
 docker stop hp-suricata hp-suricata-rules-refresh hp-suricata-log-maintenance \
-  hp-portbridge hp-portbridge-log-rotate hp-portbridge-log-maintenance \
+  hp-portbridge hp-portbridge-log-maintenance \
   hp-portbridge-blackhole-refresh hp-p0f
 sudo find /opt/stacks/apiary/logs/suricata -mindepth 1 -delete
 sudo find /opt/stacks/apiary/logs/portbridge -mindepth 1 -delete
@@ -91,12 +94,25 @@ sudo find /opt/stacks/apiary/logs/portbridge -mindepth 1 -delete
 
 ```bash
 ssh homeserver
-for s in honeypot-elk honeypot-dashboard honeypot-utilities \
-         honeypot-payload-analysis honeypot-dionaea honeypot-tanner \
-         honeypot-dnp3 honeypot-http honeypot-multipot honeypot-cowrie \
-         honeypot-conpot honeypot-dicompot honeypot-dns-honeypot \
-         honeypot-citrix honeypot-cisco-asa honeypot-rdp \
-         honeypot-endlessh honeypot-init; do
+# Every Arcane-managed stack under arcane/home/ except honeypot-keycloak:
+# 32 of the manifest's 33, derived as
+# `git ls-files arcane/home | cut -d/ -f3 | sort -u` minus
+# honeypot-keycloak (handled separately) and rex86-eval (never a
+# deployment piece). Written out long rather than globbed, so a stack a
+# future manifest entry adds does not get swept up before anyone has
+# decided whether a full reset should stop it.
+for s in honeypot-agent-intrusion-worker honeypot-attacker-identity-worker \
+         honeypot-beelzebub honeypot-canarytokens \
+         honeypot-cisco-asa-honeypot honeypot-citrix-honeypot \
+         honeypot-conpot honeypot-correlator-worker honeypot-cowrie \
+         honeypot-dashboard honeypot-dashboard-backend honeypot-dicompot \
+         honeypot-dionaea honeypot-dnp3 honeypot-dns-honeypot \
+         honeypot-elasticpot honeypot-elk honeypot-endlessh honeypot-galah \
+         honeypot-hellpot honeypot-http honeypot-init honeypot-mailoney \
+         honeypot-multipot honeypot-payload-analysis \
+         honeypot-payload-inventory-worker honeypot-rdp-honeypot \
+         honeypot-sentrypeer honeypot-sonicwall-sma honeypot-tanner \
+         honeypot-utilities unsloth; do
   (cd /opt/stacks/$s && docker compose -f compose.yml down)
 done
 ```
@@ -169,11 +185,18 @@ starts first just creates them empty and the real writer fills them in once
 it's up).
 
 ```bash
-for s in honeypot-conpot honeypot-cowrie honeypot-multipot honeypot-http \
-         honeypot-dnp3 honeypot-dionaea honeypot-tanner \
-         honeypot-dicompot honeypot-dns-honeypot honeypot-citrix \
-         honeypot-cisco-asa honeypot-rdp honeypot-endlessh \
-         honeypot-payload-analysis honeypot-utilities honeypot-dashboard; do
+for s in honeypot-agent-intrusion-worker honeypot-attacker-identity-worker \
+         honeypot-beelzebub honeypot-canarytokens \
+         honeypot-cisco-asa-honeypot honeypot-citrix-honeypot \
+         honeypot-conpot honeypot-correlator-worker honeypot-cowrie \
+         honeypot-dashboard honeypot-dashboard-backend honeypot-dicompot \
+         honeypot-dionaea honeypot-dnp3 honeypot-dns-honeypot \
+         honeypot-elasticpot honeypot-endlessh honeypot-galah \
+         honeypot-hellpot honeypot-http honeypot-mailoney \
+         honeypot-multipot honeypot-payload-analysis \
+         honeypot-payload-inventory-worker honeypot-rdp-honeypot \
+         honeypot-sentrypeer honeypot-sonicwall-sma honeypot-tanner \
+         honeypot-utilities unsloth; do
   (cd /opt/stacks/$s && docker compose -f compose.yml up -d)
 done
 ```
@@ -184,9 +207,20 @@ done
 ssh vps
 cd /root/vps
 docker compose -f docker-compose.yml up -d suricata portbridge p0f \
-  suricata-rules-refresh suricata-log-maintenance portbridge-log-rotate \
+  suricata-rules-refresh suricata-log-maintenance \
   portbridge-log-maintenance portbridge-blackhole-refresh
 ```
+
+There is no `portbridge-log-rotate` service to start or stop. It was removed
+in #1779, and its only job — pruning the renamed `portbridge.json.*` files
+once they age out — is what `portbridge-log-maintenance` does now, per that
+script's own header. A stop or start naming it fails on a container that does
+not exist, which in a reset runbook is a step that silently does nothing.
+
+The list also omits `portbridge-manual-blackhole-refresh` on purpose: it is
+the manual counterpart to the scheduled `portbridge-blackhole-refresh` and
+should not be brought up by a reset. `suricata-update` is covered separately,
+just below.
 
 `suricata` depends on `suricata-update` (`condition: service_completed_successfully`)
 — if `suricata-update`'s container is still sitting there `Exited(0)` from a

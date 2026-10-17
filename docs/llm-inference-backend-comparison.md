@@ -2,6 +2,12 @@
 
 Status: research for [issue #598](https://github.com/Xore/APIARY/issues/598), 2026-08-05.
 
+> **Point-in-time record.** This is a dated decision record, not current
+> inventory. It records what was measured on 2026-08-05. Version pins quoted
+> below have since moved, and at least one symbol it names never existed —
+> see §7 and the `compare_against_approved()` note under "Why this exists".
+> Read it for the reasoning, not as the present state of the fleet.
+
 This is a task-specific decision record, matching
 [`local-llm-model-evaluation.md`](local-llm-model-evaluation.md)'s format for
 the model-selection decision it's paired with. It evaluates the inference
@@ -33,7 +39,11 @@ Test model: `Qwen/Qwen2.5-0.5B-Instruct-GGUF` (Q4_K_M, 630M params) for
 generation tests; `nomic-ai/nomic-embed-text-v1.5-GGUF` (Q4_K_M) for the
 embeddings test. Images: `ghcr.io/ggml-org/llama.cpp:server`/`:full`,
 `ghcr.io/mostlygeek/llama-swap:cpu`, `ollama/ollama:0.32.0` (this repo's own
-pinned version), `vllm/vllm-openai:latest` (v0.26.0).
+pinned version *as of 2026-08-05*; it has since moved to
+`ollama/ollama:0.32.13@sha256:77f1a2a5…` in
+`analysis/ghidra/docker-compose.ghidra.yml:75` and in
+`approved-models.json`'s `ollama_image`),
+`vllm/vllm-openai:latest` (v0.26.0).
 
 ## 1. Structured output enforcement
 
@@ -87,7 +97,7 @@ llama.cpp/vLLM lose on — Ollama's digest happens to be *exactly* what
 equivalent. A migration would replace "query the running server's registry
 digest" with "hash the GGUF file on disk directly" — simpler and arguably
 more auditable (no trust in a registry's own digest computation), but a real
-rewrite of `collect_snapshot()`/`compare_against_approved()`'s identity model,
+rewrite of `collect_snapshot()`/`evaluate_drift()`'s identity model,
 and every recorded `approved-models.json` entry's `ollama_repo_digest`-shaped
 field.
 
@@ -179,7 +189,7 @@ has some of these numbers).
 
 ## 7. Operational surface
 
-| | Ollama 0.32.0 | llama.cpp `:server` | llama-swap `:cpu` | vLLM 0.26.0 |
+| | Ollama 0.32.0 (as tested) | llama.cpp `:server` | llama-swap `:cpu` | vLLM 0.26.0 |
 |---|---:|---:|---:|---:|
 | Image size | 8.06 GB | 1.21 GB | 1.24 GB | 28.1 GB |
 | Runs without a GPU present | Yes (CPU fallback) | Yes (CPU fallback) | Yes | **No — confirmed** |

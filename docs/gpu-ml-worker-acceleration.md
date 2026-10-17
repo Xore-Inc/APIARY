@@ -84,14 +84,19 @@ hypothesis is refuted) and pinned as the runtime-governance authority in
   capability 8.9.** (An earlier draft of this document, before #602,
   mis-recorded this as a Quadro RTX 4000 at compute capability 7.5/Turing —
   that card was never on this host; see #602 for the full correction.)
-- Driver 580.173.02 (CUDA 13.0) — backward-compatible with CUDA 12.x
-  runtime wheels.
+- Driver **595.84**, per the `approved_host.driver` field in that same
+  `approved-models.json` — which is the authority this section just nominated
+  two lines earlier, so quoting anything else here contradicts it directly.
+  (This document previously said 580.173.02 / CUDA 13.0; that pair is not in
+  the approved-host record. `docs/runtime-compatibility-record.md:39` carries the
+  same stale host, including the retired Quadro RTX 4000 / 8192 MiB figures
+  that #602 already corrected on the line above.)
 - nvidia-container-toolkit 1.19.1 present; `docker run --rm --gpus all
   nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi -L` succeeds.
 - Stack network is `honeynet`. The old `ml-worker/docker-compose.override.yml`
   targeted a network, `analysis-net`, that never existed anywhere in this
   repository; that file has been replaced by `ml-worker/docker-compose.yml`
-  (its own Dockge stack), which joins `honeynet` as an external network —
+  (its own standalone stack), which joins `honeynet` as an external network —
   resolved under #61.
 
 **Wheel compatibility rule for Ada (sm_89), compute capability 8.9:**
@@ -114,22 +119,30 @@ All changes are confined to `ml-worker/`.
 
 ### 4.1 `ml-worker/requirements.txt`
 
-Replace the CPU wheel lines:
+Replace the CPU wheel lines. (The `-` side below is the *current* content of
+`ml-worker/requirements.txt` — it has moved on from the 2.13.0/3.6.2 baseline
+this section was drafted against, to `torch==2.14.0+cpu` at line 84 and
+`pyod==3.6.6` at line 89. Re-read the file before applying; a diff whose
+context no longer matches is how a wheel pin gets silently skipped.)
 
 ```diff
--# Deep learning (CPU-only PyTorch)
--torch==2.13.0+cpu
----extra-index-url https://download.pytorch.org/whl/cpu
-+# Deep learning (CUDA PyTorch — see docs/gpu-ml-worker-acceleration.md §3)
+ # Deep learning (CPU-only PyTorch)
+-torch==2.14.0+cpu
 +torch==2.13.0+cu126
-+--extra-index-url https://download.pytorch.org/whl/cu126
+ --extra-index-url https://download.pytorch.org/whl/cpu
 +
 +# Embeddings (§6)
 +sentence-transformers==3.0.1
 
  # Outlier detection (HBOS)
- pyod==3.6.2
+-pyod==3.6.2
++pyod==3.6.6
 ```
+
+Note the `+` side is left at the version #82 verified on this host, not bumped
+to match the 2.14.0 baseline: the cu126 wheel was the one actually installed
+and tensor-checked against this card. Reconciling the two is real work, not a
+doc edit, and belongs with whoever runs the GPU build.
 
 > **Verified pin (2026-08-01, #82):** `torch==2.13.0+cu124` does not exist;
 > that index ends at 2.6.0. `torch==2.13.0+cu126` installed cleanly and passed
@@ -182,25 +195,38 @@ Rules:
 - Training (6 h retrain) uses fp32, batch size 128, and
   `torch.cuda.empty_cache()` after each retrain.
 
-### 4.4 `ml-worker/docker-compose.yml`
+### 4.4 GPU reservation — already scaffolded; do not add it inline
 
-```diff
-   ml-worker:
-     ...
-+    deploy:
-+      resources:
-+        reservations:
-+          devices:
-+            - driver: nvidia
-+              count: 1
-+              capabilities: [gpu]
-     environment:
-       ...
-+      ML_DEVICE: auto            # auto | cpu — 'cpu' forces CPU for debugging
+This step is **already satisfied**, and doing it the way it was originally
+written here would be wrong. The reservation lives in a dedicated overlay,
+`ml-worker/docker-compose.ml-worker.gpu.yml`, applied as:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml-worker.gpu.yml \
+  up -d ml-worker
 ```
 
-Keep the existing `mem_limit: 2g` / `cpus: "2.0"`; GPU memory is governed
-by §5, not by `mem_limit`.
+That file's own header is emphatic about two things this section used to
+contradict: it is an "overlay, never used alone", and it is "inert scaffolding
+right now, not a feature this stack turns on" — because per
+`ml-gpu-coordinated-roadmap.md` §1 decision 4 only LSTM and embeddings may use
+CUDA, and both are still gated behind Milestones D and H. Milestone H's own
+first step requires a measured CPU baseline from #62 *before* touching CUDA.
+
+So: do not add a `deploy.resources.reservations.devices` block to
+`ml-worker/docker-compose.yml`. An inline reservation makes the GPU
+unconditional on every `up`, which is precisely the gate the overlay exists to
+keep shut.
+
+One real discrepancy worth knowing: the overlay says `count: all`, while this
+document's original diff proposed `count: 1`. On this host they are
+equivalent — §3 establishes there is exactly one RTX 4000 Ada and that the
+earlier two-card hypothesis is refuted — but `count: all` is the more
+honest form if the host ever gains a second card, since the sharing contract
+in §5 is written per-card. Resolving it is a decision for whoever lands
+Milestone H, not a doc edit.
+
+`ML_DEVICE: auto | cpu` belongs in the same overlay, not the base file.
 
 ---
 
@@ -230,11 +256,18 @@ the original 6.1 GiB `qwen3.5:9b` estimate):
   enough to treat as a non-issue either. This already assumes the ghidra
   slot's model is resident regardless of any keep-alive window — the 30m
   server-default residency (above) makes that the common case during a
-  drain, not just a worst-case edge. Keep the `RETRAIN_INTERVAL` /
+  drain, not just a worst-case edge. Keep the `RETRAIN_SLOTS_UTC` /
   `DAILY_REPORT_HOUR` scheduling offset (retrain landing at least 1 h away
   from the LLM daily report — e.g. retrain at 01:00/07:00/13:00/19:00 UTC
   against a 06:00 report) as a cheap way to avoid the worst-case overlap in
-  the common case, rather than removing it outright. The CUDA-OOM → CPU
+  the common case, rather than removing it outright. `RETRAIN_INTERVAL` is
+  the *old* name and shape: it was a restart-relative interval, replaced by
+  fixed daily HH:MM UTC slots under #172 so GPU workloads can actually be
+  separated. The live variable is `RETRAIN_SLOTS_UTC`, defaulting to
+  `03:00,09:00,15:00,21:00` (`ml-worker/docker-compose.yml:54`,
+  `worker.py:59`) — note the shipped default is *not* the 01:00/07:00/13:00/
+  19:00 set used as the example above, so the offset is a starting point to
+  adjust, not a description of what runs. The CUDA-OOM → CPU
   fallback below is what actually protects the rare case the schedule
   doesn't catch — treat it as the real safety net, the schedule as
   best-effort headroom management.

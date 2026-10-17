@@ -3,15 +3,18 @@
 Report attacker IPs observed by APIARY to public threat-intel
 blocklists via their APIs.
 
-> **Status:** built. `reporter/` (Go, not the Python layout sketched below --
+> **Status:** built. `arcane/home/honeypot-utilities/reporter/` (Go, not the
+> Python layout sketched below --
 > that part of this plan is superseded) is a real service in
 > `arcane/home/honeypot-utilities/compose.yml`. Phase 1
 > ([#68](https://github.com/Xore/APIARY/issues/68)) and Phase 2
 > ([#69](https://github.com/Xore/APIARY/issues/69)) are both closed.
 > Phase 3-4 (reputation validation, operator observability) is
 > [#153](https://github.com/Xore/APIARY/issues/153), closed and implemented:
-> `reporter/greynoise.go` implements the Phase 3 GreyNoise validation, and
-> `reporter/metrics.go` implements Phase 4's observability counters
+> `arcane/home/honeypot-utilities/reporter/greynoise.go` implements the Phase 3
+> GreyNoise validation, and
+> `arcane/home/honeypot-utilities/reporter/metrics.go` implements Phase 4's
+> observability counters
 > (attempted/suppressed/dryRun/sent/failed) as a JSON snapshot — a
 > deliberate deviation from the Prometheus sketch originally proposed below.
 >
@@ -46,7 +49,7 @@ blocklists via their APIs.
 | Service | API | Free tier | Best for |
 |---|---|---|---|
 | **AbuseIPDB** | `POST /api/v2/reports` | 1 000 reports/day | General abuse, SSH, HTTP scans |
-| **Blocklist.de** | `POST https://api.blocklist.de/api` | Unlimited | Traditional fail2ban-style reporting |
+| **Blocklist.de** | `POST https://www.blocklist.de/en/httpreports.html` | Unlimited | Traditional fail2ban-style reporting |
 | **GreyNoise RIOT** | Read-only free tier | — | Cross-check before reporting (avoid FP) |
 
 Primary target: **AbuseIPDB** — widely used, has a public confidence score, and feeds back into many firewall blocklists automatically.
@@ -58,34 +61,47 @@ Primary target: **AbuseIPDB** — widely used, has a public confidence score, an
 ```mermaid
 flowchart TD
     Sensors["Cowrie / Dionaea / Conpot / HTTP-honeypot / DNP3"]
-    Reporter["reporter (Python)<br/>new Docker Compose service"]
+    Reporter["reporter (Go)<br/>hp-reporter, no network attachment"]
     AbuseIPDB["AbuseIPDB"]
     Blocklist["Blocklist.de"]
 
-    Sensors -->|"JSON event logs on the shared Docker volumes, tailed —<br/>not Redis pub-sub; see 'Resolved design decisions'"| Reporter
+    Sensors -->|"JSON event logs on the shared host bind, tailed —<br/>not Redis pub-sub; see 'Resolved design decisions'"| Reporter
     Reporter -->|"POST /api/v2/reports"| AbuseIPDB
     AbuseIPDB -->|optional| Blocklist
 ```
 
 The `reporter` container:
-- Watches the same log/event volume already mounted by the `analysis` and `ml-worker` containers
-- Maintains a local SQLite DB (`/data/reported.db`) to deduplicate IPs per service per 24 h
-- Exposes a `/metrics` endpoint (Prometheus) so Grafana can graph reports-per-hour
+- Watches the same log/event volume already mounted by the `analysis` and
+  `ml-worker` containers — in practice the single host bind
+  `/opt/stacks/apiary/logs:/logs:ro`, not per-sensor in-container paths
+- Maintains a local SQLite DB (`reporter-data:/data` → `/data/reported.db`) to
+  deduplicate IPs per service per 24 h
+- Writes a periodic **JSON metrics snapshot** into its data dir, *not* a
+  Prometheus `/metrics` endpoint. That is deliberate: the container is
+  deliberately off `honeynet`, so a scraped HTTP endpoint would require the
+  network attachment its isolation design exists to avoid
+  (`reporter/metrics.go`)
 
 ---
 
 ## Log Sources per Sensor
 
-| Sensor | Log path (inside container) | Event format |
+| Sensor | Log path | Event format |
 |---|---|---|
-| cowrie | `/cowrie/var/log/cowrie/cowrie.json` | JSON lines |
-| dionaea | `/opt/dionaea/var/log/dionaea/` | JSON / SQLite |
-| conpot | `/var/log/conpot/` | JSON lines |
+| cowrie | under `/logs/` (host bind `/opt/stacks/apiary/logs`) | JSON lines |
+| dionaea | under `/logs/` | JSON / SQLite |
+| conpot | under `/logs/` | JSON lines |
 | http-honeypot | stdout JSON | JSON lines |
 | dnp3-honeypot | stdout JSON | JSON lines |
 | snare/tanner | tanner REST API | JSON |
 
-All sensors already write structured JSON. The reporter will tail these files (or consume Redis events if the stack is extended to pub-sub).
+All sensors already write structured JSON. The reporter tails the shared
+`/logs` bind (or consumes Redis events if the stack is extended to pub-sub).
+The per-sensor in-container paths this table originally listed —
+`/cowrie/var/log/cowrie/cowrie.json`, `/opt/dionaea/var/log/dionaea/`,
+`/var/log/conpot/` — were never mounted separately; there is one bind, and a
+path that does not exist inside the container is exactly the kind of thing a
+runbook should not tell someone to tail.
 
 ---
 
@@ -168,8 +184,8 @@ Add to `docker-compose.yml`:
     restart: unless-stopped
     environment:
       ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY}
-      BLOCKLIST_DE_EMAIL: ${BLOCKLIST_DE_EMAIL}
-      BLOCKLIST_DE_PASSWORD: ${BLOCKLIST_DE_PASSWORD}
+      BLOCKLISTDE_SENDER: ${BLOCKLISTDE_SENDER}
+      BLOCKLISTDE_API_KEY: ${BLOCKLISTDE_API_KEY}
       GREYNOISE_API_KEY: ${GREYNOISE_API_KEY:-}   # optional
       REPORTER_COOLDOWN_HOURS: ${REPORTER_COOLDOWN_HOURS:-24}
       REPORTER_WHITELIST: /config/whitelist.txt
@@ -190,8 +206,8 @@ Add to `.env.example`:
 ```dotenv
 # IP Blocklist Reporting
 ABUSEIPDB_API_KEY=
-BLOCKLIST_DE_EMAIL=
-BLOCKLIST_DE_PASSWORD=
+BLOCKLISTDE_SENDER=
+BLOCKLISTDE_API_KEY=
 GREYNOISE_API_KEY=
 REPORTER_COOLDOWN_HOURS=24
 ```

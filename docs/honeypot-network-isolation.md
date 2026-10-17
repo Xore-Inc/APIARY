@@ -39,10 +39,17 @@ is the one on the VPS. See
 trap that follows from it, and note that traffic arriving over the tunnel must
 not be attributed to the WireGuard peer.
 
-`vps/honeypot-firewall.sh` is the only firewall script in this repository. It is
-deliberately small: it idempotently `ufw allow`s the raw OT ports that
-`portbridge` handles, and does nothing else. Egress control on the VPS is not
-scripted here.
+`vps/honeypot-firewall.sh` is the only firewall script in this repository that
+*configures* anything. It is deliberately small: it idempotently `ufw allow`s
+the raw OT ports that `portbridge` handles, and does nothing else. Egress
+control on the VPS is not scripted here.
+
+The second file with "firewall" in its name,
+`vps/check-firewall-portbridge-sync.sh` (#152), configures nothing — it
+statically diffs the ports `portbridge` actually forwards against the ports
+`honeypot-firewall.sh` opens, because those two lists drifted silently once
+already. It is not wired into any workflow, so run it by hand after editing
+either file.
 
 ## 2. Sandbox isolation
 
@@ -79,9 +86,31 @@ Elasticsearch over the network. The one real exception is `tftp-relay`, which
 has `depends_on: dionaea` and actually forwards TFTP traffic to it, so those
 two share `dionaea_net` instead of each getting their own.
 
-`honeynet` is now the trusted analysis/management plane only: Elasticsearch,
-Kibana, Filebeat, the dashboard, EveBox, Arkime, and `log-maintenance`. SNARE/
-TANNER and its dependencies keep their own separate `tanner_local`, unchanged.
+`honeynet` is now the trusted analysis/management plane only, and that
+enumeration needs to be read as a category, not a list: 24 services across 11
+compose files attach to it. The data plane is Elasticsearch, Kibana, Filebeat,
+EveBox, Arkime (capture and viewer) and the dashboard stack; the *supporting*
+trusted members are just as much a part of the plane and are easy to forget:
+
+- the four Go worker stacks — `agent-intrusion-worker`,
+  `attacker-identity-worker`, `correlator-worker`, `payload-inventory-worker`
+  — all `profiles: ["legacy"]`;
+- `honeypot-dashboard-backend`'s unprivileged `backend-service` and
+  `honeypot-dashboard`'s `backend-service-mounted`, `backend-worker`,
+  `backend-worker-importer` and `backend-worker-payload-inventory`;
+- the one-shot `honeypot-init` containers `elasticsearch-setup`, `arkime-init`
+  and `honeypot-kibana-setup`;
+- `honeypot-utilities`' `log-maintenance` **and** `disk-space-monitor`;
+- `honeypot-elk`'s `extracted-file-importer`;
+- the two root-path stacks `auth-events-worker` and `ml-worker`.
+
+Deliberately *not* on `honeynet`: `backend-worker-enrichment` and
+`services-adapter` (both `network_mode: none`), and the dashboard's
+`oidc-sessions`, which has its own single-member `oidc-session` network.
+
+SNARE/TANNER and its dependencies keep their own separate `tanner_local`,
+unchanged — all seven services of `honeypot-tanner`, including `snare`, are on
+it.
 
 - `tanner_docker` is `privileged: true`. This is deliberate and should stay:
   TANNER's Docker-backed emulators need a daemon, and the design gives them a
@@ -96,9 +125,13 @@ TANNER and its dependencies keep their own separate `tanner_local`, unchanged.
   [#89](https://github.com/Xore/APIARY/issues/89) (SNARE/TANNER) and
   the per-service measurement passes referenced next to `dionaea`'s and
   `conpot`'s own `cap_add` lists closed the gap this section used to describe.
-- `NET_ADMIN`/`NET_RAW` exist only on the three sandbox sniffers in
-  `docker-compose.sandbox.yml`, a separate file brought up around a single
-  detonation that must never be merged into `docker-compose.yml`.
+- `NET_ADMIN`/`NET_RAW` are confined to sniffers that need the bridge device
+  or a raw socket, never to a decoy. Three sit in `docker-compose.sandbox.yml`
+  (`zeek`, `suricata`, `tcpdump`), a separate file brought up around a single
+  detonation that must never be merged into `docker-compose.yml`. The rest are
+  the passive-capture services that cannot sniff without them:
+  `honeypot-elk`'s `zeek-proxy`, and the VPS's `zeek`, `huginn-sidecar`,
+  `suricata`, and `p0f`.
 
 ## 4. Host posture
 

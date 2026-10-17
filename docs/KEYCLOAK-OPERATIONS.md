@@ -8,7 +8,19 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 ## Resulting topology
 
 - `honeypot-keycloak` is an Arcane-managed stack on the homeserver.
-- Keycloak and PostgreSQL use pinned upstream images; no local image is built.
+- No local image is built, and the two upstream images are pinned
+  *differently on purpose*. PostgreSQL is a digest pin
+  (`postgres:18.6-bookworm@sha256:…`) because its version is chosen, not
+  chased. Keycloak is deliberately **unpinned** —
+  `quay.io/keycloak/keycloak:latest` with `pull_policy: always` — because it
+  is the identity provider for the whole stack: it was digest-pinned to
+  26.7.1 when CVE-2026-18963 (unauthenticated account takeover via
+  reset-credentials, CVSS 9.1) landed, and a digest pin is exactly what keeps
+  a known-vulnerable build running until someone edits a file. `pull_policy`
+  is load-bearing here, not decoration: without it a redeploy silently reuses
+  whatever `:latest` first resolved to, which is a pin again with none of the
+  honesty of one. Do not "tidy" the tag into a digest without reading the
+  comment above it in the compose file first.
 - PostgreSQL is reachable only on the internal `keycloak-data` network.
 - Keycloak publishes HTTP only on the homeserver WireGuard address.
 - VPS Traefik terminates TLS and forwards the issuer and administrator hosts
@@ -353,7 +365,12 @@ sudo KEYCLOAK_RESTORE_CONFIRM=restore-keycloak-database \
 ## 7. Upgrade and rebuild procedure
 
 1. Review Keycloak and PostgreSQL release notes.
-2. Update image tag and digest together in `arcane/home/honeypot-keycloak/compose.yml`.
+2. Update the PostgreSQL tag and digest together in
+   `arcane/home/honeypot-keycloak/compose.yml`. The Keycloak service needs no
+   edit — it is deliberately on `:latest` with `pull_policy: always` (see
+   "Resulting topology"), so a security release arrives by redeploying, and
+   accepting that trade is the decision this step is not asking you to
+   revisit.
 3. Re-test the theme against the pinned Keycloak parent theme.
 4. Validate Compose and the realm template.
 5. Deploy to a disposable stack and exercise the acceptance tests.

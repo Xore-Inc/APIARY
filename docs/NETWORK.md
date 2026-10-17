@@ -63,7 +63,10 @@ flowchart LR
 - **Home firewall**: none to reason about — the home server has no inbound
   exposure at all. Every published container port binds `${HP_BIND}`
   (normally `10.8.0.2`, the WireGuard address), never `0.0.0.0`. Verified
-  repo-wide during the #1960 review: zero exceptions across all 32 stacks.
+  repo-wide during the #1960 review: no published port binds `0.0.0.0`
+  anywhere under `arcane/home/`. The one stack that spells the variable
+  differently is `unsloth`, whose two published ports use
+  `${UNSLOTH_BIND:-10.8.0.2}` — same tunnel-only default, different name.
 
 ## Ingress paths
 

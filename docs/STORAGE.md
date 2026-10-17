@@ -81,9 +81,9 @@ Indices follow `<source>-v<N>` naming. Producers and consumers were
 verified one-to-one during the #1960 review — the catalog table lives in
 [PIPELINES.md](PIPELINES.md#4-index-catalog).
 
-- **Templates**: `honeypot-*`, `suricata-*`, `portbridge-*` set the shared
-  ingest pipeline and flattened mappings so heterogeneous sensor fields
-  land safely.
+- **Templates**: `honeypot-v2-*`, `suricata-*`, `portbridge-v2-*` set the
+  shared ingest pipeline and flattened mappings so heterogeneous sensor
+  fields land safely.
 - **Derived entities** (`attackers-v1`, `campaigns-v1`,
   `attacker-clusters-v1`, `agent-intrusion-campaigns`) are recomputed
   idempotently by their loops — safe to delete and regenerate from raw

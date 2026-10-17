@@ -193,6 +193,20 @@ services:
               capabilities: [gpu]
 ```
 
+> **This snippet is the naive form, and this repo does not ship it.** The
+> canonical example is `analysis/ghidra/docker-compose.ghidra.gpu.yml`, which
+> pins a single device instead:
+>
+> ```yaml
+>             - driver: nvidia
+>               device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]
+>               capabilities: [gpu]
+> ```
+>
+> Its header records why (#1539): the host carries two cards, and `count: all`
+> handed Ollama both — wrong even where it happens to work, and silently
+> different the moment the host changes. Copy the pinned form.
+
 Note this repo keeps the GPU reservation in a **separate overlay file**,
 applied only when a GPU is actually present:
 

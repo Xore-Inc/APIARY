@@ -41,15 +41,14 @@ Last audited: 2026-08-05
   next to its source now lives under `docs/`, mirroring the source tree
   ([#670](https://github.com/Xore/APIARY/issues/670), closed
   2026-08-05).
-- A separate, not-yet-cut-over track: the dashboard is being rewritten as
-  a TanStack Start frontend/BFF + Rust service tier
+- The dashboard rewrite is done, not pending: the TanStack Start
+  frontend/BFF + Rust service tier
   ([#1608](https://github.com/Xore/APIARY/issues/1608) and its
-  follow-ups), living on the `port-foundation` branch behind Compose's
-  `next` profile alongside the current Go dashboard. Feature-complete
-  enough to demo; not yet live in production. See
-  [`DASHBOARD-CUTOVER.md`](DASHBOARD-CUTOVER.md) and
-  [#1628](https://github.com/Xore/APIARY/issues/1628) for what's left
-  before it replaces the row above.
+  follow-ups) cut over on 2026-08-22 under
+  [#1628](https://github.com/Xore/APIARY/issues/1628), the Go dashboard is
+  deleted from Compose, and `dashboard-next` runs unconditionally — no
+  `next` profile, no runtime fallback. See
+  [`DASHBOARD-CUTOVER.md`](DASHBOARD-CUTOVER.md).
 
 Everything that was tracked here as "Gate 0" and "Release 1" through
 "Release 3" and "Release 5" in prior versions of this document is now closed.

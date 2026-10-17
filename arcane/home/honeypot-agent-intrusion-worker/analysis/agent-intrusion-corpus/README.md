@@ -15,7 +15,7 @@ original consumer and is retired) that renders its output — all proven
 against that one corpus rather than hand-built fixtures alone. The
 prerequisite research (mapping the campaign to APIARY's actual trust
 boundaries) is
-[`docs/agent-intrusion-threat-model.md`](../../docs/agent-intrusion-threat-model.md);
+[`docs/agent-intrusion-threat-model.md`](../../../../../docs/agent-intrusion-threat-model.md);
 phase 4's preventive-control audits (Dockerfile digest pinning, an
 assessed ARKIME secret-delivery finding) are documented there, not here,
 since they touch the wider repo rather than this directory. Phases 1-5

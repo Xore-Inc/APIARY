@@ -25,8 +25,8 @@ rotting again; as of this writing that turns up eight distinct groups
 A public VPS terminates attacker traffic — Suricata sniffs it, Traefik
 routes HTTP through Keycloak-backed auth, portbridge relays raw protocol
 ports — and forwards everything over a home-initiated WireGuard tunnel to
-a homeserver running **31 Arcane-managed sensor/worker/utility stacks**
-(plus 6 more at repository-root paths; 37 sync entries in
+a homeserver running **33 Arcane-managed sensor/worker/utility stacks**
+(plus 6 more at repository-root paths; 39 sync entries in
 [`arcane/manifests/home-production.json`](../arcane/manifests/home-production.json),
 which is authoritative — not `.github/workflows/deploy.yml`). Sensors
 write JSON logs to shared host directories; Filebeat ships them into
@@ -56,7 +56,7 @@ flowchart LR
     direction TB
     kc["honeypot-keycloak<br/>Keycloak + private PostgreSQL"]
     init["honeypot-init<br/>bootstrap jobs → *.done markers"]
-    sensors["Sensor stacks ×22<br/>each its own single-member network"]
+    sensors["Sensor stacks ×20<br/>each its own single-member network"]
     tanner["honeypot-tanner<br/>SNARE+TANNER+nested Docker"]
     elk["honeypot-elk<br/>Filebeat · Elasticsearch · Kibana<br/>EveBox · Arkime · zeek-proxy"]
     dash["honeypot-dashboard (+ -backend)<br/>frontend-next · backend-service ×2<br/>worker loops · services-adapter"]
@@ -119,7 +119,6 @@ flowchart TB
 
   subgraph stack["honeypot-dashboard"]
     fe["frontend-next :19090<br/>TanStack Start (Node cluster)<br/>server functions · SSE hub · BFF cookie"]
-    bs["backend-service :8081<br/>Rust axum — the API surface<br/>100+ routes under /api/v1"]
     bsm["backend-service-mounted :8082<br/>same route table + host spool mounts<br/>write-capable instance"]
     loops["backend-worker loops<br/>role picked by WORKER_LOOPS:<br/>alert-notifier · attacker-identity ·<br/>agent-intrusion · correlator · dashboard-rollups ·<br/>threat-intel · zeek-proxy-attribution"]
     imp["backend-worker importer<br/>es-results-importer, shard-partitionable"]
@@ -127,6 +126,10 @@ flowchart TB
     redis[("oidc-sessions<br/>valkey")]
     adapter["services-adapter<br/>unix socket · allowlist · cap_drop ALL"]
     sock[("/var/run/docker.sock")]
+  end
+
+  subgraph stackbe["honeypot-dashboard-backend (#1622)"]
+    bs["backend-service :8081<br/>Rust axum — the API surface<br/>100+ routes under /api/v1<br/>+ user-retention-sweep · reports-scheduler"]
   end
 
   es[("Elasticsearch")]
@@ -147,14 +150,20 @@ Division of labor:
   backend access flows through typed server functions — the browser never
   speaks to Elasticsearch or sees service tokens. Live updates ride one
   shared SSE stream whose frames match the Rust emitter's `event` naming.
-- **backend-service (:8081)** is the unprivileged API tier: constant-time
-  service-token middleware, 30s ES timeouts, PIT + `search_after`
-  pagination everywhere, CAS writes. It also hosts the embedded worker
-  loops — the same image plays each role selected by `WORKER_LOOPS`.
+- **backend-service (:8081)** — the unprivileged API tier, and the only
+  service in the sibling `honeypot-dashboard-backend` stack (#1622 split it
+  out so Arcane can redeploy the API tier without touching `dashboard-next`).
+  Constant-time service-token middleware, 30s ES timeouts, PIT +
+  `search_after` pagination everywhere, CAS writes. It also hosts two
+  embedded worker loops of its own (`user-retention-sweep`,
+  `reports-scheduler`) — the same image plays each role selected by
+  `WORKER_LOOPS`.
 - **backend-service-mounted (:8082)** is the same code with the host-side
   request-spool mounts (CAPE/Ghidra/GitHub-analysis/GHOSTS/sandbox/
-  Windows-sandbox/Rev·Deck). Only this instance can dispatch analysis
-  jobs; frontend callers resolve it explicitly via `{mounted: true}`, so
+  Windows-sandbox/Rev·Deck), and it lives in `honeypot-dashboard` itself,
+  not in the sibling stack — the name that says "mounted" is the one that
+  carries the mounts. Only this instance can dispatch analysis jobs;
+  frontend callers resolve it explicitly via `{mounted: true}`, so
   capability follows configuration, not URL guessing.
 - **Worker containers**: importer mirrors root-owned result spools into
   `*-analysis-v1` indices (read-only, never writes back — local JSON stays
@@ -182,9 +191,9 @@ flowchart TB
   markers[("state/init-markers/*.done")]
   loginit & esinit & arkinit & snareclone --> markers
 
-  subgraph sg["Sensor stacks ×21 (isolated networks)"]
+  subgraph sg["Sensor stacks ×20 (isolated networks)"]
     direction LR
-    cow["cowrie"] & dion["dionaea+tftp"] & conp["conpot ×6"] & rest["dnp3 · dicompot · dns · citrix<br/>cisco-asa · rdp · endlessh · http/api<br/>multipot · mailoney · beelzebub · hellpot<br/>elasticpot · galah · sentrypeer<br/>canarytokens"]
+    cow["cowrie"] & dion["dionaea+tftp"] & conp["conpot ×6"] & rest["dnp3 · dicompot · dns · citrix<br/>cisco-asa · sonicwall-sma · rdp · endlessh<br/>http/api · multipot · mailoney · beelzebub<br/>hellpot · elasticpot · galah · sentrypeer<br/>canarytokens"]
   end
 
   logsT[("logs/&lt;sensor&gt;")]
@@ -216,7 +225,7 @@ entrypoint instead — the cross-stack readiness contract documented in
 ## Event ingestion (summary)
 
 The full pipeline — PROXY-aware vs tunnel-blind sensor split, the
-ingest-time `via_port` join, the 12-step `geoip-honeypot` processor chain,
+ingest-time `via_port` join, the 14-processor `geoip-honeypot` chain,
 and the dashboard's four read paths — is
 [PIPELINES.md §1](PIPELINES.md#1-event-ingestion). Facts that shape
 everything else:

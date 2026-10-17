@@ -1042,6 +1042,28 @@ jobs:
             home: true
             run: python scripts/check-docs-reachable.py
 
+          # #3395: #2458 scans only README.md and docs/**, so the component
+          # trees under arcane/**, analysis/**, sandbox/** and branding/** were
+          # never link-checked -- the agent-intrusion-corpus README's dead
+          # `../../docs/...` hop (two levels short of a five-deep path) lived
+          # there unnoticed. Whole-tree relative-link resolution. Fenced blocks
+          # are skipped: their paths belong to the reader's project, not ours.
+          - name: Every tracked doc's relative links resolve (#3395)
+            home: true
+            run: python scripts/check-doc-links.py
+
+          # #3395: two of the forty mermaid diagrams in the tree did not parse
+          # at all -- AI_TRIAGE.md named a node `call` (a reserved mermaid
+          # token) and ghidra/README.md left a colon unquoted inside an edge
+          # label. Both rendered as an error box on GitHub and nothing noticed,
+          # so mermaid parsing is now a gate rather than a review habit. Renders
+          # every block in one headless browser; mermaid is resolved from the
+          # npx cache, so the step is self-bootstrapping (no pinned version to
+          # drift out of date with the docs).
+          - name: Mermaid diagrams parse (#3395)
+            home: true
+            run: node scripts/check-mermaid.mjs
+
           # #2576: the CAPE implementation-plan doc claimed the detail page
           # (/cape/{sha256}) was admin-gated. Nothing in backend-service
           # enforces that -- require_service_token is the actual gate on

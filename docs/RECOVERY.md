@@ -11,7 +11,7 @@ This repo already has the individual pieces T-Pot's single documented
 "Factory Reset" sequence (stop, back up `data/`, wipe it, `git reset
 --hard`, reinstall) covers -- [`analysis/backup-honeypot.sh`](../analysis/backup-honeypot.sh)
 for the backup, [`docs/STACK-REBUILD.md`](STACK-REBUILD.md)'s live-verified
-runbook for the stop/wipe/restart sequence across the 32 independent
+runbook for the stop/wipe/restart sequence across the 33 independent
 Arcane-managed stacks [#258](https://github.com/Xore/APIARY/issues/258)
 split this into (Dockge originally, replaced by Arcane per
 [#1185](https://github.com/Xore/APIARY/issues/1185); each now a

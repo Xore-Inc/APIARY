@@ -42,9 +42,10 @@ Two independent geo integrations, same source files:
   get country + ASN. (#2713: this used to point at a separate,
   never-automated `arkime/geo/` directory populated by hand from db-ip.com —
   retired in favor of the same files everything else already uses.)
-- **Elasticsearch** enriches every `suricata-*` and `honeypot-*` event through
-  the `geoip-honeypot` ingest pipeline (set as `index.default_pipeline` on both
-  index templates), writing ECS `source.geo` / `source.as` / `destination.geo`
+- **Elasticsearch** enriches every `suricata-*` and `honeypot-v2-*` event (and
+  the portbridge, zeek, extracted-files, huginn and traefik families) through
+  the `geoip-honeypot` ingest pipeline (set as `index.default_pipeline` on 8 of
+  the init stack's 33 index templates), writing ECS `source.geo` / `source.as` / `destination.geo`
   with city-level lat/lon — this is what powers Kibana maps
   (`source.geo.location` is mapped as `geo_point`), from
   `GeoLite2-City.mmdb` mounted at
@@ -119,7 +120,7 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   produced their correlation score. The navbar alert badge shows unacknowledged
   alert state, while source health uses neutral metric tiles for feeds,
   Elasticsearch, Filebeat, and dead letters.
-  `/api/campaigns` exposes the same correlation data. A balanced recent feed
+  `/api/v1/campaigns` exposes the same correlation data. A balanced recent feed
   prevents one noisy sensor from hiding lower-volume sensors. The
   portbridge connection log is used only to recover real source IPs; it is not
   counted as a sensor or displayed as an event.
@@ -138,8 +139,9 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   OverviewPanels.tsx`), so there is no basemap env surface to set anymore.
   The hourly activity chart also exposes exact counts on hover/focus. The 24-hour
   KPI compares activity with the preceding 24 hours and labels large changes;
-  source health reports dashboard heap, reserved and cgroup memory, uptime, and
-  goroutine count through the same `/api/runtime` contract.
+  source health reports dashboard process uptime and memory (RSS + virtual)
+  as the runtime card on `/api/v1/source-health` — the Go heap/goroutine
+  figures that card used to show have no Rust equivalent and are gone.
   Event metadata is directly pivotable: sessions, HASSH/JA3/JA4/User-Agent
   fingerprints, exact commands and credentials, HTTP paths, IDS signatures and
   categories, payload hashes, ASNs, organizations, and provider classes all
@@ -170,13 +172,17 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   SSE, and events pivot directly to Kibana, EveBox, Arkime, and VirusTotal.
   Event tables support keyboard-accessible sorting, selectable columns, and an
   expandable normalized-row JSON view; live events on investigation pages raise
-  a transient notification. Browser API contracts live in `dashboard/frontend`
+  a transient notification. Browser API contracts live in
+  `arcane/home/honeypot-dashboard/frontend-next`
   as strict TypeScript and compile to the committed, dependency-free production
   bundle, so Node.js is only a development tool and never part of the container.
 - **Operational APIs** — `/metrics` exposes Prometheus text metrics for event,
   sensor, ingestion, Filebeat, runtime, dead-letter, and YARA health.
-  `/dead-letters` investigates rejected Elasticsearch documents and
-  `/api/intelligence/archive` exposes durable campaign/cluster snapshots.
+  `/dead-letters` investigates rejected Elasticsearch documents, and
+  durable campaign/cluster snapshots in `dashboard-intelligence-archive-v1`
+  are readable through the generic index-store route
+  `/api/v1/store/intelligence` (there is no dedicated intelligence route
+  in the Rust router).
   Alert acknowledgements and captured-malware downloads require the
   dashboard's own Keycloak-derived `admin` role.
 - **Safe payload triage** — `yara-scanner` inventories all mounted Dionaea,
@@ -186,8 +192,9 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   snapshot API and other named volumes are archived separately. Test and restore
   procedures are in [`docs/analysis/RECOVERY.md`](analysis/RECOVERY.md).
 - **Kibana saved objects** (dashboards, visualizations, data views you build
-  by hand) live only in Elasticsearch's `.kibana` index — an ES reset,
-  migration, or upgrade loses them with no recovery path unless you've
+  by hand) live only in Elasticsearch's Kibana saved-objects index — on this
+  stack's Kibana 9.5.3 that is `.kibana_<n>`, not a bare `.kibana` — so an ES
+  reset, migration, or upgrade loses them with no recovery path unless you've
   exported first. Run `analysis/kibana-export.sh` before any ES-affecting
   change (matching `KIBANA_URL` to how you reach Kibana — defaults to
   `http://kibana:5601`, the in-cluster address); restore with
@@ -220,11 +227,12 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   python3 analysis/analyze.py /opt/stacks/apiary/logs --top 20
   ```
 - **Kibana** → `https://kibana.<domain>` (Keycloak via the oauth2-proxy gateway). Data views already exist:
-  `honeypot-*` and `suricata-*` (time field `@timestamp`) plus **Arkime
+  `honeypot-v2-*` and `suricata-*` (time field `@timestamp`) plus
+  `dead-letter-honeypot*`, alongside **Arkime
   Sessions** (`arkime_sessions3-*`, time field `lastPacket`). All suricata and
   honeypot events carry `source.geo` / `source.as` — build maps on
-  `source.geo.location`. Arkime sessions have country + ASN only (the db-ip
-  country database has no coordinates).
+  `source.geo.location`. Arkime sessions have country + ASN only (GeoLite2
+  Country has no coordinates).
 - **Arkime** → `http://<HP_BIND>:19080` — full-packet session search over
   everything Suricata captured on the VPS.
 - **TANNER dashboard** → `https://tanner.<domain>` (Keycloak via the oauth2-proxy gateway) — web-attack analysis.

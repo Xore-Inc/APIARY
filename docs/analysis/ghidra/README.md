@@ -58,7 +58,7 @@ flowchart LR
 
   submit -->|writes| spool
   spool --> pathunit --> worker
-  worker -->|resolve_sample(): reads| samples
+  worker -->|"resolve_sample(): reads"| samples
   worker -->|writes| result
   result --> poll
 

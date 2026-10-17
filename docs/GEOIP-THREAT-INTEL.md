@@ -51,11 +51,15 @@ worker's own reload/run interval (`threat_intel.rs`), no restart needed.
 
 The deployed stack already works with manually supplied MMDB files. For official
 automatic MaxMind updates, set `MAXMIND_ACCOUNT_ID` and
-`MAXMIND_LICENSE_KEY` in Dockge's stack environment, then enable the optional
-profile:
+`MAXMIND_LICENSE_KEY` in the `honeypot-init` stack's `.env` (Arcane's stack
+environment; Dockge was replaced by Arcane per
+[#1185](https://github.com/Xore/APIARY/issues/1185)), then enable the optional
+profile. `geoipupdate` is a service of the `honeypot-init` stack, which syncs to
+`/opt/stacks/honeypot-init`, not to the `/opt/stacks/apiary` checkout the `.mmdb`
+files themselves land in:
 
 ```bash
-cd /opt/stacks/apiary
+cd /opt/stacks/honeypot-init
 docker compose -f compose.yml --profile geoip-update up -d geoipupdate
 ```
 
@@ -70,10 +74,16 @@ The fallback does not provide city, coordinates, ASN, organization, or IPv6.
 `country.csv` and downloaded `.mmdb` files are intentionally ignored by Git;
 credentials and licensed/generated databases must not be committed.
 
-MMDB databases and a manually-edited `threat-cidrs.csv` are loaded when
-`hp-dashboard` starts -- restart that container after replacing a database or
-hand-editing the file directly. `threat-cidrs.csv` refreshed by
-`refresh-threat-cidrs.sh` is the one exception: the running dashboard picks
-that up on its own (see above), no restart needed. Geolocation is
+The `.mmdb` files are read by three containers, so replacing one needs all
+three restarted: `hp-elasticsearch` (the `ingest-geoip` mount the
+`geoip-honeypot` processors read), and both Arkime containers —
+`hp-arkime-capture` and `hp-arkime-viewer` (each mounts `/opt/arkime/geo`).
+A fourth container, `hp-geoipupdate` in the `honeypot-init` stack, is the
+writer, not a consumer.
+`threat-cidrs.csv` is mounted read-only into the dashboard's `backend-worker`
+container, so hand-editing it directly needs that one restarted. A
+`threat-cidrs.csv` refreshed by `refresh-threat-cidrs.sh` is the one exception:
+the running worker picks that up on its own reload interval (see above), no
+restart needed. Geolocation is
 approximate and must not be treated as proof of an attacker's physical
 location.

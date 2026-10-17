@@ -57,7 +57,12 @@ For each type: create → plant/open → observe the fire → confirm it lands.
      paths from outside is the trap that cost #2136 a whole session.
 2. **Trigger** it the way the per-type notes below describe, from a host that is
    *not* on the honeypot network (so the source IP is meaningful).
-3. **Observe the fire.** The switchboard posts to `canarytokens-adapter`, which
+3. **Observe the fire.** The switchboard posts to `canarytokens-adapter` on the
+   internal `canarytokens-adapter.internal` network; the public HTTP entry point
+   is `canarytokens-http-router` (`hp-canarytokens-http-router`, host port
+   19427), which is the service that actually holds `ADAPTER_URL`
+   (compose.yml:311) and forwards to the adapter. The switchboard itself
+   publishes no host port. The adapter then
    appends one sensor JSON line to `/var/log/honeypot/canarytokens.json`
    (`canarytokens-adapter/main.go`), which Filebeat tails into the honeypot index
    like any other sensor.
@@ -171,9 +176,11 @@ Full path confirmed today, independently, at each link:
 1. **ES doc** -- `GET honeypot-v2*/_search` on `event.sensor: canarytokens` +
    `honeypot.token: <token>` returns 2 hits at the field paths this checklist
    documents (`honeypot.token_type`, `honeypot.memo`, `honeypot.src_ip`).
-2. **Dashboard** -- `GET /api/v1/events?sensor=canarytokens&size=50&since=3650d`
+2. **Dashboard** -- `GET /api/v1/events?sensor=canarytokens&size=50&since=365d`
    (the exact query `frontend-next/src/routes/canarytokens.tsx`'s "Fired
-   tokens" tab issues) returns this event as row `detail: "token fired: Xore
+   tokens" tab issues — `since=365d`, chosen there because tokens fire rarely
+   and the events endpoint's own default is 10d; the trailing `0` in an older
+   revision of this checklist was a transcription slip, not a wider window) returns this event as row `detail: "token fired: Xore
    verification token (working) (HTTP)"`, geo-enriched (country DE, ASN 8899)
    -- confirmed surfaced, not just indexed.
 

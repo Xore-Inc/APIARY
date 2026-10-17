@@ -102,8 +102,8 @@ fixed back into this document and the install scripts themselves.
      `install-homeserver.sh`'s own restore steps, are exhaustive for a
      given run; this is exactly the kind of gap this pass exists to
      catch).
-2. **Wipe both hosts** — every Dockge stack, container, volume, and piece
-   of state on the homeserver and the VPS.
+2. **Wipe both hosts** — every Arcane-managed stack, container, volume, and
+   piece of state on the homeserver and the VPS.
 3. **Reinstall from the real path** — `scripts/install-homeserver.sh` (or
    whatever the current unattended provisioning entry point is) against a
    genuinely clean OS, not a host with leftover packages/config. Redeploy
@@ -133,8 +133,9 @@ fixed back into this document and the install scripts themselves.
      lingering call into a route or function that's been superseded or
      replaced but never removed (the kind of gap a working install can
      mask, since the old path may still technically respond). Cross-check
-     call sites against the routes actually registered in `main.go` and
-     the functions actually exported by each module, not just "does it
+     call sites against the routes actually registered in
+     [`main.rs`](../arcane/home/honeypot-dashboard/backend-service/src/main.rs)
+     and the functions actually exported by each module, not just "does it
      still return 200."
    - Dead code: the reverse direction of the check above — routes,
      handlers, functions, and files that exist but are no longer called
@@ -156,8 +157,9 @@ fixed back into this document and the install scripts themselves.
        access, admin-role enforcement, logout, a disabled/revoked
        session losing access, and fail-closed behavior when the identity
        provider is unreachable.
-     - Every gateway-fronted application (Kibana, EveBox, Arkime, TANNER,
-       RevDeck, Dockge, the Traefik dashboard): authorized access reaches
+     - Every gateway-fronted application — the six isolated `oidc-*`
+       gateways (Kibana, EveBox, Arkime, TANNER, RevDeck, the Traefik
+       dashboard): authorized access reaches
        real content, wrong-role denial, logout, callback/deep-link
        behavior, and direct-upstream bypass denial (confirm the
        isolated `oidc-<app>` Docker network still has no other member).
@@ -170,9 +172,12 @@ fixed back into this document and the install scripts themselves.
        secret, or fallback survives the install: grep the fresh
        deployment for `AUTH_INTROSPECTION_*`, `forward-auth`,
        `strip-auth-identity`, `xore_sso`, and `X-Auth-Role` and confirm
-       zero hits (this repo's own working tree already has zero --
-       verified 2026-08-09 -- the check here is that a *deployed*, fresh
-       install matches).
+       zero live hits (this repo's own working tree has none — verified
+       2026-08-09, and re-verified 2026-09-27: the only remaining matches
+       are two comments saying the thing was retired, plus the one
+       allowlisted stale-path entry in `scripts/doc-path-lint-allowlist.txt`
+       for the moved VPS forward-auth directory. The check here is that a
+       *deployed*, fresh install has no live runtime).
      - Retain redacted evidence (pass/fail results plus browser
        traces/screenshots/logs where applicable) and link it from #787.
 5. **Fix forward, and track it:** any gap found (a missing install step,

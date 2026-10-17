@@ -7,7 +7,7 @@
 > Open scoring-semantics defects are tracked in issues #1946/#1969 under
 > epic #1974 rather than here.
 
-> **Status:** `ml-worker/` has its own Dockge stack
+> **Status:** `ml-worker/` has its own Arcane-managed stack
 > ([`docker-compose.yml`](../ml-worker/docker-compose.yml) +
 > [`docker-compose.ml-worker.gpu.yml`](../ml-worker/docker-compose.ml-worker.gpu.yml),
 > mirroring `analysis/ghidra/`), builds, connects to Elasticsearch, and polls
@@ -88,17 +88,19 @@ ground-truth labels. [web:275][web:283]
 > (`cowrie-*`, `dionaea-*`, `honeypot-network-*`, `conpot-*`,
 > `http-honeypot-*`) never matched anything on the live homeserver — see
 > the "v0.1 audit verdict" callout above. `worker.py`'s real,
-> currently-deployed `SOURCE_INDICES` are the two rows below.
+> currently-deployed `SOURCE_INDICES` are the three rows below -- the third,
+> `zeek-v1-conn-*`, was added by #174 and never made it into this table.
 
-The worker ingests from two unified, versioned index patterns
-(`ml-worker/worker.py`'s `SOURCE_INDICES`):
+The worker ingests from three unified, versioned index patterns
+(`ml-worker/worker.py:144`'s `SOURCE_INDICES`):
 
 | Index pattern | Source | Key fields |
 |---------------|--------|------------|
 | `honeypot-v2-*` | every honeypot sensor (Cowrie, Dionaea, Conpot, HTTP-honeypot, and every other sensor stack — disambiguated by `event.sensor`, not a separate index per sensor) | `event.sensor`, `source.ip`, `honeypot.*` (per-sensor nested fields, not uniform across sensors — see §5.3) |
 | `suricata-v2-*` | Suricata network/IDS events (Filebeat) | `suricata.eve.*`, `network.*`, `alert.signature` |
+| `zeek-v1-conn-*` | Zeek connection logs (#174) | `zeek.orig_h`, `zeek.resp_h`, `zeek.service` |
 
-Both index patterns share a common `@timestamp` field used for temporal
+All index patterns share a common `@timestamp` field used for temporal
 ordering. A third index, `ml-worker-state`, is not a data source — it's the
 worker's own per-index-pattern checkpoint store (`load_checkpoint`/
 `save_checkpoint` in `worker.py`): a `last_timestamp` plus the set of
@@ -391,7 +393,16 @@ loop every POLL_INTERVAL seconds (default: 30s):
 
   10. Sleep POLL_INTERVAL
 
-Every 6 hours (RETRAIN_INTERVAL):
+Every 6 hours (RETRAIN_SLOTS_UTC):
+
+> **The "every 6 hours" arithmetic in this section is historical.** #172
+> replaced `RETRAIN_INTERVAL` — a restart-relative interval — with
+> `RETRAIN_SLOTS_UTC`, a list of fixed daily HH:MM UTC slots defaulting to
+> `03:00,09:00,15:00,21:00` (`ml-worker/worker.py:59`,
+> `ml-worker/docker-compose.yml:54`). That is still four times a day, so the
+> "roughly 8/day" derivations below survive, but nothing schedules on a 6-hour
+> cadence any more, and the retrain is no longer measured from process start.
+
   - Retrain IsoForest + HBOS on last 24h of all events
   - Fine-tune LSTM-AE on last 24h (5 epochs, low LR)
   - Save new model checkpoint to /models/
@@ -515,7 +526,7 @@ rediscovered from an empty index:
   (`ml-worker/worker.py:73`); `run_worker()` installs a delete-only policy
   (`ANOMALY_ILM_POLICY = "ml-anomalies-retention"`) via
   `ensure_ilm_policy(es, ANOMALY_ILM_POLICY,
-  build_ilm_policy(ML_ANOMALIES_RETENTION_DAYS))` (`worker.py:939`) before
+  build_ilm_policy(ML_ANOMALIES_RETENTION_DAYS))` (`worker.py:1002`) before
   the index itself is created, because an index whose
   `index.lifecycle.name` points at a missing policy fails its own
   creation. These documents are the labelled-corpus substrate
@@ -524,7 +535,8 @@ rediscovered from an empty index:
   `honeypot-30d`'s own 30-day source window, while still bounding the
   index rather than leaving it permanent. The window is an env-tunable
   default, not a hardcoded constant, per #261's convention.
-- **`ml-worker-metrics`: delete after 180d** (`ML_METRICS_RETENTION`,
+- **`ml-worker-metrics`: delete after 90d** (`ML_METRICS_RETENTION_DAYS`, default
+  `90` at `ml-worker/worker.py:74`,
   ILM policy `ml-worker-metrics-retention`, installed idempotently by
   the same `ensure_ilm_policy()` call at startup and bound via index
   settings when the index is created). Diagnostic evidence for
@@ -634,7 +646,8 @@ operator disposes of the alert.)
 
 **Implemented, current** as its own route,
 `arcane/home/honeypot-dashboard/frontend-next/src/routes/ml-anomalies.tsx`
-(sidebar: Monitor group, next to Alerts) -- not an overview-page panel, for
+(sidebar: Monitor group — the same group as Overview, *not* Alerts, which
+sits under Operations) -- not an overview-page panel, for
 the same reason as the original Go implementation: alerts have their own
 acknowledge/reopen workflow that doesn't apply to anomaly scores, and mixing
 the two on one page risked implying scores could be acted on the same way.
@@ -698,7 +711,7 @@ scores to the dashboard":
 
 ## 10. Docker Compose Integration
 
-**Rewritten 2026-07-31 (#62).** ml-worker is its own Dockge stack now, not a
+**Rewritten 2026-07-31 (#62).** ml-worker is its own standalone stack now, not a
 service folded into the root `docker-compose.yml`, and the file this section
 used to show (`ml-worker/docker-compose.override.yml`, built against a
 network named `analysis-net` that never existed anywhere in this
@@ -765,7 +778,7 @@ without labels, and what a genuinely broken retrain would actually break:
    recent traffic anomalous when the outgoing one called 1% is almost
    certainly reacting to a data/feature bug, not a real shift in attacker
    behavior — and a real, gradual shift is exactly what re-running this gate
-   every `RETRAIN_INTERVAL` is supposed to keep up with, so rejecting one
+   every `RETRAIN_SLOTS_UTC` is supposed to keep up with, so rejecting one
    cycle costs nothing but the wait for the next.
 3. **No prior model exists yet** (first-ever retrain): the gate degrades to
    check 1 only — there is nothing to compare against, and refusing the
@@ -785,7 +798,7 @@ if wanted.
 ### 11.2 Online learning (unchanged from the original draft, still accurate)
 
 ```
-  → HBOS/IsoForest: full retrain every RETRAIN_INTERVAL (default 6h) on the
+  → HBOS/IsoForest: full retrain every RETRAIN_SLOTS_UTC (default 6h) on the
     rolling 24h window, gated by §11.1
   → LSTM-AE: fine-tune on the same cycle (5 epochs, LR=1e-5), gated the same
     way (§11.1's anomaly-rate check applies to its reconstruction-loss-based
@@ -798,7 +811,7 @@ if wanted.
   and `/models/lstm_ae_{ts}.pt`, with `current_*` symlinks repointed to the
   new version — this part of the original draft was already implemented.
   What was missing: **nothing pruned old versions**, so `/models/` grew two
-  new files per model per `RETRAIN_INTERVAL` forever (roughly 8/day at the
+  new files per model per `RETRAIN_SLOTS_UTC` forever (roughly 8/day at the
   6h default, unbounded over the container's lifetime).
 - `models/lifecycle.py` (new) adds `prune_old_versions(model_dir, prefix,
   keep=MAX_RETAINED_VERSIONS)` — `MAX_RETAINED_VERSIONS=3`, matching the
@@ -830,7 +843,7 @@ fraction `>= THRESHOLD` exceeds `DRIFT_ANOMALY_RATE` (default `0.15`,
 matching the original draft's "15%"):
 
 - an early retrain is triggered (the next poll cycle retrains regardless of
-  how much of `RETRAIN_INTERVAL` remains), and
+  how much of `RETRAIN_SLOTS_UTC` remains), and
 - a `ml-worker-metrics` document is written flagging the drift event
   (`kind: "drift"`, the observed rate, window size) so the dashboard's
   `/ml-anomalies` page (#64) — or a future panel reading this index directly

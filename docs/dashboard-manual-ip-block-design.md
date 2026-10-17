@@ -100,9 +100,15 @@ that already exists** (home is reachable at `10.8.0.2`,
 `docs/CGNAT-DEPLOYMENT.md`), the same "pull, don't get pushed to" posture
 `portbridge-blackhole-refresh.sh` already uses against GitHub. Concretely:
 
-- The dashboard exposes `GET /export/portbridge-manual-blackhole.txt`
-  (then `dashboard/ip_block.go`'s `serveManualBlackholeExport`, now
-  `backend-service/src/ip_block.rs`'s `export`) — plain text, one
+- The export is served as `GET /export/portbridge-manual-blackhole.txt`, but
+  that is a **frontend** route, not a backend one:
+  `frontend-next/src/routes/export.portbridge-manual-blackhole[.]txt.ts`
+  proxies to the backend's `GET /api/v1/ip-block-export`
+  (`backend-service/src/main.rs:345`, handler `ip_block::export` — the Rust
+  successor to the Go `dashboard/ip_block.go`'s
+  `serveManualBlackholeExport`). Both tiers exist and they are not the same
+  endpoint: the `.txt` path is the one
+  `vps/portbridge-manual-blackhole-refresh.sh` fetches. — plain text, one
   IPv4 address per line, the exact format `blackhole.go`'s existing parser
   already reads. No admin auth on the handler itself, the same posture every
   other `/export/*.csv` GET already takes (access control is the network
