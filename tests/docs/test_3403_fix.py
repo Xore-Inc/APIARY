@@ -629,9 +629,16 @@ def test_the_export_routes_own_contract_is_unchanged():
         "the export route declares a 3xx; there is no legitimate redirect here, "
         "and the sidecar's do-not-follow decision is derived from that"
     )
-    assert spec["paths"][REAL_ROUTE]["get"]["security"] == [{"serviceToken": []}], (
-        "the export must stay service-token gated -- the sidecar authenticates "
-        "because of this, and it is the reason an unauthenticated fetch 307s"
+    security = spec["paths"][REAL_ROUTE]["get"]["security"]
+    assert {} not in security, (
+        "the export must stay credential gated -- an empty security alternative "
+        f"would make it reachable unauthenticated. Got {security}"
+    )
+    # #3577 added the export-only credential beside the service token; the
+    # service-token alternative is what the sidecar's 307 check relies on.
+    assert {"serviceToken": []} in security and {"exportToken": []} in security, (
+        "the export must accept the service token and the export-only token. "
+        f"Got {security}"
     )
 
 
