@@ -3279,7 +3279,7 @@
             "serviceToken": []
           }
         ],
-        "summary": "HoneyFS implant credentials, with secrets redacted.",
+        "summary": "HoneyFS implant credentials, including their bait passwords (not redacted).",
         "tags": [
           "operations"
         ]
