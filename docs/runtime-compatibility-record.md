@@ -49,7 +49,7 @@ Ada Generation (20475 MiB, per `docs/gpu-llm-analysis-worker.md`), and a Quadro
 P2200 is passed to the Windows sandbox VM (#1539). `nvidia-smi` reported driver
 615.71.09 on 2026-10-17. `analysis/ghidra/models/approved-models.json` still
 records `approved_host.driver` 595.84 and needs re-recording at the next benchmark
-pin refresh. The "Quadro RTX 4000 / 8192 MiB" figures were corrected in #518.
+pin refresh. The "Quadro RTX 4000 / 8192 MiB" figures were corrected in #602.
 
 The host Python is 3.14.4, but it is not a worker dependency. The worker base
 resolved to `python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf`
