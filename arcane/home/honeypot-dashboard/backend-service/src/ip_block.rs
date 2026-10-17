@@ -58,8 +58,10 @@ pub struct BlockBody {
 )]
 pub async fn set_block(
     State(state): State<AppState>,
-    Json(body): Json<BlockBody>,
+    binding: crate::trust::ActorBinding,
+    Json(mut body): Json<BlockBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.actor = binding.bind("actor", crate::trust::ActorField::Username, &body.actor)?;
     if body.ip.parse::<IpAddr>().is_err() {
         return Err((StatusCode::BAD_REQUEST, "invalid IP address".into()));
     }
@@ -127,7 +129,7 @@ pub async fn get_block(
         (status = 200, description = "The blocked addresses, one per line.", body = inline(serde_json::Value), content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
     ),
-    security(("serviceToken" = [])),
+    security(("serviceToken" = []), ("exportToken" = [])),
 )]
 /// Plain text list of actively blocked IPs, sorted — byte-compatible
 /// with the legacy /export/portbridge-manual-blackhole.txt body.

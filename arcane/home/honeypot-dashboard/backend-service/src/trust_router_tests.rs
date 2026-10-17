@@ -268,3 +268,356 @@ async fn probes_and_metrics_stay_public_under_enforce() {
     let (status, _) = call(app, "GET", "/readyz", &[]).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ---- actors named in bodies and queries (#3577) ---------------------------
+//
+// Here the request has to get past the handler's own store reads, so the
+// handlers talk to a loopback stand-in for Elasticsearch (and, where a route
+// needs one, the honeyfs implant and the canarytokens platform) that records
+// every request. What a handler wrote is then read back off that record or
+// off the audit file. The client always names "bob"; the assertion is always
+// alice's (trust::testkit::Signer::mint).
+
+#[derive(Clone, Default)]
+struct Upstream {
+    url: String,
+    seen: Arc<std::sync::Mutex<Vec<(String, String, serde_json::Value)>>>,
+}
+
+impl Upstream {
+    async fn start() -> Self {
+        let mut upstream = Upstream::default();
+        let seen = upstream.seen.clone();
+        let app = Router::new().fallback(move |method: axum::http::Method, uri: axum::http::Uri, body: String| {
+            let seen = seen.clone();
+            async move {
+                let path = uri.path().to_string();
+                let parsed = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                seen.lock().unwrap().push((method.to_string(), path.clone(), parsed));
+                let (status, answer) = upstream_answer(method.as_str(), &path);
+                (
+                    status,
+                    [("content-type", "application/json"), ("x-elastic-product", "Elasticsearch")],
+                    answer.to_string(),
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind upstream");
+        upstream.url = format!("http://{}", listener.local_addr().expect("upstream addr"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("upstream serves") });
+        upstream
+    }
+
+    /// Bodies of the requests whose method matches and whose path starts
+    /// with `prefix`, oldest first.
+    fn bodies(&self, method: &str, prefix: &str) -> Vec<serde_json::Value> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, path, _)| m == method && path.starts_with(prefix))
+            .map(|(_, _, body)| body.clone())
+            .collect()
+    }
+
+    fn last(&self, method: &str, prefix: &str) -> serde_json::Value {
+        self.bodies(method, prefix).pop().unwrap_or_else(|| {
+            let seen: Vec<String> = self.seen.lock().unwrap().iter().map(|(m, p, _)| format!("{m} {p}")).collect();
+            panic!("no {method} {prefix}* reached the upstream; it saw {seen:?}")
+        })
+    }
+}
+
+/// Two operators with distinguishable preferences.
+fn users_doc() -> serde_json::Value {
+    let user = |subject: &str, username: &str, theme: &str| {
+        serde_json::json!({
+            "subject": subject, "last_username": username, "role_snapshot": "viewer",
+            "preferences_revision": 0, "preferences": {"theme": theme, "rows_per_page": 25},
+        })
+    };
+    serde_json::json!({"schema_version": 4, "revision": 1, "payload": {"users": [
+        user("sub-alice", "alice", "light"), user("sub-bob", "bob", "system"),
+    ]}})
+}
+
+fn upstream_answer(method: &str, path: &str) -> (StatusCode, serde_json::Value) {
+    use serde_json::json;
+    let doc = |source: serde_json::Value| json!({"found": true, "_seq_no": 1, "_primary_term": 1, "_source": source});
+    match (method, path) {
+        ("GET", "/dashboard-users-v1/_doc/users") => (StatusCode::OK, doc(users_doc())),
+        ("GET", "/dashboard-config-v1/_doc/config") => (
+            StatusCode::OK,
+            doc(json!({"schema_version": 4, "revision": 1, "payload": {"behavior": {"show_problem_report_button": true}}})),
+        ),
+        ("GET", "/dashboard-credentials-v1/_doc/cred-1") => (
+            StatusCode::OK,
+            doc(json!({"id": "cred-1", "path": "home/root/.creds", "username": "svc", "password": "old", "memo": "m"})),
+        ),
+        ("POST", "/implant") => (StatusCode::OK, json!({"ok": true, "path": "home/root/.creds", "bytes_written": 1})),
+        ("POST", p) if p.ends_with("/generate") => (
+            StatusCode::OK,
+            json!({"token": "tok-1", "auth_token": "auth-1", "hostname": "t1.canary.apiary.test", "token_url": "http://t1.canary.apiary.test/x"}),
+        ),
+        (_, "/ml-anomalies/_search") => (StatusCode::OK, json!({"hits": {"total": {"value": 1}, "hits": [{"_id": "anomaly-1"}]}})),
+        (_, p) if p.ends_with("/_search") => (StatusCode::OK, json!({"hits": {"total": {"value": 0}, "hits": []}})),
+        ("GET", _) => (StatusCode::NOT_FOUND, json!({"found": false})),
+        _ => (StatusCode::OK, json!({"result": "created", "_seq_no": 2, "_primary_term": 1})),
+    }
+}
+
+struct Bound {
+    app: Router,
+    signer: Signer,
+    audit: PathBuf,
+    upstream: Upstream,
+}
+
+async fn bound(mode: AssertionMode, test: &str) -> Bound {
+    let signer = Signer::generate();
+    let upstream = Upstream::start().await;
+    let audit = audit_path(&format!("{test}-{}", mode.as_str()));
+    let history = audit_path(&format!("{test}-{}-history", mode.as_str()));
+    let state = AppState {
+        es: Arc::new(es::Es::connect(&upstream.url).expect("client")),
+        trust: Arc::new(trust(&signer, mode)),
+        audit: Arc::new(audit::AuditLogger::new(audit.clone())),
+        config_history: Arc::new(config_history::ConfigHistory::new(history)),
+        observability: Arc::new(obs::Obs::new(String::new())),
+    };
+    Bound { app: crate::router(state), signer, audit, upstream }
+}
+
+impl Bound {
+    /// One BFF call as the signing dashboard makes it: the token, plus
+    /// alice's assertion in `role` for this method and path (no query).
+    async fn send(&self, role: Option<&str>, method: &str, uri: &str, body: Option<serde_json::Value>) -> (StatusCode, String) {
+        let mut request = Request::builder().method(method).uri(uri).header("x-service-token", BFF);
+        if let Some(role) = role {
+            let path = uri.split('?').next().unwrap();
+            request = request.header("x-actor-assertion", self.signer.mint(role, method, path, now()));
+        }
+        let body = match body {
+            Some(json) => {
+                request = request.header("content-type", "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = self.app.clone().oneshot(request.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// The last audit entry for `action`.
+    fn audited(&self, action: &str) -> serde_json::Value {
+        let text = std::fs::read_to_string(&self.audit).unwrap_or_default();
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .rfind(|event| event["action"] == action)
+            .unwrap_or_else(|| panic!("no {action} audit entry in {text}"))
+    }
+}
+
+/// Who a handler should have recorded: the client's "bob" in `off` and
+/// `log` (unchanged behaviour), the asserted alice under `enforce`.
+fn expected(mode: AssertionMode) -> (&'static str, &'static str) {
+    if mode == AssertionMode::Enforce { ("sub-alice", "alice") } else { ("sub-bob", "bob") }
+}
+
+#[tokio::test]
+async fn audited_actor_fields_are_the_verified_admin_under_enforce_only() {
+    use serde_json::json;
+    for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
+        let b = bound(mode, "audited").await;
+        let (subject, username) = expected(mode);
+        let bob = "actor_subject=sub-bob&actor_username=bob";
+        let bob_body = |mut body: serde_json::Value| {
+            body["actor_subject"] = json!("sub-bob");
+            body["actor_username"] = json!("bob");
+            body
+        };
+        let calls: [(&str, String, Option<serde_json::Value>, &str); 5] = [
+            ("PUT", format!("/api/v1/config/behavior?{bob}"), Some(json!({"default_time_window": "24h"})), "config.update"),
+            // The PUT above made revision 2 (the stand-in's document is at 1).
+            ("POST", "/api/v1/config/rollback".into(), Some(bob_body(json!({"revision": 2}))), "config.rollback"),
+            ("POST", "/api/v1/credentials/cred-1/link-token".into(), Some(bob_body(json!({"token_id": ""}))), "credentials.unlink-token"),
+            ("POST", "/api/v1/github-analysis/submit".into(), Some(bob_body(json!({"hash": "a".repeat(64)}))), "github_analysis.submit"),
+            ("POST", format!("{SERVICES}?{bob}"), None, "services.restart"),
+        ];
+        for (method, uri, body, action) in calls {
+            let (status, text) = b.send(Some("admin"), method, &uri, body).await;
+            assert!(let_in(status), "{mode:?} {method} {uri}: {status} {text}");
+            let event = b.audited(action);
+            assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)),
+                "{mode:?} {method} {uri}: {event}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn stamped_attribution_is_the_verified_operator_under_enforce_only() {
+    use serde_json::json;
+    for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
+        let b = bound(mode, "stamped").await;
+        let (subject, username) = expected(mode);
+
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ml-anomalies/ack", Some(json!({"key": "anomaly-1", "ack": true, "actor": "bob"}))).await;
+        assert!(let_in(status), "{mode:?}: {status} {text}");
+        assert_eq!(b.upstream.last("POST", "/dashboard-ml-anomaly-ack-v1/_doc/anomaly-1")["AckedBy"], username, "{mode:?} ack");
+
+        b.upstream.seen.lock().unwrap().clear();
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ml-anomalies/ack-all", Some(json!({"actor": "bob"}))).await;
+        assert!(let_in(status), "{mode:?}: {status} {text}");
+        assert_eq!(b.upstream.last("POST", "/dashboard-ml-anomaly-ack-v1/_doc/anomaly-1")["AckedBy"], username, "{mode:?} ack-all");
+
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ml-anomalies/disposition",
+            Some(json!({"key": "anomaly-1", "status": "false_positive", "actor": "bob"}))).await;
+        assert!(let_in(status), "{mode:?}: {status} {text}");
+        assert_eq!(b.upstream.last("POST", "/ml-anomalies/_update/anomaly-1")["doc"]["disposition_by"], username, "{mode:?} disposition");
+
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ip-block", Some(json!({"ip": "192.0.2.9", "blocked": true, "actor": "bob"}))).await;
+        assert!(let_in(status), "{mode:?}: {status} {text}");
+        assert_eq!(b.upstream.last("POST", "/dashboard-ip-block-v1/_doc/192.0.2.9")["BlockedBy"], username, "{mode:?} ip-block");
+
+        // A viewer may file a problem report; the display name the client
+        // supplied cannot be verified, so enforce drops it and the record
+        // falls back to the asserted username.
+        let (status, text) = b.send(Some("viewer"), "POST",
+            "/api/v1/problem-reports?actor_subject=sub-bob&actor_username=bob&actor_display_name=Bob",
+            Some(json!({"expected": "it works"}))).await;
+        assert!(let_in(status), "{mode:?}: {status} {text}");
+        let report = b.upstream.last("POST", "/dashboard-problem-reports-v1/");
+        let name = if mode == AssertionMode::Enforce { "alice" } else { "Bob" };
+        assert_eq!((report["submitted_by"].as_str(), report["submitted_by_name"].as_str()), (Some(subject), Some(name)), "{mode:?}: {report}");
+    }
+}
+
+#[tokio::test]
+async fn enforce_binds_preferences_to_the_verified_operator() {
+    use serde_json::json;
+    for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
+        // A viewer naming bob, and an admin doing the same: nothing in the
+        // dashboard edits another operator's preferences, so admin is bound
+        // too.
+        for role in ["viewer", "admin"] {
+            let b = bound(mode, &format!("prefs-{role}")).await;
+            let (subject, username) = expected(mode);
+            let mine = |doc: &serde_json::Value, who: &str| {
+                doc["payload"]["users"].as_array().unwrap().iter().find(|u| u["subject"] == who).cloned().unwrap()
+            };
+
+            let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
+                Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
+            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+            let other = if subject == "sub-alice" { "sub-bob" } else { "sub-alice" };
+            let untouched = if other == "sub-alice" { "light" } else { "system" };
+            assert_eq!(mine(&written, subject)["preferences"]["theme"], "dark", "{mode:?} {role}: {written}");
+            assert_eq!(mine(&written, other)["preferences"]["theme"], untouched, "{mode:?} {role}: {written}");
+            let event = b.audited("preferences.update");
+            assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
+
+            let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
+                Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
+            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+            assert_eq!(mine(&written, subject)["preferences_revision"], 1, "{mode:?} {role}: reset hit the wrong operator: {written}");
+            assert_eq!(mine(&written, other)["preferences_revision"], 0, "{mode:?} {role}: {written}");
+
+            // A read is bound the same way: naming bob reads alice's own
+            // preferences under enforce, bob's otherwise.
+            let (status, text) = b.send(Some(role), "GET", "/api/v1/preferences?subject=sub-bob&username=bob&role=admin", None).await;
+            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+            let theme = if mode == AssertionMode::Enforce { "light" } else { "system" };
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["preferences"]["theme"], theme, "{mode:?} {role}: {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn enforce_refuses_an_actor_field_with_no_assertion_behind_it() {
+    for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
+        let b = bound(mode, "anon").await;
+        // A plain read on the token alone passes the middleware under
+        // enforce; naming an operator in its query is what it may not do.
+        let (status, text) = b.send(None, "GET", "/api/v1/preferences?subject=sub-bob&role=admin", None).await;
+        if mode == AssertionMode::Enforce {
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{text}");
+            assert!(text.contains("subject names an actor"), "{text}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn enforce_refuses_a_viewer_naming_anyone_on_an_admin_route() {
+    use serde_json::json;
+    let b = bound(AssertionMode::Enforce, "viewer-admin").await;
+    let bob = json!({"actor_subject": "sub-bob", "actor_username": "bob", "actor": "bob"});
+    let with = |extra: serde_json::Value| {
+        let mut body = bob.clone();
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        body
+    };
+    let calls = [
+        ("PUT", "/api/v1/config/behavior?actor_subject=sub-bob&actor_username=bob", Some(json!({}))),
+        ("POST", "/api/v1/config/rollback", Some(with(json!({"revision": 1})))),
+        ("POST", "/api/v1/credentials/cred-1/link-token", Some(with(json!({"token_id": ""})))),
+        ("POST", "/api/v1/credentials/cred-1/rotate", Some(bob.clone())),
+        ("POST", "/api/v1/credentials", Some(bob.clone())),
+        ("POST", "/api/v1/ml-anomalies/ack", Some(with(json!({"key": "anomaly-1", "ack": true})))),
+        ("POST", "/api/v1/ml-anomalies/ack-all", Some(bob.clone())),
+        ("POST", "/api/v1/ml-anomalies/disposition", Some(with(json!({"key": "anomaly-1", "status": "true_positive"})))),
+        ("POST", "/api/v1/ip-block", Some(with(json!({"ip": "192.0.2.9", "blocked": true})))),
+        ("POST", "/api/v1/github-analysis/submit", Some(with(json!({"hash": "a".repeat(64)})))),
+    ];
+    for (method, uri, body) in calls {
+        let (status, text) = b.send(Some("viewer"), method, uri, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {text}");
+    }
+    assert!(b.upstream.bodies("PUT", "/").is_empty() && b.upstream.bodies("POST", "/").is_empty(), "a refused request reached the store");
+}
+
+/// The three routes that need an external service configured by
+/// environment: the honeyfs implant (credential create/rotate) and the
+/// canarytokens platform. Only this test sets those variables.
+#[tokio::test]
+async fn attribution_on_routes_with_external_dependencies() {
+    use serde_json::json;
+    for mode in [AssertionMode::Off, AssertionMode::Enforce] {
+        let b = bound(mode, "external").await;
+        std::env::set_var("HONEYFS_IMPLANT_URL", &b.upstream.url);
+        std::env::set_var("CANARYTOKENS_API_URL", &b.upstream.url);
+        std::env::set_var("CANARYTOKENS_ADAPTER_WEBHOOK_URL", "http://adapter.apiary.test/hook");
+        let (subject, username) = expected(mode);
+        let bob = |mut body: serde_json::Value| {
+            body["actor_subject"] = json!("sub-bob");
+            body["actor_username"] = json!("bob");
+            body
+        };
+
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/credentials",
+            Some(bob(json!({"path": "home/root/.creds", "username": "svc", "password": "p", "memo": "m"})))).await;
+        assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
+        let event = b.audited("credentials.create");
+        assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["created_by"], username, "{mode:?}");
+
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/credentials/cred-1/rotate", Some(bob(json!({})))).await;
+        assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
+        let event = b.audited("credentials.rotate");
+        assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["rotated_by"], username, "{mode:?}");
+
+        // Canarytoken creation is a viewer mutation; `created_by` was the
+        // client's display name until #3577.
+        let (status, text) = b.send(Some("viewer"), "POST", "/api/v1/canarytokens",
+            Some(json!({"token_type": "adobe_pdf", "memo": "m", "created_by": "Bob Display"}))).await;
+        assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
+        let created = if mode == AssertionMode::Enforce { "alice" } else { "Bob Display" };
+        assert_eq!(b.upstream.last("POST", "/dashboard-canarytokens-v1/_doc/tok-1")["created_by"], created, "{mode:?}");
+    }
+}

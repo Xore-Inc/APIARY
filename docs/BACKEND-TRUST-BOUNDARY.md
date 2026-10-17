@@ -116,6 +116,51 @@ Under `enforce`, for requests on the BFF credential:
   from the verified assertion, and the verified actor is attached to the
   request, so handlers never see a client-supplied identity. Service
   actions audit the verified actor, not the `actor_*` query labels.
+- Actor fields in request bodies and queries are bound the same way (next
+  section).
+
+### Actor fields in bodies and queries
+
+Several routes also take an operator from their own input. Each such field
+goes through one helper (`trust::ActorBinding::bind`, attached by the
+middleware to every BFF request):
+
+| Mode | A client-named actor field |
+|---|---|
+| `off` | taken as sent, as before #3577 |
+| `log` | taken as sent; `[E-ACTOR-ASSERTION] log mode: <field> differs from the asserted actor; enforce will use the assertion's` when it differs from a verified assertion, or `... enforce would refuse this request: <field> names an actor without an actor assertion` when there is none. Field names and route only, never values. Nothing extra when the middleware already reported the request. |
+| `enforce` | **overridden** with the verified actor, whatever the client sent (an empty field is filled in). A field that names an actor on a request with no verified assertion (possible only on a plain read) is a 401. An override is logged as `[E-ACTOR-ASSERTION] <field> differs from the asserted actor; the assertion's was used`. |
+
+Override, not refusal, for every field: under `enforce` the client value can
+then never matter, and a BFF that still sends a display name somewhere keeps
+working while `log` points at it. Admins are bound too: nothing in the
+dashboard writes another operator's preferences or attributes an action to
+someone else.
+
+| Route | Field | Bound to |
+|---|---|---|
+| `GET /api/v1/preferences` | `subject`, `username`, `role` (query) | `sub`, `username`, `role` |
+| `PUT /api/v1/preferences`, `POST /api/v1/preferences/reset` | `subject`, `username` (body) | `sub`, `username` |
+| `PUT /api/v1/config/presentation`, `PUT /api/v1/config/{section}` | `actor_subject`, `actor_username` (query) | `sub`, `username` |
+| `POST /api/v1/config/rollback` | `actor_subject`, `actor_username` (body) | `sub`, `username` |
+| `POST /api/v1/credentials`, `.../{id}/rotate`, `.../{id}/link-token` | `actor_subject`, `actor_username` (body; also `created_by`/`rotated_by`) | `sub`, `username` |
+| `POST /api/v1/services/{name}/{action}` | `actor_subject`, `actor_username` (query) | `sub`, `username` |
+| `POST /api/v1/problem-reports` | `actor_subject`, `actor_username` (query) | `sub`, `username` |
+| `POST /api/v1/problem-reports` | `actor_display_name` (query) | dropped (an assertion has no display name; the record falls back to the username) |
+| `POST /api/v1/github-analysis/submit` | `actor_subject`, `actor_username` (body) | `sub`, `username` |
+| `POST /api/v1/ml-anomalies/ack`, `/ack-all`, `/disposition` | `actor` (body: `AckedBy`, `disposition_by`) | `username` |
+| `POST /api/v1/ip-block` | `actor` (body: `BlockedBy`) | `username` |
+| `POST /api/v1/canarytokens` | `created_by` (body) | `username` |
+
+Not bound, on purpose: the Workbench's `owner` comes from `x-actor-username`
+(already rewritten by the middleware) and is never read from a body; report
+`branding.author` is free text printed on a PDF, not an identity; the bait
+credential's `username` is the decoy's login, not the operator.
+
+Before `enforce`, check the `log` output for these lines too. The current
+dashboard sends the OIDC display name, not the username, as canarytoken
+`created_by`, so every canarytoken creation logs one until the dashboard
+sends the username (under `enforce` it is simply overridden).
 
 `log` and `enforce` need `ACTOR_ASSERTION_PUBLIC_KEY`; the backend refuses to
 boot without it, on an unknown mode, or on a private key.
@@ -324,13 +369,13 @@ Where the values go:
 - **Roll back:** inside the window, swap current and previous on the
   backend.
 
-## Not covered yet
+## OpenAPI
 
-- Actor fields carried in request **bodies** (preferences `subject`,
-  credential and config-rollback `actor_*`, ML acknowledgement `actor`) are
-  still taken from the body. Under `enforce` only a request with a valid
-  assertion can reach those routes at all, so the remaining gap is a viewer
-  naming another subject in their own preferences write. Binding those
-  fields to the verified actor is tracked on #3577.
-- The OpenAPI contract (`openapi.json`) still documents only
-  `x-service-token`.
+`openapi.json` documents the three headers as security schemes:
+`serviceToken` (`X-Service-Token`), `exportToken` (`X-Export-Token`, listed
+only on `GET /api/v1/ip-block-export`) and `actorAssertion`
+(`X-Actor-Assertion`). Every BFF operation accepts `serviceToken` alone or
+`serviceToken` plus `actorAssertion`: an alternative rather than a second
+requirement, because the default mode does not ask for an assertion; the
+scheme's description says when `enforce` does. `info.x-api-version` stays 1:
+the additions are additive.

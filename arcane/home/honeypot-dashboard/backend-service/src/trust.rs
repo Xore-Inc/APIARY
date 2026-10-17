@@ -33,6 +33,11 @@
 //! 4. **Rotation.** Every credential has a `_PREVIOUS` predecessor accepted
 //!    only until its `_PREVIOUS_UNTIL` instant, so an overlap window closes
 //!    by itself even if nobody removes the old value.
+//! 5. **Actors named in bodies and queries.** Handlers that take an actor
+//!    from their own input (`actor_subject`, preferences `subject`, ML
+//!    `actor`, ...) bind it through [`ActorBinding`]: overridden with the
+//!    verified actor under `enforce`, reported under `log`, as sent under
+//!    `off`.
 //!
 //! Every secret can be given as `NAME` or as `NAME_FILE` (the swarm secret
 //! convention from #3590), never both.
@@ -339,6 +344,152 @@ impl Trust {
             rotation("assertion_key", &self.keys),
             self.mode.as_str(),
         )
+    }
+}
+
+// ---- actors named in bodies and queries ----------------------------------------
+
+/// Which part of the operator's identity a request field claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorField {
+    /// The OIDC subject (`sub`).
+    Subject,
+    /// The OIDC username (`username`), what the backend records and scopes by.
+    Username,
+    /// `admin` or `viewer`.
+    Role,
+    /// A display name. An assertion carries none, so under `enforce` a
+    /// client-supplied one is dropped and the record falls back to the
+    /// verified username.
+    DisplayName,
+}
+
+impl ActorField {
+    fn verified(self, actor: &VerifiedActor) -> &str {
+        match self {
+            ActorField::Subject => &actor.subject,
+            ActorField::Username => &actor.username,
+            ActorField::Role => actor.role.as_str(),
+            ActorField::DisplayName => "",
+        }
+    }
+}
+
+/// What the trust middleware concluded about the operator, for handlers
+/// that also take an actor from their own body or query (`actor_subject`,
+/// `actor_username`, preferences `subject`, ML `actor`, ...).
+///
+/// The middleware attaches one to every request on the BFF credential, in
+/// every mode, and handlers read it as an extractor. Each client-named
+/// actor field goes through [`ActorBinding::bind`]:
+///
+/// - `off`: the client's value, as before #3577.
+/// - `log`: the client's value, and `[E-ACTOR-ASSERTION]` when `enforce`
+///   would treat it differently (it differs from the verified actor, or it
+///   names an actor on a request with no assertion).
+/// - `enforce`: always the verified actor's value, whatever the client sent
+///   (overridden, never merged). A field that names an actor on a request
+///   with no verified actor is a 401, the same answer the middleware gives
+///   a plain `x-actor-*` header without an assertion.
+///
+/// Overriding rather than refusing a mismatch is deliberate: the field can
+/// then never matter under `enforce`, and a BFF that still sends a display
+/// name somewhere keeps working while `log` reports it.
+#[derive(Debug, Clone)]
+pub struct ActorBinding {
+    mode: AssertionMode,
+    actor: Option<VerifiedActor>,
+    /// `log` only: the middleware already reported that `enforce` would
+    /// refuse the whole request, so a field-level line would add nothing.
+    refused: bool,
+    /// `METHOD route` for the log line. Never a value from the request body.
+    route: String,
+}
+
+/// A client-named actor `enforce` refuses (401).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ActorRefusal(pub String);
+
+impl From<ActorRefusal> for (StatusCode, String) {
+    fn from(refusal: ActorRefusal) -> Self {
+        (StatusCode::UNAUTHORIZED, refusal.0)
+    }
+}
+
+impl ActorBinding {
+    pub fn new(mode: AssertionMode, actor: Option<VerifiedActor>, refused: bool, route: String) -> Self {
+        Self { mode, actor, refused, route }
+    }
+
+    /// The `off` binding: every client value passes through.
+    pub fn off() -> Self {
+        Self::new(AssertionMode::Off, None, false, String::new())
+    }
+
+    /// The value a handler acts on for one client-named actor field, and the
+    /// warning to log, if any. Pure; [`ActorBinding::bind`] logs.
+    pub fn decide(&self, field: &str, kind: ActorField, client: &str) -> (Result<String, ActorRefusal>, Option<String>) {
+        let named = !client.is_empty();
+        match (self.mode, &self.actor) {
+            (AssertionMode::Off, _) => (Ok(client.to_string()), None),
+            (AssertionMode::Log, actor) => {
+                let warning = match actor {
+                    _ if self.refused || !named => None,
+                    Some(actor) if client != kind.verified(actor) => Some(format!(
+                        "log mode: {field} differs from the asserted actor; enforce will use the assertion's"
+                    )),
+                    Some(_) => None,
+                    None => Some(format!(
+                        "log mode: enforce would refuse this request: {field} names an actor without an actor assertion"
+                    )),
+                };
+                (Ok(client.to_string()), warning)
+            }
+            (AssertionMode::Enforce, Some(actor)) => {
+                let verified = kind.verified(actor);
+                let warning = (named && client != verified)
+                    .then(|| format!("{field} differs from the asserted actor; the assertion's was used"));
+                (Ok(verified.to_string()), warning)
+            }
+            (AssertionMode::Enforce, None) if named => (
+                Err(ActorRefusal(format!(
+                    "actor assertion required: {field} names an actor; send x-actor-assertion signed by the BFF"
+                ))),
+                None,
+            ),
+            (AssertionMode::Enforce, None) => (Ok(String::new()), None),
+        }
+    }
+
+    /// [`ActorBinding::decide`], logging its warning as `[E-ACTOR-ASSERTION]`
+    /// (field name and route only, never a value).
+    pub fn bind(&self, field: &str, kind: ActorField, client: &str) -> Result<String, ActorRefusal> {
+        let (value, warning) = self.decide(field, kind, client);
+        if let Some(warning) = warning {
+            tracing::warn!(route = %self.route, "[E-ACTOR-ASSERTION] {warning}");
+        }
+        value
+    }
+
+    /// The usual pair: `actor_subject` and `actor_username`.
+    pub fn bind_pair(&self, subject: &str, username: &str) -> Result<(String, String), ActorRefusal> {
+        Ok((
+            self.bind("actor_subject", ActorField::Subject, subject)?,
+            self.bind("actor_username", ActorField::Username, username)?,
+        ))
+    }
+}
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ActorBinding {
+    type Rejection = (StatusCode, &'static str);
+
+    /// Missing only if a route was registered outside the trust middleware.
+    /// That is a bug, and it fails closed rather than believing the client.
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<ActorBinding>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "this route is not behind the trust middleware",
+        ))
     }
 }
 
@@ -869,6 +1020,77 @@ mod tests {
         let token = old.mint("admin", "GET", "/api/v1/events", NOW);
         assert!(trust.verify(&token, &Method::GET, "/api/v1/events", at(NOW)).is_ok());
         assert!(trust.verify(&token, &Method::GET, "/api/v1/events", at(NOW + 10)).is_err());
+    }
+
+    // ---- actors named in bodies and queries ---------------------------------
+
+    fn alice(role: Role) -> Option<VerifiedActor> {
+        Some(VerifiedActor { subject: "sub-alice".into(), username: "alice".into(), role })
+    }
+
+    fn binding(mode: AssertionMode, actor: Option<VerifiedActor>) -> ActorBinding {
+        ActorBinding::new(mode, actor, false, "PUT /api/v1/preferences".into())
+    }
+
+    #[test]
+    fn off_takes_every_client_value_and_says_nothing() {
+        for actor in [None, alice(Role::Viewer)] {
+            let off = binding(AssertionMode::Off, actor);
+            assert_eq!(off.decide("subject", ActorField::Subject, "sub-bob"), (Ok("sub-bob".into()), None));
+            assert_eq!(off.decide("actor", ActorField::Username, ""), (Ok(String::new()), None));
+        }
+        assert_eq!(ActorBinding::off().decide("role", ActorField::Role, "admin"), (Ok("admin".into()), None));
+    }
+
+    #[test]
+    fn log_takes_the_client_value_and_warns_where_enforce_would_differ() {
+        let log = binding(AssertionMode::Log, alice(Role::Viewer));
+        let (value, warning) = log.decide("subject", ActorField::Subject, "sub-bob");
+        assert_eq!(value, Ok("sub-bob".into()));
+        let warning = warning.expect("a mismatch is reported");
+        assert!(warning.contains("subject") && !warning.contains("sub-bob"), "names the field, never the value: {warning}");
+        // Matching, or not named at all: nothing to report.
+        assert_eq!(log.decide("subject", ActorField::Subject, "sub-alice"), (Ok("sub-alice".into()), None));
+        assert_eq!(log.decide("actor", ActorField::Username, ""), (Ok(String::new()), None));
+        assert_eq!(log.decide("role", ActorField::Role, "viewer"), (Ok("viewer".into()), None));
+        assert!(log.decide("role", ActorField::Role, "admin").1.is_some());
+        // A display name has no verified counterpart: any one is reported.
+        assert!(log.decide("actor_display_name", ActorField::DisplayName, "Alice").1.is_some());
+
+        // No assertion behind a named actor: enforce would refuse it.
+        let anonymous = binding(AssertionMode::Log, None);
+        let (value, warning) = anonymous.decide("subject", ActorField::Subject, "sub-bob");
+        assert_eq!(value, Ok("sub-bob".into()));
+        assert!(warning.unwrap().contains("would refuse"));
+        // The middleware already reported this request: one line, not two.
+        let refused = ActorBinding::new(AssertionMode::Log, None, true, String::new());
+        assert_eq!(refused.decide("subject", ActorField::Subject, "sub-bob"), (Ok("sub-bob".into()), None));
+    }
+
+    #[test]
+    fn enforce_overrides_every_client_value_with_the_verified_actor() {
+        for role in [Role::Viewer, Role::Admin] {
+            let enforce = binding(AssertionMode::Enforce, alice(role));
+            let (value, warning) = enforce.decide("subject", ActorField::Subject, "sub-bob");
+            assert_eq!(value, Ok("sub-alice".into()));
+            assert!(warning.is_some());
+            assert_eq!(enforce.decide("actor", ActorField::Username, ""), (Ok("alice".into()), None), "filled in when absent");
+            assert_eq!(enforce.decide("actor", ActorField::Username, "alice"), (Ok("alice".into()), None));
+            assert_eq!(enforce.decide("role", ActorField::Role, "admin").0, Ok(role.as_str().to_string()));
+            assert_eq!(enforce.decide("actor_display_name", ActorField::DisplayName, "Bob").0, Ok(String::new()));
+            assert_eq!(enforce.bind_pair("sub-bob", "bob"), Ok(("sub-alice".into(), "alice".into())));
+        }
+    }
+
+    #[test]
+    fn enforce_refuses_a_named_actor_with_no_assertion_behind_it() {
+        let enforce = binding(AssertionMode::Enforce, None);
+        let (value, _) = enforce.decide("subject", ActorField::Subject, "sub-bob");
+        let refusal = value.expect_err("must refuse");
+        assert!(refusal.0.contains("subject names an actor"), "{refusal:?}");
+        assert_eq!(<(StatusCode, String)>::from(refusal).0, StatusCode::UNAUTHORIZED);
+        // Naming nobody is fine: the handler sees an empty value, as before.
+        assert_eq!(enforce.decide("subject", ActorField::Subject, ""), (Ok(String::new()), None));
     }
 
     // ---- configuration ------------------------------------------------------

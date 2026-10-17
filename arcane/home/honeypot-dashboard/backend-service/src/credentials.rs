@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 use crate::audit::AuditEvent;
 use crate::es::WriteError;
 use crate::honeyfs_implant;
+use crate::trust::ActorBinding;
 use crate::AppState;
 
 const INDEX: &str = "dashboard-credentials-v1";
@@ -159,8 +160,10 @@ pub struct CreateBody {
 /// deferred).
 pub async fn create(
     State(state): State<AppState>,
-    Json(body): Json<CreateBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<CreateBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    (body.actor_subject, body.actor_username) = binding.bind_pair(&body.actor_subject, &body.actor_username)?;
     if !honeyfs_implant::configured() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -261,16 +264,18 @@ pub struct RotateBody {
 /// calling implant again with new content", no separate verb on the wire).
 pub async fn rotate(
     State(state): State<AppState>,
+    binding: ActorBinding,
     Path(id): Path<String>,
     body: Option<Json<RotateBody>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut body = body.map(|Json(b)| b).unwrap_or_default();
+    (body.actor_subject, body.actor_username) = binding.bind_pair(&body.actor_subject, &body.actor_username)?;
     if !honeyfs_implant::configured() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "credential rotation is not configured on this host".into()));
     }
     let Some(mut record) = get(&state, &id).await else {
         return Err((StatusCode::NOT_FOUND, "no such credential".into()));
     };
-    let body = body.map(|Json(b)| b).unwrap_or_default();
     let new_password = if body.password.trim().is_empty() { generate_password() } else { body.password.trim().to_string() };
 
     let template = record["content_template"].as_str().unwrap_or(DEFAULT_CONTENT_TEMPLATE);
@@ -344,9 +349,11 @@ pub struct LinkTokenBody {
 /// dashboard-side data-model concern only ... no new backend mechanism."
 pub async fn link_token(
     State(state): State<AppState>,
+    binding: ActorBinding,
     Path(id): Path<String>,
-    Json(body): Json<LinkTokenBody>,
+    Json(mut body): Json<LinkTokenBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    (body.actor_subject, body.actor_username) = binding.bind_pair(&body.actor_subject, &body.actor_username)?;
     let Some(mut record) = get(&state, &id).await else {
         return Err((StatusCode::NOT_FOUND, "no such credential".into()));
     };

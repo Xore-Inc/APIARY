@@ -17,6 +17,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::trust::{ActorBinding, ActorField};
 use crate::AppState;
 
 const GRAPH_MAX_NODES: usize = 60;
@@ -629,8 +630,10 @@ pub struct MlAckBody {
 )]
 pub async fn ml_anomaly_ack(
     State(state): State<AppState>,
-    Json(body): Json<MlAckBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<MlAckBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.actor = binding.bind("actor", ActorField::Username, &body.actor)?;
     if body.key.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "missing anomaly key".into()));
     }
@@ -753,8 +756,10 @@ pub async fn ml_anomaly_stats(State(state): State<AppState>) -> Result<Json<Valu
 /// bookkeeping and inflated the acked denominator of the Open tile forever).
 pub async fn ml_anomaly_ack_all(
     State(state): State<AppState>,
-    Json(body): Json<MlAckAllBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<MlAckAllBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.actor = binding.bind("actor", ActorField::Username, &body.actor)?;
     let anomalies = state
         .es
         .search_index(
@@ -856,8 +861,10 @@ pub struct MlDispositionBody {
 /// ack sidecar index keeps working unchanged alongside this.
 pub async fn ml_anomaly_disposition(
     State(state): State<AppState>,
-    Json(body): Json<MlDispositionBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<MlDispositionBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.actor = binding.bind("actor", ActorField::Username, &body.actor)?;
     if body.key.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "missing anomaly key".into()));
     }
