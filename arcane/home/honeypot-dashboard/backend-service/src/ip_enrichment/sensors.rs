@@ -988,12 +988,26 @@ pub fn enrich_galah_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona: 
     let Ok(mut e) = serde_json::from_slice::<Value>(line) else {
         return (line.to_vec(), true);
     };
-    if e.get("msg").and_then(Value::as_str) != Some("successfulResponse") {
+    // #3666: galah logs one line per request it served, and two shapes of it:
+    // `successfulResponse`, and `failedResponse: returned 500 internal server
+    // error` when the LLM call behind it failed. Both carry the whole request
+    // and the attacker's address, so both are events. The failed one used to
+    // fall through here and never reached `honeypot-v2`, which made a broken
+    // LLM path look like an idle sensor and lost the requests it received.
+    let msg = e.get("msg").and_then(Value::as_str).unwrap_or("");
+    let llm_failed = msg.starts_with("failedResponse");
+    if msg != "successfulResponse" && !llm_failed {
         return (line.to_vec(), true); // not a per-request event line
     }
 
     let mut changed = false;
     changed |= set_if_changed(&mut e, "sensor", "galah");
+    if llm_failed {
+        // Named like the other `*_outcome` fields (auth_outcome). Only the
+        // failure sets it: a count of galah events minus a count of
+        // response_outcome:llm_failed is the served count.
+        changed |= set_if_changed(&mut e, "response_outcome", "llm_failed");
+    }
     changed |= set_if_changed(&mut e, "protocol", "HTTP");
     if let Some(dst) = e.get("port").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string) {
         changed |= set_if_changed(&mut e, "dst_port", dst);
@@ -1835,6 +1849,94 @@ mod tests {
         let (out, _) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
         let e: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(e["internal_probe"], json!(true));
+    }
+
+    /// A `failedResponse` line as galah 1.x writes it (shape copied from a
+    /// real one, #3666): the whole request, an `error` object, no httpResponse.
+    fn galah_failed_line(src_ip: &str, src_port: &str, listen_port: &str) -> String {
+        json!({
+            "level": "error",
+            "msg": "failedResponse: returned 500 internal server error",
+            "srcPort": src_port,
+            "tags": null,
+            "httpRequest": {
+                "body": "",
+                "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "headers": {"User-Agent": "Mozilla/5.0"},
+                "method": "GET",
+                "request": "/favicon.ico",
+                "userAgent": "Mozilla/5.0",
+            },
+            "sensorName": "2be6986b6f40",
+            "port": listen_port,
+            "error": {
+                "invalidResponse": "",
+                "msg": "Post \"http://galah-llm-broker:11434/api/chat\": context canceled",
+                "type": "contentGenerationError",
+            },
+            "responseMetadata": {"generationSource": "", "info": {"model": "qwen2.5:7b-instruct-q4_K_M"}},
+            "eventTime": "2026-10-16 16:34:20.481604614 +0200 CEST m=+320166.444481929",
+            "srcIP": src_ip,
+            "srcHost": "",
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn galah_failed_responses_are_promoted_with_an_outcome() {
+        let line = galah_failed_line("203.0.113.9", "43112", "8888");
+        let (out, resolved) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert!(resolved);
+        assert_eq!(e["sensor"], json!("galah"));
+        assert_eq!(e["src_ip"], json!("203.0.113.9"));
+        assert_eq!(e["path"], json!("/favicon.ico"));
+        assert_eq!(e["dst_port"], json!("8888"));
+        assert_eq!(e["user_agent"], json!("Mozilla/5.0"));
+        assert_eq!(e["response_outcome"], json!("llm_failed"));
+    }
+
+    #[test]
+    fn galah_failed_responses_through_the_tunnel_still_resolve_the_real_source() {
+        // No eventTime, so the fixture's time-less join entry applies (the
+        // same simplification galah_line() makes).
+        let mut v: Value = serde_json::from_str(&galah_failed_line(TUNNEL_PEER_IP, "43112", "8888")).unwrap();
+        v.as_object_mut().unwrap().remove("eventTime");
+        let line = v.to_string();
+        let (out, _) =
+            enrich_galah_line(line.as_bytes(), &vm_with(43112, "203.0.113.9"), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert_eq!(e["src_ip"], json!("203.0.113.9"));
+        assert_eq!(e["response_outcome"], json!("llm_failed"));
+    }
+
+    #[test]
+    fn galah_successful_responses_carry_no_outcome_field() {
+        let line = json!({
+            "msg": "successfulResponse",
+            "srcIP": "203.0.113.9",
+            "srcPort": "43112",
+            "port": "8888",
+            "httpRequest": {"request": "/"},
+        })
+        .to_string();
+        let (out, _) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert_eq!(e["sensor"], json!("galah"));
+        assert!(e.get("response_outcome").is_none(), "only the failure is marked");
+    }
+
+    #[test]
+    fn galah_lines_that_are_not_requests_stay_untouched() {
+        for msg in ["Starting galah", "Cache hit for request", "loaded config"] {
+            let line = json!({"level": "info", "msg": msg, "srcIP": "203.0.113.9"}).to_string();
+            let (out, resolved) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+            assert!(resolved);
+            assert_eq!(out, line.as_bytes(), "{msg}: byte-identical, no sensor");
+        }
     }
 
     #[test]

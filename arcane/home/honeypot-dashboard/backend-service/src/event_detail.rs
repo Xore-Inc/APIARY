@@ -476,6 +476,15 @@ fn elasticpot_detail(hp: &Value) -> String {
 
 fn galah_detail(hp: &Value) -> String {
     let path = s(&hp["path"]);
+    // #3666: a failed LLM call is indexed as an event too, but nothing was
+    // generated or served for it, so it must not read as a response.
+    if s(&hp["response_outcome"]) == "llm_failed" {
+        return if path.is_empty() {
+            "LLM call failed, no response served".to_string()
+        } else {
+            format!("LLM call failed, no response served: {path}")
+        };
+    }
     if !path.is_empty() {
         format!("LLM-generated response: {path}")
     } else {
@@ -872,6 +881,14 @@ mod tests {
 
     fn src(sensor: &str, honeypot: Value) -> Value {
         json!({"event": {"sensor": sensor}, "honeypot": honeypot})
+    }
+
+    #[test]
+    fn galah_failed_llm_call_is_not_described_as_a_generated_response() {
+        let ok = src("galah", json!({"path": "/admin"}));
+        assert_eq!(detail_for("galah", &ok), "LLM-generated response: /admin");
+        let failed = src("galah", json!({"path": "/admin", "response_outcome": "llm_failed"}));
+        assert_eq!(detail_for("galah", &failed), "LLM call failed, no response served: /admin");
     }
 
     #[test]
