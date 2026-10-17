@@ -462,7 +462,19 @@ services:
         # footprint). 1536M for real headroom this time rather than another
         # minimum-viable guess -- same "no real reason to keep this tight"
         # reasoning as the 768M bump itself already gave.
-        limits: {cpus: "2.0", memory: 1536M}
+        #
+        # #3675: 1536M then OOM-killed it ~12x/hour once one source pushed
+        # ~120k events/hour into honeypot-v2-*. attacker-identity held its
+        # whole 6h evidence window as raw JSON hits (~4.5 KB each; 452k
+        # hits peaked the container at 2669M). The fetch now folds page by
+        # page, so its peak no longer scales with the window. 4096M stays
+        # until that build has been verified live: a sync of this stack
+        # before the backend image is rebuilt would otherwise bring the
+        # old binary back under the old limit. No swap: with the default
+        # memswap (2x) the cgroup thrashed 34 GB of block IO in four
+        # minutes and starved its own ES requests instead of failing fast.
+        limits: {cpus: "2.0", memory: 4096M}
+    memswap_limit: 4096M
 
   dashboard-next:
     <<: *runtime-defaults
