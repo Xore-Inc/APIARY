@@ -636,7 +636,7 @@ different job.
   `--context 8192`, temperature 0, seed 144, thinking disabled, provenance
   synthetic, operator `bg-1795b`. N = 3 repeats per model (mandatory per #1947;
   #1805-b measured single-run spread at ±1 total).
-- transcripts: `docs/benchmarks/runs/2026-08-26-20260826T062813Z-57eb0be2`
+- transcripts: `docs/benchmarks/runs-archive-20261005/2026-08-26-20260826T062813Z-57eb0be2`
   (`4cfd9ba7…`), `…T065140Z-4b31fb94` (`9644e7bd…`), `…T071328Z-4cb54af9`
   (`9c0f7bfb…`) for the main loop; `…T181814Z-0770770d` (`4bf2eaf4…`),
   `…T181852Z-19dee6a5` (`8973a2dc…`), `…T181930Z-f750ba3a` (`0c696b45…`) for the
