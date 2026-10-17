@@ -282,6 +282,36 @@ func healthzURL(addr string) string {
 	return "http://" + host + "/healthz"
 }
 
+// loadToken resolves the bearer token from IMPLANT_TOKEN or from the file
+// IMPLANT_TOKEN_FILE names, mirroring the backend's trust::secret (the
+// client side, #3680). An empty/blank IMPLANT_TOKEN counts as unset (the
+// documented default: neither set means the token check stays off). A file
+// is read once, with surrounding whitespace (echo's trailing newline)
+// trimmed. Setting both, or naming an unreadable or empty file, is an
+// error: main refuses to start rather than serve without the auth the
+// operator configured.
+func loadToken(env func(string) string, read func(string) ([]byte, error)) (string, error) {
+	direct := strings.TrimSpace(env("IMPLANT_TOKEN"))
+	path := strings.TrimSpace(env("IMPLANT_TOKEN_FILE"))
+	switch {
+	case direct != "" && path != "":
+		return "", errors.New("both IMPLANT_TOKEN and IMPLANT_TOKEN_FILE are set; set one")
+	case direct != "":
+		return direct, nil
+	case path != "":
+		b, err := read(path)
+		if err != nil {
+			return "", fmt.Errorf("IMPLANT_TOKEN_FILE names %q, which cannot be read: %v", path, err)
+		}
+		v := strings.TrimSpace(string(b))
+		if v == "" {
+			return "", errors.New("IMPLANT_TOKEN_FILE names an empty file")
+		}
+		return v, nil
+	}
+	return "", nil
+}
+
 func main() {
 	healthcheck := flag.Bool("healthcheck", false, "check this instance's own /healthz and exit 0/1, for HEALTHCHECK CMD")
 	flag.Parse()
@@ -300,7 +330,10 @@ func main() {
 		honeyfsDir: getenv("HONEYFS_DIR", "/data/honeyfs"),
 		markerPath: getenv("MARKER_PATH", "/data/lib/.implant-pending"),
 	}
-	token := getenv("IMPLANT_TOKEN", "")
+	token, err := loadToken(os.Getenv, os.ReadFile)
+	if err != nil {
+		log.Fatalf("[E-IMPLANT-TOKEN] refusing to start: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/implant", requireToken(token, s.handleImplant))

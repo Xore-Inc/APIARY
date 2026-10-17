@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,4 +160,51 @@ func TestHandleImplantSizeBoundary(t *testing.T) {
 			t.Fatalf("body = %s, want the wire-cap message", respBody)
 		}
 	})
+}
+
+func TestLoadToken(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	good := write("good", "s3cret\n")
+	empty := write("empty", " \n\t\n")
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr string
+	}{
+		{"neither set", nil, "", ""},
+		{"blank env counts as unset", map[string]string{"IMPLANT_TOKEN": "  "}, "", ""},
+		{"env only", map[string]string{"IMPLANT_TOKEN": "abc"}, "abc", ""},
+		{"file only, trailing newline", map[string]string{"IMPLANT_TOKEN_FILE": good}, "s3cret", ""},
+		{"both set", map[string]string{"IMPLANT_TOKEN": "abc", "IMPLANT_TOKEN_FILE": good}, "", "both IMPLANT_TOKEN and IMPLANT_TOKEN_FILE are set"},
+		{"missing file", map[string]string{"IMPLANT_TOKEN_FILE": filepath.Join(dir, "nope")}, "", "which cannot be read"},
+		{"empty file", map[string]string{"IMPLANT_TOKEN_FILE": empty}, "", "names an empty file"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := loadToken(func(k string) string { return c.env[k] }, os.ReadFile)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, c.wantErr)
+				}
+				if got != "" {
+					t.Fatalf("token %q returned alongside error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
 }

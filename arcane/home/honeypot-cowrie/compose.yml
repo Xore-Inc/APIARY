@@ -180,7 +180,12 @@ services:
       # WireGuard-only network boundary -- see main.go's requireToken doc.
       # Empty by default, matching every other internal-only API in this
       # repo (network reachability is the trust boundary).
+      # The token may instead come from IMPLANT_TOKEN_FILE (#3690), a path
+      # inside the container, so a file must be mounted there to be useful.
+      # Setting both, or naming an unreadable/empty file, makes the service
+      # exit non-zero ([E-IMPLANT-TOKEN]); it never falls back to no auth.
       - IMPLANT_TOKEN=${HONEYFS_IMPLANT_TOKEN:-}
+      - IMPLANT_TOKEN_FILE=${HONEYFS_IMPLANT_TOKEN_FILE:-}
     ports:
       - ${HP_BIND:-10.8.0.2}:19428:8091
     volumes:
