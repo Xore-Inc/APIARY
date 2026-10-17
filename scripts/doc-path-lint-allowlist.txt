@@ -27,6 +27,7 @@ analysis/geoip/ # geoipupdate owns this dir on the runner; nothing under it is t
 analysis/threat-intel/threat-cidrs.csv # generated on the host from the tracked .csv.example
 analysis/ghidra/revdeck/ # hand-vendored/build-generated on the host, untracked (CI-CD says so itself)
 analysis/ghidra/revdeck/ai-reverse-engineering # upstream clone target inside that host-side tree
+docs/benchmarks/runs/ # host-side and historical transcript directory; committed August runs now live in runs-archive-20261005
 ../.env # untracked local env file; the tracked template is vps/.env.example
 
 # --- removed components kept deliberately in era records ---
