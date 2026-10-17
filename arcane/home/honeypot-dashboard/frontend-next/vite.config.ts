@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 
@@ -8,6 +9,11 @@ import viteReact from '@vitejs/plugin-react'
 import { nitro } from 'nitro/vite'
 
 const config = defineConfig({
+  define: {
+    'import.meta.env.VITE_THEME_LOCK': JSON.stringify(
+      readFileSync(resolve(import.meta.dirname ?? '.', 'theme.lock'), 'utf8'),
+    ),
+  },
   resolve: {
     alias: { '@': resolve(import.meta.dirname ?? '.', 'src') },
     tsconfigPaths: true,

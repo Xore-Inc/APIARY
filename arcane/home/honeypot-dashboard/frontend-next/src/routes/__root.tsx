@@ -8,16 +8,16 @@ import { HeadContent, Scripts, createRootRoute, Link, redirect, useRouterState }
 import { createServerFn } from '@tanstack/react-start'
 import { AppShell } from '../components/AppShell'
 import { Card, CardDescription, CardTitle } from '../components/ui/card'
+import { APP_CONFIG } from '../config/app-config'
 import { getSessionUser, type User } from '../lib/auth'
 import { activeBanner, type BannerView, type BehaviorConfig, type PresentationConfig } from '../lib/banner'
 import { pullAppearance } from '../lib/prefs'
 import { useSessionWatch } from '../lib/useSessionWatch'
 import { type Appearance } from '../lib/appearanceCookie'
-// Inlined verbatim by Vite (?raw) at build time; "types": ["vite/client"] in
-// tsconfig.json is what types it. Read as text rather than fs because head()
-// runs on both sides of SSR and the file ships in the repo, not on disk at
-// runtime.
-import themeLock from '../../theme.lock?raw'
+// Inlined by Vite from vite.config.ts. Nitro's dev middleware treats unknown
+// root-level extensions as application routes, so importing theme.lock?raw
+// directly works in builds but returns the app's 404 response in development.
+const themeLock = import.meta.env.VITE_THEME_LOCK
 
 type ShellConfig = {
   banner: BannerView | null
@@ -56,7 +56,7 @@ const fetchShellConfig = createServerFn({ method: 'GET' }).handler(async (): Pro
         severity: 'warning',
       },
       showProblemReportButton: true,
-      appName: 'APIARY',
+      appName: APP_CONFIG.name,
       configFailed: true,
     }
   }
@@ -67,7 +67,7 @@ const fetchShellConfig = createServerFn({ method: 'GET' }).handler(async (): Pro
     // Operator-editable brand (settings → Application name) — feeds the
     // per-navigation document titles (#1653: every Go page titled
     // "{brandText} — page").
-    appName: config?.payload?.presentation?.app_name || 'APIARY',
+    appName: config?.payload?.presentation?.app_name || APP_CONFIG.name,
   }
 })
 
@@ -138,7 +138,7 @@ export const Route = createRootRoute({
     // operator sees on every new device.
     const appearance = await getAppearance()
     if (location.pathname.startsWith('/auth/')) {
-      return { banner: null, showProblemReportButton: false, appName: 'APIARY', appearance }
+      return { banner: null, showProblemReportButton: false, appName: APP_CONFIG.name, appearance }
     }
     return { ...(await fetchShellConfig()), appearance }
   },
@@ -147,7 +147,7 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { name: 'robots', content: 'noindex, nofollow' },
-      { title: 'APIARY' },
+      { title: APP_CONFIG.meta.title },
     ],
     links: [
       { rel: 'stylesheet', href: themeCSSHref },
