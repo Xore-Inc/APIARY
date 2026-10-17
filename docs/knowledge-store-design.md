@@ -1,8 +1,8 @@
 # Knowledge-store design record (#1634)
 
-Decision record for #2289, gating #2290–#2292. No code changes ship with
-this document — it is the design pass #1634 asked for before any ingest
-worker exists.
+Decision record for #2289, gating #2290–#2292. This was the design pass
+#1634 asked for, written before any ingest worker existed; no code changes
+shipped with the document itself.
 
 > **Status, re-measured 2026-09-27: authored and tracked, not deployed.** The
 > ingest worker does exist in git — `vault-worker/` carries a `worker.py`, a
@@ -60,8 +60,8 @@ precedent for "git as a sync/deploy substrate" in this repo is Arcane's own
 GitOps machinery (`docs/ARCANE-GIT-SYNC.md`), which already runs a
 git-pull-and-apply loop against `main` and where every live row currently
 carries `auto_sync = 0`, with every deploy still a manual
-sync → build → redeploy (`docs/ARCANE-GIT-SYNC.md:425` and
-`docs/ARCANE-GIT-SYNC.md:478`) — i.e.
+sync → build → redeploy (`docs/ARCANE-GIT-SYNC.md`, "Promotion workflow and
+change control") — i.e.
 this codebase's existing git-sync tooling defaults to *manual* triggers for
 anything sensitive, which is the posture this decision adopts too (see §4).
 
@@ -192,7 +192,7 @@ A persistent, curated, cross-referenced copy of (bounded, redacted) attacker
 material is qualitatively different from the raw per-event ES documents it's
 derived from: it's smaller, denser, and easier for a human or a script to
 sweep in one pass. Reading `analysis/backup-honeypot.sh`, its archive step
-(`backup-honeypot.sh:119`) already walks `./analysis ./dashboard ./personas
+(`backup-honeypot.sh:123`) already walks `./analysis ./dashboard ./personas
 ./state` by directory-existence check, unconditionally including anything
 found there. If the vault directory (§1: `state/knowledge-vault/`) is placed
 under `$stack_dir/state/`, it is **already** inside this glob and would start
@@ -204,22 +204,22 @@ placed under `state/knowledge-vault/` specifically so it inherits
 `backup-honeypot.sh`'s existing scope, the same script that already carries
 `dashboard-state` and other config-bearing material governed by the same
 "config and small state, not bulk captured data" policy the script's own
-header documents (`backup-honeypot.sh:15-17`). Because §4's redaction rule
+header documents (`backup-honeypot.sh:14-19`). Because §4's redaction rule
 above already bounds and strips what can land in a note, the vault's content
 is closer in sensitivity to the config material `backup-honeypot.sh` already
 carries than to the bulk payload/PCAP data it explicitly excludes — so
 extending that script's existing scope to include it is the correct call,
 not an oversight to patch around later. That decision is already recorded
 verbatim in `analysis/backup-honeypot.sh`'s own comment block
-(`backup-honeypot.sh:107-114`, which names #2289, #2290 and this document), so
+(`backup-honeypot.sh:108-117`, which names #2289, #2290 and this document), so
 a future reader sees it was deliberate rather than inferring it from a
 directory glob matching by accident.
 
 ### Worker authorization gate
 
 The vault-ingest worker (#2290) must gate non-dry-run writes the same way
-`llm-worker` gates captured-data mode. Reading `llm-worker/worker.py:246-248`
-and `llm-worker/worker.py:314-318`:
+`llm-worker` gates captured-data mode. Reading `llm-worker/worker.py:258-260`
+and `llm-worker/worker.py:327-329`:
 non-dry-run requires `LLM_ENABLED=true` **and** `LLM_ALLOW_CAPTURED_DATA=true`
 together, with the error message naming both. The vault worker adopts the
 same two-flag shape (its own env var names, e.g. `VAULT_ENABLED` /

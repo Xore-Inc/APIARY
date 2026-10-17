@@ -93,8 +93,12 @@ authority in
   `count: 1` reservation picks an arbitrary card, which is the same class of
   bug `count: all` caused. Pin `device_ids` to the Ada's UUID, as
   `analysis/ghidra/docker-compose.ghidra.gpu.yml` already does.
-- Driver 580.173.02 (CUDA 13.0) — backward-compatible with CUDA 12.x
-  runtime wheels.
+- Driver **595.84**, per the `approved_host.driver` field in that same
+  `approved-models.json` — the authority this section nominated above. (This
+  document previously said 580.173.02 / CUDA 13.0; that pair is not in the
+  approved-host record. `docs/runtime-compatibility-record.md:39` still carries
+  the same stale host, including the retired Quadro RTX 4000 / 8192 MiB figures
+  that #602 already corrected.)
 - nvidia-container-toolkit 1.19.1 present; `docker run --rm --gpus all
   nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi -L` succeeds.
 - Stack network is `honeynet`. The old `ml-worker/docker-compose.override.yml`
@@ -195,31 +199,36 @@ Rules:
 - Training (6 h retrain) uses fp32, batch size 128, and
   `torch.cuda.empty_cache()` after each retrain.
 
-### 4.4 `ml-worker/docker-compose.yml`
+### 4.4 GPU reservation — already scaffolded; do not add it inline
 
-```diff
-   ml-worker:
-     ...
-+    deploy:
-+      resources:
-+        reservations:
-+          devices:
-+            - driver: nvidia
-+              count: 1
-+              capabilities: [gpu]
-     environment:
-       ...
-+      ML_DEVICE: auto            # auto | cpu — 'cpu' forces CPU for debugging
+This step is already satisfied. The reservation lives in a dedicated overlay,
+`ml-worker/docker-compose.ml-worker.gpu.yml`, applied as:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml-worker.gpu.yml \
+  up -d ml-worker
 ```
 
-**Pin `device_ids`, not `count: 1`.** The host carries two cards (§3), so
-`count: 1` selects an arbitrary one and can hand `ml-worker` the Quadro
-P2200 the Windows sandbox VM needs. Use the Ada's UUID exactly as
-`analysis/ghidra/docker-compose.ghidra.gpu.yml` does:
-`device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]`.
+That file's own header calls it an "overlay, never used alone" and "inert
+scaffolding right now, not a feature this stack turns on": per
+`ml-gpu-coordinated-roadmap.md` §1 decision 4 only LSTM and embeddings may use
+CUDA, and both are still gated behind Milestones D and H. Milestone H's own
+first step requires a measured CPU baseline from #62 before touching CUDA.
 
-Keep the existing `mem_limit: 2g` / `cpus: "2.0"`; GPU memory is governed
-by §5, not by `mem_limit`.
+So do not add a `deploy.resources.reservations.devices` block to
+`ml-worker/docker-compose.yml`: an inline reservation makes the GPU
+unconditional on every `up`, which is the gate the overlay exists to keep shut.
+
+One discrepancy to resolve when Milestone H lands: the overlay currently says
+`count: all`, which on this two-card host (§3, #1539) hands `ml-worker` the
+Quadro P2200 reserved for the Windows sandbox VM as well. Pin `device_ids` to
+the Ada's UUID instead, exactly as
+`analysis/ghidra/docker-compose.ghidra.gpu.yml` does:
+`device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]`. `ML_DEVICE: auto | cpu`
+belongs in the same overlay, not the base file.
+
+Keep the existing `memory: 2g` / `cpus: "2.0"` limits; GPU memory is governed
+by §5, not by the container memory limit.
 
 ---
 
@@ -250,11 +259,18 @@ the original 6.1 GiB `qwen3.5:9b` estimate):
   enough to treat as a non-issue either. This already assumes the ghidra
   slot's model is resident regardless of any keep-alive window — the 30m
   server-default residency (above) makes that the common case during a
-  drain, not just a worst-case edge. Keep the `RETRAIN_INTERVAL` /
+  drain, not just a worst-case edge. Keep the `RETRAIN_SLOTS_UTC` /
   `DAILY_REPORT_HOUR` scheduling offset (retrain landing at least 1 h away
   from the LLM daily report — e.g. retrain at 01:00/07:00/13:00/19:00 UTC
   against a 06:00 report) as a cheap way to avoid the worst-case overlap in
-  the common case, rather than removing it outright. The CUDA-OOM → CPU
+  the common case, rather than removing it outright. `RETRAIN_INTERVAL` is
+  the *old* name and shape: it was a restart-relative interval, replaced by
+  fixed daily HH:MM UTC slots under #172 so GPU workloads can actually be
+  separated. The live variable is `RETRAIN_SLOTS_UTC`, defaulting to
+  `03:00,09:00,15:00,21:00` (`ml-worker/docker-compose.yml:54`,
+  `worker.py:59`) — note the shipped default is *not* the 01:00/07:00/13:00/
+  19:00 set used as the example above, so the offset is a starting point to
+  adjust, not a description of what runs. The CUDA-OOM → CPU
   fallback below is what actually protects the rare case the schedule
   doesn't catch — treat it as the real safety net, the schedule as
   best-effort headroom management.

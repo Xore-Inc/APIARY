@@ -2,6 +2,11 @@
 
 Status: research for [issue #598](https://github.com/Xore/APIARY/issues/598), 2026-08-05.
 
+> **Point-in-time record.** This is a dated decision record, not current
+> inventory: it records what was measured on 2026-08-05, and the version pins
+> quoted below have since moved (production Ollama is now 0.34.4). Read it for
+> the reasoning, not as the present state of the fleet.
+
 > **Superseded in part — read this first.** This is the CPU-only research
 > pass. The *measured* three-engine comparison it asked for was run
 > afterwards and is recorded in
@@ -59,7 +64,7 @@ generation tests; `nomic-ai/nomic-embed-text-v1.5-GGUF` (Q4_K_M) for the
 embeddings test. Images: `ghcr.io/ggml-org/llama.cpp:server`/`:full`,
 `ghcr.io/mostlygeek/llama-swap:cpu`, `ollama/ollama:0.32.0` (this repo's own
 pinned version *at the time*; production has since moved to
-`ollama/ollama:0.32.13` in `analysis/ghidra/docker-compose.ghidra.yml` and
+`ollama/ollama:0.34.4` in `analysis/ghidra/docker-compose.ghidra.yml` and
 `analysis/ghidra/models/approved-models.json`), `vllm/vllm-openai:latest`
 (v0.26.0).
 
@@ -226,7 +231,7 @@ did measure decode throughput on the real 20GB card (llama.cpp ~21.4, Ollama
 
 ## 7. Operational surface
 
-| | Ollama 0.32.0 | llama.cpp `:server` | llama-swap `:cpu` | vLLM 0.26.0 |
+| | Ollama 0.32.0 (as tested) | llama.cpp `:server` | llama-swap `:cpu` | vLLM 0.26.0 |
 |---|---:|---:|---:|---:|
 | Image size | 8.06 GB | 1.21 GB | 1.24 GB | 28.1 GB |
 | Runs without a GPU present | Yes (CPU fallback) | Yes (CPU fallback) | Yes | **No — confirmed**, but hardware-specific; see below |
