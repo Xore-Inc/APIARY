@@ -98,9 +98,8 @@ authority in
   that record: `nvidia-smi` reported **615.71.09** on 2026-10-17, so check
   `nvidia-smi` rather than trusting either figure, and re-record the approved
   host when the benchmark pin is next refreshed. (This document previously said
-  580.173.02 / CUDA 13.0; `docs/runtime-compatibility-record.md:39` still carries
-  that stale host, including the retired Quadro RTX 4000 / 8192 MiB figures
-  that #602 already corrected.)
+  580.173.02 / CUDA 13.0; `docs/runtime-compatibility-record.md:39` keeps that
+  2026-08-01 reading, with a dated correction note below it.)
 - nvidia-container-toolkit 1.19.1 present; `docker run --rm --gpus all
   nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi -L` succeeds.
 - Stack network is `honeynet`. The old `ml-worker/docker-compose.override.yml`
@@ -221,12 +220,10 @@ So do not add a `deploy.resources.reservations.devices` block to
 `ml-worker/docker-compose.yml`: an inline reservation makes the GPU
 unconditional on every `up`, which is the gate the overlay exists to keep shut.
 
-One discrepancy to resolve when Milestone H lands: the overlay currently says
-`count: all`, which on this two-card host (§3, #1539) hands `ml-worker` the
-Quadro P2200 reserved for the Windows sandbox VM as well. Pin `device_ids` to
-the Ada's UUID instead, exactly as
-`analysis/ghidra/docker-compose.ghidra.gpu.yml` does:
-`device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]`. `ML_DEVICE: auto | cpu`
+The overlay is now pinned. It used to say `count: all`, which on this two-card
+host (§3, #1539) would have handed `ml-worker` the Quadro P2200 reserved for the
+Windows sandbox VM as well. It now sets `device_ids` to the Ada's UUID, as
+`analysis/ghidra/docker-compose.ghidra.gpu.yml` does. `ML_DEVICE: auto | cpu`
 belongs in the same overlay, not the base file.
 
 Keep the existing `memory: 2g` / `cpus: "2.0"` limits; GPU memory is governed
