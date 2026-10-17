@@ -445,6 +445,11 @@ pub fn allow_unauth_dev_from_env(raw: Option<&str>) -> bool {
 ///    Under `enforce` the client's `x-actor-username`/`x-actor-role` are
 ///    dropped and, for a verified assertion, rewritten from it, and the
 ///    `trust::VerifiedActor` is attached as a request extension.
+/// 4. Every BFF request, in every mode, carries a `trust::ActorBinding`:
+///    what the handlers that also take an actor from their body or query
+///    (`actor_subject`, preferences `subject`, ML `actor`, ...) bind those
+///    fields with, so `enforce` overrides them with the verified actor and
+///    `log` reports where it would.
 async fn require_service_token(
     State(state): State<AppState>,
     mut request: axum::extract::Request,
@@ -471,9 +476,11 @@ async fn require_service_token(
         return next.run(request).await;
     }
     if trust.mode == trust::AssertionMode::Off {
+        request.extensions_mut().insert(trust::ActorBinding::off());
         return next.run(request).await;
     }
     let path = request.uri().path().to_string();
+    let route = format!("{method} {}", matched.as_deref().unwrap_or(path.as_str()));
     let verdict = trust.evaluate(&method, &path, matched.as_deref(), request.headers(), now);
     if trust.mode == trust::AssertionMode::Log {
         match &verdict {
@@ -496,6 +503,12 @@ async fn require_service_token(
             }
             trust::Verdict::Anonymous => {}
         }
+        let (actor, refused) = match verdict {
+            trust::Verdict::Actor(actor) => (Some(actor), false),
+            trust::Verdict::Deny(..) => (None, true),
+            trust::Verdict::Anonymous => (None, false),
+        };
+        request.extensions_mut().insert(trust::ActorBinding::new(trust.mode, actor, refused, route));
         return next.run(request).await;
     }
     let headers = request.headers_mut();
@@ -503,7 +516,9 @@ async fn require_service_token(
     headers.remove(trust::ACTOR_ROLE_HEADER);
     match verdict {
         trust::Verdict::Deny(status, reason) => return (status, reason).into_response(),
-        trust::Verdict::Anonymous => {}
+        trust::Verdict::Anonymous => {
+            request.extensions_mut().insert(trust::ActorBinding::new(trust.mode, None, false, route));
+        }
         trust::Verdict::Actor(actor) => {
             // from_bytes, not from_str: a non-ASCII name is still the
             // verified name, and handlers that need text read it with
@@ -515,6 +530,9 @@ async fn require_service_token(
                 trust::ACTOR_ROLE_HEADER,
                 axum::http::HeaderValue::from_static(actor.role.as_str()),
             );
+            request
+                .extensions_mut()
+                .insert(trust::ActorBinding::new(trust.mode, Some(actor.clone()), false, route));
             request.extensions_mut().insert(actor);
         }
     }

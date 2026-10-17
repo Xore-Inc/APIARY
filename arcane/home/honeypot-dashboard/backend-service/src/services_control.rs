@@ -247,16 +247,18 @@ pub struct ActionQuery {
 /// #3577: under `ACTOR_ASSERTION_MODE=enforce` the trust middleware has
 /// already refused anyone but a verified admin, and the audit entry names
 /// that verified actor; the `actor_*` query fields are only the labels for
-/// the `off`/`log` modes, where nothing was verified.
+/// the `off`/`log` modes, where nothing was verified (`log` warns when they
+/// differ from the assertion).
 pub async fn action(
     State(state): State<AppState>,
+    binding: crate::trust::ActorBinding,
     Path((name, action)): Path<(String, String)>,
     Query(actor): Query<ActionQuery>,
-    verified: Option<axum::Extension<crate::trust::VerifiedActor>>,
-) -> impl axum::response::IntoResponse {
-    let (actor_subject, actor_username) = match verified {
-        Some(axum::Extension(verified)) => (verified.subject, verified.username),
-        None => (actor.actor_subject, actor.actor_username),
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (actor_subject, actor_username) = match binding.bind_pair(&actor.actor_subject, &actor.actor_username) {
+        Ok(pair) => pair,
+        Err(refusal) => return <(StatusCode, String)>::from(refusal).into_response(),
     };
     let (ok, status, reason) = perform_service_action(&name, &action).await;
     state.audit.log(AuditEvent {
@@ -268,5 +270,5 @@ pub async fn action(
         ..Default::default()
     });
     let body = if ok { json!({"ok": true, "name": name, "action": action}) } else { json!({"ok": false, "error": reason}) };
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body))
+    (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response()
 }

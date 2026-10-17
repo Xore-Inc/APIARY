@@ -165,8 +165,10 @@ pub struct CreatedToken {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    Json(body): Json<CreateBody>,
+    binding: crate::trust::ActorBinding,
+    Json(mut body): Json<CreateBody>,
 ) -> Result<Json<CreatedToken>, (StatusCode, String)> {
+    body.created_by = binding.bind("created_by", crate::trust::ActorField::Username, &body.created_by)?;
     let base = base_url().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "canarytoken creation is not configured on this host".to_string(),
