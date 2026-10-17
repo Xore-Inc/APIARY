@@ -39,6 +39,10 @@ what a connection may do.
 - Every secret can be given as `NAME` or `NAME_FILE` (the swarm secret
   convention from #3590: the variable names a file under `/run/secrets/`).
   Setting both refuses to boot. Values never enter git, issues or PRs.
+- `HONEYFS_IMPLANT_TOKEN[_FILE]` (#3680) follows the same convention but is
+  read when the honeyfs-implant client is used, not at boot: setting both, or
+  naming an unreadable or empty file, disables that client and logs
+  `[E-HONEYFS-IMPLANT-TOKEN]` instead of sending requests without a token.
 
 The export credential is the backend side of the export-only decision in
 Xore-Inc/apiary-dashboard#246. The VPS job sends `X-Export-Token:
@@ -275,7 +279,7 @@ Where the values go:
   `<base>_vN` (`ops/swarm/stackctl.py secret create`), mounted under
   `/run/secrets/` and named by `SERVICE_TOKEN_FILE`,
   `SERVICE_TOKEN_PREVIOUS_FILE`, `EXPORT_TOKEN_FILE`,
-  `ACTOR_ASSERTION_PUBLIC_KEY_FILE` and so on. The `_UNTIL` instants and the
+  `ACTOR_ASSERTION_PUBLIC_KEY_FILE`, `HONEYFS_IMPLANT_TOKEN_FILE` and so on. The `_UNTIL` instants and the
   mode are plain environment. Follow `ops/swarm/README.md` for secret
   versions and keep the old secret through the next version so a rollback
   can still start.
