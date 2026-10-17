@@ -42,6 +42,8 @@
 # socat-hp-evebox         :5636   →  10.8.0.2:19636 (evebox :5636)
 # socat-hp-arkime         :8005   →  10.8.0.2:19080 (arkime viewer :8005)
 # socat-hp-revdeck        :5000   →  10.8.0.2:19500 (revdeck :5000, ghidra stack)
+# socat-hp-unsloth        :8899   →  10.8.0.2:8899  (Unsloth Studio :8000 published
+#                                     on UNSLOTH_BIND, arcane/home/unsloth; #3689)
 # socat-hp-keycloak       :8080   →  10.8.0.2:18080 (Keycloak :8080)
 # socat-hp-arcane         :3552   →  10.8.0.2:3552  (arcane :3552, host infra
 #                                     with root-equivalent /var/run/docker.sock
@@ -557,6 +559,15 @@ http:
         options: modern
       middlewares: [security-headers]
 
+    # #3689: Unsloth Studio, same isolated-gateway shape as revdeck above.
+    honeypot-unsloth:
+      rule: "Host(`unsloth.honeypot.example`)"
+      entryPoints: [websecure]
+      service: oidc-unsloth
+      tls:
+        options: modern
+      middlewares: [security-headers]
+
     # #1185: Arcane (Dockge's replacement, now decommissioned) authenticates
     # natively against Keycloak -- no oidc-<app> gateway hop, this routes
     # straight to its own socat bridge (service defined below, same shape as
@@ -633,6 +644,11 @@ http:
     oidc-revdeck:
       loadBalancer:
         servers: [{url: "http://oidc-revdeck:4180"}]
+        passHostHeader: true
+
+    oidc-unsloth:
+      loadBalancer:
+        servers: [{url: "http://oidc-unsloth:4180"}]
         passHostHeader: true
 
     oidc-traefik:

@@ -884,8 +884,11 @@
       "arkime": [{"name": "access"}],
       "tanner": [{"name": "access"}],
       "revdeck": [{"name": "access"}],
+      "unsloth": [
+        {"name": "access", "description": "#3689: granted to the administrators group only, not to apiary-user/users like the read-only viewers -- Unsloth Studio runs training jobs on the homeserver GPU"}
+      ],
       "traefik-dashboard": [
-        {"name": "admin", "description": "#1014: distinctly named (not 'access') because this grants root-equivalent control of the homeserver's reverse proxy -- must never be conflated with the ordinary low-privilege 'access' role used by Kibana/EveBox/Arkime/TANNER/RevDeck"}
+        {"name": "admin", "description": "#1014: distinctly named (not 'access') because this grants root-equivalent control of the homeserver's reverse proxy -- must never be conflated with the ordinary low-privilege 'access' role used by Kibana/EveBox/Arkime/TANNER/RevDeck/Unsloth"}
       ],
       "arcane": [
         {"name": "admin", "description": "#1014/#1185: distinctly named (not 'access') -- Arcane has /var/run/docker.sock mounted read-write, root-equivalent control of the homeserver. Never conflate with the low-privilege 'access' role. Mapped via OIDC_ROLE_MAPPINGS."}
@@ -917,6 +920,7 @@
         "arkime": ["access"],
         "tanner": ["access"],
         "revdeck": ["access"],
+        "unsloth": ["access"],
         "traefik-dashboard": ["admin"],
         "arcane": ["admin"]
       }
@@ -1103,6 +1107,26 @@
       "redirectUris": ["https://rev.example.invalid/oauth2/callback"],
       "webOrigins": ["https://rev.example.invalid"],
       "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://rev.example.invalid/*"},
+      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
+      "optionalClientScopes": []
+    },
+    {
+      "clientId": "unsloth",
+      "name": "Unsloth Studio oauth2-proxy",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://unsloth.example.invalid",
+      "baseUrl": "https://unsloth.example.invalid/",
+      "redirectUris": ["https://unsloth.example.invalid/oauth2/callback"],
+      "webOrigins": ["https://unsloth.example.invalid"],
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://unsloth.example.invalid/*"},
       "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
       "optionalClientScopes": []
     },
