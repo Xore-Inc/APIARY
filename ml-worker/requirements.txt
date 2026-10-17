@@ -81,14 +81,14 @@ numpy==2.4.6
 pandas==3.0.6
 
 # Deep learning (CPU-only PyTorch)
-torch==2.14.0+cpu
+torch==2.14.1+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Outlier detection (HBOS). Pulls in numba+llvmlite -- see the numpy pin
 # above; this is the version set actually verified to install together.
 pyod==3.6.6
-numba==0.67.0
-llvmlite==0.49.0
+numba==0.68.0
+llvmlite==0.50.0
 
 # Redis pub/sub
 redis==8.1.0
