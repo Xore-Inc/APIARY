@@ -165,7 +165,7 @@ docker run -d --name "${kc}" --network "${network}" -p "127.0.0.1:${kc_port}:808
   -e "KC_HOSTNAME=http://127.0.0.1:${kc_port}" -e KC_HTTP_ENABLED=true -e KC_HEALTH_ENABLED=true \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=test-admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=test-only-not-real \
   -v "${rendered_realm}:/opt/keycloak/data/import/apiary-realm.json:ro" \
-  quay.io/keycloak/keycloak:26.7.1@sha256:f1f1f01e472c8a78df40d8f2a49a925274eda4d3d80d5f6edbb5c880ee3c01c6 \
+  quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244 \
   start --http-port=8080 --import-realm >/dev/null
 
 printf 'Waiting for the disposable Keycloak + realm import (up to 240s)...\n'
