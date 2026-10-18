@@ -48,7 +48,15 @@ def config(**changes):
         session_lookback_seconds=3600,
         daily_report_hour=6,
         context_length=8192,
-        output_tokens=512,
+        # The qualified sessions budget, not the 512 cap this fixture used to
+        # pin. It is the same number `approved-models.json` approves for the
+        # sessions slot and the same number evaluate-models.py's
+        # budget_for("sessions") sends, so the worker tests now exercise the
+        # session request at the budget the slot is actually qualified under.
+        # 2048 is the ceiling worker.py itself clamps at --
+        # env_int("LLM_OUTPUT_TOKENS", 512, 128, 2048) -- so this is a number
+        # a deployment can be asked for, not a benchmark-only budget.
+        output_tokens=2048,
         keep_alive="10m",
         payload_roots=(),
         log_level="INFO",
@@ -1122,11 +1130,24 @@ class OllamaContractTests(unittest.TestCase):
             (Path(__file__).resolve().parents[2] / "analysis/ghidra/models/approved-models.json").read_text()
         )
         approved = manifest["slots"]["sessions"]["runtime_request"]
+        # The output budget is asserted against the manifest's *qualification*
+        # request, not `runtime_request`. The two fields disagree on purpose:
+        # the sessions slot is qualified at 2048 (which is what
+        # budget_for("sessions") sends, and the manifest guard in
+        # evaluate_slot() enforces by exact equality), while the worker's
+        # shipped default and `runtime_request` still say 512. Reading the
+        # budget from `qualification_request` is what makes this assertion
+        # fail if either side drifts -- a fixture left at 512 or a manifest
+        # moved off 2048 both go red here rather than agreeing with each
+        # other on a stale number. Everything else the worker sends is still
+        # pinned to `runtime_request`, because seed 66 is what the worker
+        # actually puts on the wire.
+        qualified = manifest["slots"]["sessions"]["qualification_request"]
         self.assertFalse(request["allow_redirects"])
         self.assertEqual(request["json"]["think"], approved["thinking"])
         self.assertEqual(request["json"]["keep_alive"], approved["keep_alive"])
         self.assertEqual(request["json"]["options"]["num_ctx"], approved["context_tokens"])
-        self.assertEqual(request["json"]["options"]["num_predict"], approved["output_tokens"])
+        self.assertEqual(request["json"]["options"]["num_predict"], qualified["output_tokens"])
         self.assertEqual(request["json"]["options"]["temperature"], approved["temperature"])
         self.assertEqual(request["json"]["options"]["seed"], approved["seed"])
         self.assertEqual(request["json"]["format"]["additionalProperties"], False)
@@ -1135,6 +1156,21 @@ class OllamaContractTests(unittest.TestCase):
         self.assertEqual(annotation.intent, "reconnaissance")
         self.assertEqual(telemetry["prompt_tokens"], 100)
         self.assertFalse(fake_session.trust_env)
+
+        # Reading the budget out of the manifest only proves the two files
+        # agree, which is the part a reader cannot use: it says nothing about
+        # whether the number is one a deployment can be asked for. This is that
+        # check, and the bound comes from worker.py rather than from a literal
+        # restated here -- env_int("LLM_OUTPUT_TOKENS", 512, 128, 2048) raises
+        # above its ceiling, so a manifest raised past it goes red here instead
+        # of quietly describing a worker that would refuse to start. It is also
+        # why the 2048 sessions budget is a bound rather than a preference: the
+        # budget is real, its *qualification* is not (approved-models.json says
+        # so in slots.sessions.qualification_status), and this assertion is the
+        # half that stays true either way.
+        with patch.dict(os.environ, {"LLM_OUTPUT_TOKENS": str(qualified["output_tokens"])}):
+            deployed = worker.Config.from_env()
+        self.assertEqual(deployed.output_tokens, qualified["output_tokens"])
 
     def test_embed_returns_the_configured_dimensionality(self):
         fake_response = MagicMock()

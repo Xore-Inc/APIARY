@@ -28,6 +28,12 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
+
+# Running this as a script puts engine-benchmark/ on sys.path, not its parent --
+# add benchmarks/ so harmony_policy resolves, same pattern as corpus_eval.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from harmony_policy import refuse_harmony_model_without_adaptation  # noqa: E402
 
 # Production ai_triage's import budget: ghidra-worker.py slices its
 # deduplicated list to GHIDRA_TRIAGE_MAX_IMPORTS (default 150) and
@@ -123,6 +129,19 @@ def main():
 
     if args.engine in ("ollama", "vllm") and not args.model:
         raise SystemExit(f"--model is required for engine={args.engine}")
+
+    # --model is chosen here, so it is refused here: the call_* bodies above
+    # carry a num_predict and no #2233 harmony adaptation, so a gpt-oss tag
+    # burns the budget on an analysis channel and returns empty content, and
+    # every grounding score derived from it would be published as a zero the
+    # model never earned. Refused rather than widened -- see corpus_eval.py's
+    # refusal for the same argument. engine=llama_cpp takes one model per
+    # server process and ignores --model, so there is no tag to read a family
+    # off and nothing to refuse here.
+    if args.engine in ("ollama", "vllm"):
+        refuse_harmony_model_without_adaptation(
+            args.model, producer="engine-benchmark/run_real_corpus_eval.py",
+            num_predict=args.n_predict)
 
     files = sorted(glob.glob(os.path.join(args.evidence_dir, "*.evidence.json")))
     if not files:

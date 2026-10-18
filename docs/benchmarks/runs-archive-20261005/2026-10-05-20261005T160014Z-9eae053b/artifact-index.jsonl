@@ -1,0 +1,2 @@
+{"case": "rust-scanner-jsonl-summary", "model": "baronllm-llama3.1:q6_k", "paths": {}}
+{"case": "python-http-header-audit", "model": "baronllm-llama3.1:q6_k", "paths": {}}
