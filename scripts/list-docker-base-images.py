@@ -601,20 +601,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "not rebuilt it. Digest-keyed, so the next pin move re-applies "
         "the gate to whatever the tag then points at."
     ),
-    "ghcr.io/getarcaneapp/manager:v2.15.1": (
-        "sha256:540c01198ca3e58dfd398d25c57c8dc241fa7e7f3d1d8d646c8268f19525b1a8",
-        "measured 4 fixable HIGH in the /app/arcane binary: Go stdlib 1.27.1 "
-        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
-        "golang.org/x/net v0.59.0 (CVE-2026-78669). All are denial of "
-        "service; fixed only by a new Arcane release rebuilt on Go 1.27.2 "
-        "(v2.15.1 is the newest published tag). The pin is held at v2.15.1 "
-        "on purpose: the swarm epic (#3587) is built against this API and a "
-        "bump has not been verified compatible. The control plane is bound "
-        "to the WireGuard address only (HP_BIND, default 10.8.0.2 in "
-        "docker-compose.arcane.yml), not the public internet. Revisit when "
-        "Arcane ships a Go 1.27.2 build and the swarm work has been "
-        "validated against it."
-    ),
     "jasonish/evebox:latest": (
         "sha256:34be7618354071a19d2f16d7ebcde6556a960f414ed957a1e82495c42f152b6c",
         "measured 1 fixable HIGH: openssl-libs 3.5.8-1.el9_8 "
@@ -660,35 +646,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # reason: re-pinned to the 1.26.9 / 1.27.2 digests, measured clean.
     # The entry above is the one that had to be argued rather than bumped.
     # --- #3667: drift after #3668 -------------------------------------------
-    # technitium/dns-server:15.6.0 is held here because no fixed build exists.
-    # 15.6.1, the newest release (2026-10-11), was scanned and carries the same
-    # 12 findings: the ASP.NET Core and .NET 10.0.12 runtime bundled in the
-    # image, fixed in 10.0.13. The 15.6.1 changelog lists no runtime bump. It is
-    # not taken because it does not clear the gate. The DNS server runs on the
-    # homeserver LAN address only (technitium/compose.yml binds 53, 5380 and
-    # 53443 to ${LAN_IP}), so nothing is published to the internet. The
-    # advisory text was taken from third-party databases, not the MSRC
-    # entries, and whether this image's Kestrel accepts HTTP/2 or HTTP/3 on
-    # the console was not verified. CVE-2026-70188 is an HTTP/2 and HTTP/3
-    # request-trailer issue, so its reachability depends on that. The other
-    # advisory titles are ASP.NET Core bypass, DoS and privilege-escalation
-    # issues; the console requires an admin login. Digest-keyed: the exemption
-    # retires when Technitium ships a build on runtime 10.0.13 or later.
-    "technitium/dns-server:15.6.0": (
-        "sha256:1045db38fd2f2e4d9578f9168b7eb4862575469ed0ffc79e03f36bdc772a93b5",
-        "measured 12 fixable CRITICAL/HIGH, all ASP.NET Core / .NET runtime "
-        "advisories against the bundled 10.0.12 runtime (fixed in 10.0.13): "
-        "CVE-2026-70188 and CVE-2026-88092 (CRITICAL), plus 10 HIGH. Latest "
-        "15.6.1 (2026-10-11) measures the same 12. Exposure is LAN-only: "
-        "53, 5380 and 53443 are bound to ${LAN_IP} in technitium/compose.yml, "
-        "and nothing is published to the internet. The advisory text is from "
-        "third-party databases, not the MSRC entries. CVE-2026-70188 is an "
-        "HTTP/2 and HTTP/3 request-trailer issue whose reachability on this "
-        "console was not verified. The other ten are not individually "
-        "verified either, so this rests on the LAN-only exposure alone and "
-        "should be revisited if Technitium publishes a runtime-10.0.13 build. "
-        "Digest-keyed."
-    ),
     # sdk:10.0.402 is the newest 10.0 SDK. Its four findings are NuGet-packaged
     # System.Security.Cryptography.Pkcs and .Xml bundled in the SDK. Every
     # sdk reference in this tree is a build stage that is not shipped:

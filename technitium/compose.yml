@@ -22,7 +22,7 @@ services:
     # pinned 11.5.1 image reproduced exactly that on the 2026-09-04 rebuild.
     # Cluster members have to agree on major version; pin both, and move them
     # together.
-    image: technitium/dns-server:15.6.0@sha256:1045db38fd2f2e4d9578f9168b7eb4862575469ed0ffc79e03f36bdc772a93b5
+    image: technitium/dns-server:15.6.2@sha256:eb48ac5c135f4ab936b536f74f853d53e15ab39ef37fdbc9598a089b90d9f245
     container_name: technitium-dns
     restart: unless-stopped
     ports:
