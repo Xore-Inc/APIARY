@@ -88,7 +88,16 @@ pub struct IpProfile {
     pub first: String,
     pub last: String,
     pub country: String,
+    /// Deprecated (#3517): despite the name this holds the AS *organization
+    /// name* (`source.as.organization_name`), not an AS number. Kept
+    /// unchanged for existing consumers; use `as_organization` for the same
+    /// value and `as_number` for the actual number.
     pub asn: String,
+    /// #3517: the AS organization name, the same value `asn` carries.
+    pub as_organization: String,
+    /// #3517: the AS number (`source.as.asn`, a numeric field), absent when
+    /// the address has none.
+    pub as_number: Option<u64>,
     pub sensors: Vec<Kv>,
     pub ports: Vec<Kv>,
     pub protos: Vec<Kv>,
@@ -222,6 +231,29 @@ fn kv(result: &serde_json::Value, agg: &str) -> Vec<Kv> {
         .collect()
 }
 
+/// #3517: the AS number of the most frequent `source.as.asn` bucket, if any.
+/// The field is numeric in the index, so the bucket key is a JSON number;
+/// a string key is tolerated in case a mapping ever serves it as keyword.
+fn as_number_from(result: &serde_json::Value) -> Option<u64> {
+    let key = &result["aggregations"]["as_number"]["buckets"][0]["key"];
+    key.as_u64().or_else(|| key.as_str().and_then(|text| text.trim_start_matches("AS").parse().ok()))
+}
+
+/// #3517: (organization name, AS number) for the profile's `as_organization`
+/// / deprecated `asn` and `as_number` fields.
+fn as_profile(result: &serde_json::Value) -> (String, Option<u64>) {
+    let organization = kv(result, "asn").first().map(|row| row.key.clone()).unwrap_or_default();
+    (organization, as_number_from(result))
+}
+
+/// #3518: the real number of distinct sensors behind a correlation. `cardinality`
+/// is the `event.sensor` cardinality aggregation (exact below its precision
+/// threshold); the portbridge pseudo-sensor is appended to the top-N list
+/// separately, so it is counted here too. Never below the list actually shown.
+fn sensors_total(cardinality: u64, portbridge_total: u64, listed: usize) -> u64 {
+    (cardinality + u64::from(portbridge_total > 0)).max(listed as u64)
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/investigate/ip/{ip}",
@@ -230,7 +262,7 @@ fn kv(result: &serde_json::Value, agg: &str) -> Vec<Kv> {
         ("ip" = inline(String), Path, description = "Source address to profile. A non-address is a 400."),
     ),
     responses(
-        (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 200, description = "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count.", body = inline(serde_json::Value), content_type = "application/json"),
         (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
         (status = 404, description = "No such record, store, or route for the values given.", body = String, content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
@@ -260,6 +292,7 @@ pub async fn ip(
             "last": {"max": {"field": "@timestamp"}},
             "country": {"terms": {"field": "source.geo.country_iso_code", "size": 1}},
             "asn": {"terms": {"field": "source.as.organization_name", "size": 1}},
+            "as_number": {"terms": {"field": "source.as.asn", "size": 1}},
             "sensors": {"terms": {"field": "event.sensor", "size": 30}},
             "ports": {"terms": {"field": "destination.port", "size": 20}},
             "protos": {"terms": {"field": "network.protocol", "size": 20}},
@@ -323,6 +356,7 @@ pub async fn ip(
         .unwrap_or_default();
 
     let is_confirmed = confirmed_malicious(&state, &ip).await;
+    let (as_organization, as_number) = as_profile(&aggs);
     Ok(Json(IpProfile {
         confirmed_malicious: is_confirmed,
         ip,
@@ -330,7 +364,9 @@ pub async fn ip(
         first: text(&aggs["aggregations"]["first"]["value_as_string"]),
         last: text(&aggs["aggregations"]["last"]["value_as_string"]),
         country: kv(&aggs, "country").first().map(|row| row.key.clone()).unwrap_or_default(),
-        asn: kv(&aggs, "asn").first().map(|row| row.key.clone()).unwrap_or_default(),
+        asn: as_organization.clone(),
+        as_organization,
+        as_number,
         sensors: kv(&aggs, "sensors"),
         ports: kv(&aggs, "ports"),
         protos: kv(&aggs, "protos"),
@@ -422,7 +458,12 @@ fn portbridge_row(src: &Value) -> EventRow {
 pub struct Correlation {
     pub total: u64,
     pub truncated: bool,
+    /// The top 10 sensors by event count (plus the portbridge pseudo-sensor).
     pub sensors: Vec<Kv>,
+    /// #3518: the real distinct-sensor count (`cardinality` on
+    /// `event.sensor`, plus the portbridge pseudo-sensor when it has hits).
+    /// Always >= `sensors.len()`.
+    pub sensors_total: u64,
     pub tunnel_connections: u64,
     pub tunnel_os_guesses: Vec<String>,
     pub records: Vec<EventRow>,
@@ -438,7 +479,10 @@ async fn build_correlation(state: &AppState, filter: Value, portbridge_filter: V
         "size": 0,
         "track_total_hits": true,
         "query": filter,
-        "aggs": {"sensors": {"terms": {"field": "event.sensor", "size": 30}}}
+        "aggs": {
+            "sensors": {"terms": {"field": "event.sensor", "size": 30}},
+            "sensors_total": {"cardinality": {"field": "event.sensor"}}
+        }
     });
     let events_body = json!({
         "size": CORRELATION_LIMIT,
@@ -480,6 +524,11 @@ async fn build_correlation(state: &AppState, filter: Value, portbridge_filter: V
     }
     sensors.sort_by_key(|s| std::cmp::Reverse(s.count));
     sensors.truncate(10);
+    let sensors_total = sensors_total(
+        aggs["aggregations"]["sensors_total"]["value"].as_u64().unwrap_or(0),
+        portbridge_total,
+        sensors.len(),
+    );
 
     let mut tunnel_os_guesses: Vec<String> = kv(&portbridge, "os").into_iter().map(|row| row.key).collect();
     tunnel_os_guesses.sort();
@@ -489,6 +538,7 @@ async fn build_correlation(state: &AppState, filter: Value, portbridge_filter: V
         total,
         truncated: total > records.len() as u64,
         sensors,
+        sensors_total,
         tunnel_connections: portbridge_total,
         tunnel_os_guesses,
         records,
@@ -523,7 +573,7 @@ pub struct CidrCorrelation {
         ("cidr" = inline(String), Path, description = "CIDR block to correlate. A malformed block is a 400."),
     ),
     responses(
-        (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 200, description = "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count.", body = inline(serde_json::Value), content_type = "application/json"),
         (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
     ),
@@ -611,7 +661,7 @@ fn parse_asn_value(value: &str) -> Option<i64> {
         ("value" = inline(Option<String>), Query, description = "The cluster's value, as /api/v1/clusters reports it."),
     ),
     responses(
-        (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 200, description = "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count.", body = inline(serde_json::Value), content_type = "application/json"),
         (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
         (status = 404, description = "No such record, store, or route for the values given.", body = String, content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
@@ -716,5 +766,60 @@ mod tests {
         );
         assert!(cluster_membership_filter("asn", "not-an-asn").is_none());
         assert!(cluster_membership_filter("bogus-kind", "x").is_none());
+    }
+
+    #[test]
+    fn as_number_reads_the_numeric_source_as_asn_bucket() {
+        let aggs = json!({"aggregations": {"as_number": {"buckets": [{"key": 15169, "doc_count": 4}]}}});
+        assert_eq!(as_number_from(&aggs), Some(15169));
+        let keyword = json!({"aggregations": {"as_number": {"buckets": [{"key": "AS64512", "doc_count": 1}]}}});
+        assert_eq!(as_number_from(&keyword), Some(64512));
+        let none = json!({"aggregations": {"as_number": {"buckets": []}}});
+        assert_eq!(as_number_from(&none), None);
+        assert_eq!(as_number_from(&json!({})), None);
+    }
+
+    #[test]
+    fn as_profile_pairs_the_organization_with_the_number() {
+        let aggs = json!({"aggregations": {
+            "asn": {"buckets": [{"key": "Example Hosting", "doc_count": 2}]},
+            "as_number": {"buckets": [{"key": 64512, "doc_count": 2}]}
+        }});
+        assert_eq!(as_profile(&aggs), ("Example Hosting".to_string(), Some(64512)));
+        assert_eq!(as_profile(&json!({})), (String::new(), None));
+    }
+
+    #[test]
+    fn ip_profile_aggregates_the_as_number_from_source_as_asn() {
+        // The profile's aggregation body is built inline in `ip`; guard the
+        // field names the parsers above depend on.
+        let src = include_str!("investigate.rs");
+        assert!(src.contains(r#""as_number": {"terms": {"field": "source.as.asn", "size": 1}}"#));
+        assert!(src.contains(r#""asn": {"terms": {"field": "source.as.organization_name", "size": 1}}"#));
+    }
+
+    #[test]
+    fn sensors_total_counts_portbridge_and_never_undercuts_the_list() {
+        assert_eq!(sensors_total(34, 0, 10), 34);
+        assert_eq!(sensors_total(34, 5, 10), 35);
+        // A zero/failed cardinality still reports at least what is listed.
+        assert_eq!(sensors_total(0, 7, 3), 3);
+        assert_eq!(sensors_total(2, 0, 2), 2);
+    }
+
+    #[test]
+    fn correlation_serializes_sensors_total_beside_the_capped_list() {
+        let correlation = Correlation {
+            total: 0,
+            truncated: false,
+            sensors: vec![Kv { key: "a".into(), count: 1 }],
+            sensors_total: 34,
+            tunnel_connections: 0,
+            tunnel_os_guesses: Vec::new(),
+            records: Vec::new(),
+        };
+        let wire = serde_json::to_value(&correlation).unwrap();
+        assert_eq!(wire["sensors_total"], 34);
+        assert_eq!(wire["sensors"].as_array().unwrap().len(), 1);
     }
 }
