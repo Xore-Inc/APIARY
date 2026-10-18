@@ -20,7 +20,7 @@ for restoring onto a replacement host see
 | `homeserver/env/*.env` | one file per Arcane/Dockge stack (40 under `/var/dockge/stacks/` as of 2026-09-27) |
 | `homeserver/secrets/` | secret files kept beside a stack rather than in its `.env` |
 | `homeserver/wireguard/` | `wg0.conf` including the private key |
-| `homeserver/installer/` | `install-homeserver.conf` — the installer's answers file, which exists only on the root filesystem a reinstall wipes |
+| `homeserver/installer/` | the installer's answers file(s), which exist only on the root filesystem a reinstall wipes. Collected from every place it lives (`/etc/apiary/install-home.conf`, `/root/apiary-install/`, `/home/*/install/`, and the older `/root/`, `/home/*/`), named after the full source path with `_` for `/`, mtimes kept — restore the newest |
 | `homeserver/technitium/` | hand-maintained Technitium DNS config |
 | `homeserver/keycloak/keycloak.sql.gz` | `pg_dump` of the identity DB — realm, clients, client secrets, users |
 | `homeserver/es-operator-state/` | the dashboard's operator-authored Elasticsearch documents, as mapping + NDJSON — see [Operator state](#operator-state) |
@@ -181,13 +181,39 @@ re-run with `CONFIRM_NEW_PASSPHRASE=1` to accept minting a fresh one.
 
 ## Running it
 
+### Required items and exit status
+
+A run exits **0 only if every required item was collected and the archive
+reached all three destinations** (#3709). Otherwise it exits 1 and prints an
+`ERROR:` line for each problem, so the systemd unit goes red and the journal
+says why. The archive is still written to whatever is reachable — a partial
+backup beats none — and `MANIFEST.txt` inside it records `status INCOMPLETE`
+and what was missing.
+
+| Required item | Looked for at | Why it cannot be skipped |
+|---|---|---|
+| installer answers file | `homeserver/installer/` | `install-homeserver.sh` will not run without it; not reconstructible from the repo |
+| operator-state export | `homeserver/es-operator-state/MANIFEST.txt` | dashboard config, users, alert acks — in no other backup |
+| Keycloak dump | `homeserver/keycloak/keycloak.sql.gz` | the realm, client secrets and users |
+| stack `.env` files | `homeserver/env/*.env` (at least one) | the generated secrets that exist nowhere in git |
+| WireGuard keys | `homeserver/wireguard/` | the homeserver's peer record on the VPS is valid only with this key |
+
+The checks run on the collected tree, not on the remote side's own messages, so
+a collector that logs and carries on cannot produce a "successful" archive
+without them. A destination that is unplugged, not mounted, not writable or
+fails its checksum counts as a failed destination in the exit status; the
+`mountpoint -q` guard stays, and `/run`, `/run/media`, `/media` and `/mnt`
+themselves never count as a USB mount (the first is a tmpfs on every systemd
+host), so an unattended run never writes into the wrong filesystem.
+
 ```bash
 scripts/backup-essentials.sh              # collect and fan out
 scripts/backup-essentials.sh --dry-run    # collect, print the tree and size, discard
 scripts/backup-essentials.sh --list       # what each destination currently holds
 scripts/backup-essentials.sh --check      # exit non-zero if the newest archive
                                            # anywhere is missing or stale (>48h,
-                                           # override with MAX_AGE_HOURS)
+                                           # override with MAX_AGE_HOURS), or the
+                                           # installed copy is older than the checkout
 ```
 
 Nothing runs `--check` on a schedule today; wire it into whatever host health
@@ -211,8 +237,21 @@ Installs `apiary-backup-essentials.timer` — daily, ±30 min jitter,
 at the next boot instead of being skipped.
 
 The installer copies the script to `/usr/local/libexec/apiary-backup-essentials.sh`
-and points the unit there, so **re-run the installer after a `git pull`** to
-pick up a new version.
+and points the unit there, so **re-run the installer after every `git pull`**
+that touches `scripts/backup-essentials.sh`; nothing else refreshes the copy
+the timer runs. Forgetting did real damage once: the copy on the backup host
+was six weeks old, predated the operator-state export, and every archive in
+that time lacked the dashboard operator state (#3708/#3709).
+
+The installer therefore also writes `/usr/local/libexec/apiary-backup-essentials.sh.src-sha256`,
+the sha256 of the checkout script it copied. Every run, and `--check`, compares
+that with `$REPO_DIR/scripts/backup-essentials.sh` and logs
+`WARNING: installed copy ... is older than the checkout` (or `has no install
+stamp`, for a copy installed before stamping existed) with the exact command to
+run; `--check` exits non-zero on it. It is deliberately only a warning for the
+scheduled run — a checkout sitting on a feature branch should not break the
+backup — but it is repeated at the end of the run's output so it is the last
+thing in the journal.
 
 That is the opposite of `analysis/install-backup-timer.sh`, which deliberately
 runs `backup-honeypot.sh` in place — but that script tars up the very checkout
@@ -254,7 +293,7 @@ cat /tmp/restore/MANIFEST.txt
 
 Then, onto a rebuilt host:
 
-**Before any of the below**, put `homeserver/installer/*-install-homeserver.conf`
+**Before any of the below**, put the newest file in `homeserver/installer/`
 back at the path you intend to pass to `scripts/install-homeserver.sh --config`.
 The installer will not run without it, and it is not reconstructible from the
 repository — `install-homeserver.conf.example` carries only placeholders.
