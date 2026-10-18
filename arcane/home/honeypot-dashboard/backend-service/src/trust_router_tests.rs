@@ -477,9 +477,13 @@ async fn stamped_attribution_is_the_verified_operator_under_enforce_only() {
         assert!(let_in(status), "{mode:?}: {status} {text}");
         assert_eq!(b.upstream.last("POST", "/ml-anomalies/_update/anomaly-1")["doc"]["disposition_by"], username, "{mode:?} disposition");
 
-        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ip-block", Some(json!({"ip": "192.0.2.9", "blocked": true, "actor": "bob"}))).await;
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ip-block", Some(json!({"ip": "192.0.2.9", "blocked": true, "expires_days": 7, "actor": "bob"}))).await;
         assert!(let_in(status), "{mode:?}: {status} {text}");
         assert_eq!(b.upstream.last("POST", "/dashboard-ip-block-v1/_doc/192.0.2.9")["BlockedBy"], username, "{mode:?} ip-block");
+        // #3525: a block without a duration is refused before it is written.
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/ip-block", Some(json!({"ip": "192.0.2.10", "blocked": true}))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{mode:?}: {text}");
+        assert!(text.contains("expires_days"), "{mode:?}: {text}");
 
         // A viewer may file a problem report; the display name the client
         // supplied cannot be verified, so enforce drops it and the record
