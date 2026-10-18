@@ -38,4 +38,6 @@ qwen2.5-coder-7b-base:q4_k_m
 #   (Glyph Proprietary License v1.0, signed agreement), same wall the
 #   BaronLLM candidate hit in #661 -- pull needs an authorized HF token on
 #   the serving host or it fails the same way.
-hf.co/glyphsoftware/sentinel-r3-gguf:q4_k_m
+hf.co/glyphsoftware/sentinel-r3-gguf:Q4_K_M
+#   OrcaSAQ models (#3493 shortlist):
+hf.co/orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF:Q4_K_M

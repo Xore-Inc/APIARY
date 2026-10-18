@@ -10,9 +10,9 @@ record, literature review, measurements, and recommendations live in
 
 - Fixtures are synthetic and use only TEST-NET addresses, reserved
   `.test`/`.invalid` names, and fake credentials.
-- Input is sent only to the configured Ollama URL, which defaults to loopback.
-- The script never executes fixture content or manages a process, container,
-  VM, network rule, or model download.
+- Native input is sent only to the configured Ollama URL, which defaults to loopback.
+- The CLI mode starts an isolated Claude Code or OpenCode process and loopback bridge. It never
+  executes generated programs or downloads models.
 - GPU telemetry is read with `nvidia-smi`; its absence is reported as `null`.
 - Each candidate is explicitly unloaded before the next one.
 
@@ -20,6 +20,56 @@ Review every new fixture for routable addresses, real secrets, and executable
 side effects before committing it.
 
 ## Run
+
+### Coding CLI harness
+
+Install Claude Code on the benchmark host, then run a distinct Claude Code
+measurement. Keep native and CLI harness scores in separate transcript roots;
+they include different agent prompts and tool loops. The CLI benchmark retains
+the existing `--engine` selection beneath a local loopback bridge. Claude Code
+speaks Anthropic Messages to that bridge, which translates calls to the current
+llama.cpp/Ollama/Colibri transport and exposes sandboxed benchmark file tools
+through MCP. Anthropic documents custom Messages gateways but does not support
+routing Claude Code to non-Claude models; this local compatibility path is an
+experimental measurement harness, not an Anthropic-supported configuration.
+
+Run deterministic bridge/unit checks with
+`python3 analysis/ghidra/benchmarks/tests/test_claude_code_cli.py`. On a runner
+with Claude Code installed, exercise the real CLI against a local stub backend
+with `APIARY_CLAUDE_INTEGRATION=1 python3 analysis/ghidra/benchmarks/tests/test_claude_code_cli.py`.
+OpenCode remains an explicit alternate with `--harness opencode`.
+
+```bash
+python3 analysis/ghidra/benchmarks/evaluate-models.py \
+  --harness claude --coding-cli-bin claude --engine llamacpp \
+  --base-url http://127.0.0.1:11434 \
+  --slots ghidra,sessions,revdeck,coder \
+  --provenance live_model --transcript-dir /var/lib/benchmark-runs/cli-transcripts \
+  MODEL_TAG
+```
+
+`--coding-cli-bin`, `--coding-cli-timeout` (seconds, default 9000), and
+`--coding-cli-steps` (default 16) set the installed CLI, per-request wall clock,
+and agent turn cap. `--harness native` runs the original direct harness.
+CLI mode requires transcripts. Every case is attempted even if an earlier CLI
+request fails; timeout, backend error, and step cap give that case a non-`ok`
+record. Tool support is measured by attempting the CLI, not inferred from
+Ollama capability metadata.
+
+Claude Code runs use schema `apiary-benchmark-transcript-v1` and the distinct
+benchmark version `-claude-code-cli-v1`. Each transcript records the original
+harness request, actual CLI messages, session ID, CLI version, and
+`response.cli_artifacts`. Under that run's
+`coder-artifacts/<model>/<slot>/<case>/round-NN/`, `wire.jsonl` holds complete
+Anthropic Messages requests and backend responses, `cli.jsonl` holds raw CLI
+events, `session.jsonl` holds Claude Code's native session, and `home/` contains
+isolated configuration and session storage. `stderr.txt`
+holds diagnostics. The source files, per-case manifests, compiler diagnostics,
+and retained binaries/bytecode remain under `coder-artifacts/<model>/` for
+manual grading. Generated programs are never executed. The CLI permits
+workspace read, write, edit, glob, and grep; Bash, task delegation, web, and
+external directory access are denied. Run this on a host with appropriate
+process and filesystem isolation for untrusted model output.
 
 Install candidate tags as a separate reviewed operator action, then run the
 three approved/candidate slots on the analysis host. The benchmark never pulls
