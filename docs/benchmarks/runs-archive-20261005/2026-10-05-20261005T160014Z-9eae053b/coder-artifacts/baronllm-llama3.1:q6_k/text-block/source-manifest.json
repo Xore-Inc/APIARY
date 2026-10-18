@@ -1,0 +1,18 @@
+{
+  "case": "python-http-header-audit",
+  "sandbox_dir": "/home/xore/.hermes/cache/scratch/coder-python-http-header-audit-6oe36stc",
+  "files_written": 0,
+  "writes_accepted": 0,
+  "writes_rejected": 0,
+  "file_mechanism": "none",
+  "text_blocks_seen": 0,
+  "text_blocks_written": 0,
+  "text_blocks_refused": 0,
+  "sources": {
+    "tool": {},
+    "text": {}
+  },
+  "shadowed": [],
+  "executed": false,
+  "files": []
+}
