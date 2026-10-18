@@ -6514,7 +6514,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
@@ -6598,7 +6598,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
@@ -6744,7 +6744,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
