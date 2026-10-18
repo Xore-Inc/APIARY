@@ -7072,7 +7072,7 @@
               "schema": {}
             }
           },
-          "description": "Deserialized by the handler into `BlockBody`. The shape is left open here on purpose -- see the module doc.",
+          "description": "Deserialized by the handler into `BlockBody`: `{ip, blocked, expires_days?, actor?}`. `expires_days` (days, integer >= 0) is required when `blocked` is true and `0` means a permanent block; omitting it on a block is a 422. It is ignored on an unblock. `actor` is bound to the verified actor. The shape is left open here on purpose -- see the module doc.",
           "required": true
         },
         "responses": {
@@ -7122,7 +7122,7 @@
                 }
               }
             },
-            "description": "Well-formed but unprocessable. Two causes, both text/plain: the Json<T> extractor refused the body before the handler ran, or the route's own domain check rejected the reference it was asked to resolve (the reports store answers this for an unresolvable scope or an unexpected storage failure)."
+            "description": "Well-formed but unprocessable: the Json<T> extractor refused the body before the handler ran, or `blocked` is true and `expires_days` is absent (send `0` for a permanent block)."
           },
           "502": {
             "content": {

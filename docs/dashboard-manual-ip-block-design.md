@@ -47,9 +47,11 @@ anywhere other than the per-IP attacker page.
 
 ## Decision 2: lifecycle — manual unblock, with an optional per-block expiry
 
-A manual block stays active until an operator explicitly unblocks it, unless
-the operator sets an expiry at block time (`expires_days` on the block form),
-in which case it also lapses automatically once that many days pass. Both
+A manual block stays active until an operator explicitly unblocks it, or the
+duration chosen at block time lapses. The duration is explicit (#3525):
+`POST /api/v1/ip-block` requires `expires_days` when `blocked` is true (422
+if absent), `0` means permanent, and the block form defaults to 7 days. Any
+positive value lapses automatically once that many days pass. Both
 paths exist side by side rather than picking one: an operator blocking known,
 durable malicious infrastructure wants a permanent block with the same
 "acknowledged until reopened" lifecycle `alerts.go`/`ml_anomaly_ack.go`
