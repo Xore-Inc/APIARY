@@ -81,7 +81,7 @@ in a port-binding position, remote build contexts pinned to a Git tag, the
 sync file-count limit, and stale project records after a `destroy` call
 all have confirmed workarounds documented there). Those were each confirmed
 against `v2.8.0`–`v2.9.0`; `docker-compose.arcane.yml` now pins
-`manager:v2.15.1`, and none of them has been re-confirmed against that
+`manager:v2.16.1`, and none of them has been re-confirmed against that
 image — its own section header says to re-verify on upgrade.
 
 ## WireGuard addressing
