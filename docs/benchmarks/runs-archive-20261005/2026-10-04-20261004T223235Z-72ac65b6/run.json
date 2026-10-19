@@ -1,0 +1,14 @@
+{
+  "benchmark": "honeypot-stack-issue-158-v2",
+  "finished_at": "2026-10-04T22:32:35Z",
+  "notes": null,
+  "operator": "xore",
+  "provenance": "synthetic",
+  "record_count": 0,
+  "run_id": "20261004T223235Z-72ac65b6",
+  "schema_version": "apiary-benchmark-transcript-v1",
+  "started_at": "2026-10-04T22:32:35Z",
+  "supersedes": null,
+  "transcripts": "/home/xore/Github/APIARY/docs/benchmarks/runs/2026-10-04-20261004T223235Z-72ac65b6/transcripts.jsonl",
+  "transcripts_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

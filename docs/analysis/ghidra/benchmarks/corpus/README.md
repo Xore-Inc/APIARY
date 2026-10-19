@@ -301,7 +301,7 @@ per-case scores, wall time, and the model's raw answer text are in
 `baseline_results.json`.
 
 **#1948 re-measurement** (`baseline_results_1948_remeasure.json`, transcripts
-in `docs/benchmarks/runs/2026-08-26-20260826T234418Z-ee529ed9/`): since the
+in `docs/benchmarks/runs-archive-20261005/2026-08-26-20260826T234418Z-ee529ed9/`): since the
 fixture change alters `process_and_injection`'s compiled artifact -- and with
 it every hash and listing touching that one case -- a fresh Tier A run was
 recorded against the same checkpoint (tag + digest identical,

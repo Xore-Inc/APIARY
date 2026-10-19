@@ -14,12 +14,15 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 # Running this as a script puts its own directory (engine-benchmark/) on
 # sys.path, not its parent -- add benchmarks/ so the sibling polarity module
 # resolves, same pattern as record_baseline.py and evaluate-models.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from harmony_policy import refuse_harmony_model_without_adaptation  # noqa: E402
 from polarity import forbidden_hit  # noqa: E402  (path set above so the sibling module resolves)
+from transcripts import was_capped  # noqa: E402  (same path set above)
 
 CASES8 = [
     "error_handling_alloc", "indirect_dispatch", "linked_list_sum", "loopback_connect",
@@ -71,6 +74,21 @@ def score(text, rubric_entry):
     return points, mx, injection_ok, False
 
 
+class Completion(NamedTuple):
+    """What an engine returned: the answer text, and how generation ended.
+
+    `done_reason` is carried out of the helper rather than dropped at the wire
+    boundary, because was_capped() needs it and a bare string cannot hand it
+    over. Each helper normalises its own engine's field name into the
+    vocabulary transcripts.CLEAN_DONE_REASONS reads, so the scoring site
+    decides every engine the same way. `None` means the engine reported no
+    finish reason at all, which is a separate case from "finished" and scored
+    separately -- see main().
+    """
+    text: str
+    done_reason: str | None
+
+
 def call_ollama(base_url, model, prompt, n_predict, repeat_penalty, seed):
     body = json.dumps({
         "model": model, "prompt": prompt, "stream": False,
@@ -78,7 +96,8 @@ def call_ollama(base_url, model, prompt, n_predict, repeat_penalty, seed):
     }).encode()
     req = urllib.request.Request(f"{base_url}/api/generate", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=180) as r:
-        return json.load(r)["response"]
+        res = json.load(r)
+    return Completion(res["response"], res.get("done_reason"))
 
 
 def call_llama_cpp(base_url, prompt, n_predict, repeat_penalty, seed):
@@ -95,7 +114,17 @@ def call_llama_cpp(base_url, prompt, n_predict, repeat_penalty, seed):
     }).encode()
     req = urllib.request.Request(f"{base_url}/completion", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=180) as r:
-        return json.load(r)["content"]
+        res = json.load(r)
+    # llama-server names it stop_type, not done_reason, and "limit" is the
+    # output cap that ended generation. Mapped here so the three engines hand
+    # the scoring site one field: an unrecognised stop_type falls through to
+    # "stop" (was_capped treats anything outside CLEAN_DONE_REASONS as
+    # truncated, and refusing every llama.cpp run for naming its field
+    # differently would be the same defect pointed the other way). An absent
+    # stop_type stays None rather than being read as a clean finish.
+    stop_type = res.get("stop_type")
+    done_reason = "length" if stop_type == "limit" else ("stop" if stop_type else None)
+    return Completion(res["content"], done_reason)
 
 
 def call_vllm(base_url, model, prompt, n_predict, seed, top_k=None, repetition_penalty=None):
@@ -113,7 +142,12 @@ def call_vllm(base_url, model, prompt, n_predict, seed, top_k=None, repetition_p
     body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{base_url}/v1/completions", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=180) as r:
-        return json.load(r)["choices"][0]["text"]
+        res = json.load(r)
+    # OpenAI-compatible finish_reason ("stop" / "length"), already in the
+    # vocabulary CLEAN_DONE_REASONS uses. Same tolerant read as
+    # record_baseline.py:592 rather than indexing a possibly-absent list.
+    choice = (res.get("choices") or [{}])[0]
+    return Completion(choice.get("text") or "", choice.get("finish_reason"))
 
 
 def main():
@@ -140,6 +174,21 @@ def main():
     if args.engine in ("ollama", "vllm") and not args.model:
         raise SystemExit(f"--model is required for engine={args.engine}")
 
+    # --model is chosen here, so it is refused here. The three call_* bodies
+    # above carry a num_predict and no #2233 harmony adaptation: for a gpt-oss
+    # tag the whole 150-token budget goes into the analysis channel and every
+    # completion comes back empty, so this would publish 0/64 as though the
+    # model had found nothing. Refused rather than widened -- raising n-predict
+    # to the floor here would put a budget on the wire that nothing declares,
+    # which is the same declared-vs-sent lie the floor guard exists to stop.
+    # engine=llama_cpp cannot be checked at all: one model per server process
+    # and --model is ignored for it, so there is no tag here to read the family
+    # off. Serve gpt-oss through evaluate-models.py instead.
+    if args.engine in ("ollama", "vllm"):
+        refuse_harmony_model_without_adaptation(
+            args.model, producer="engine-benchmark/corpus_eval.py",
+            num_predict=args.n_predict)
+
     builds = select_builds(args.manifest)
     rubric = json.load(open(args.rubric))["cases"]
 
@@ -152,12 +201,12 @@ def main():
         prompt = build_prompt(b["stripped"]["disassembly"])
         try:
             if args.engine == "ollama":
-                text = call_ollama(args.base_url, args.model, prompt, args.n_predict, args.repeat_penalty, args.seed)
+                completion = call_ollama(args.base_url, args.model, prompt, args.n_predict, args.repeat_penalty, args.seed)
             elif args.engine == "llama_cpp":
-                text = call_llama_cpp(args.base_url, prompt, args.n_predict, args.repeat_penalty, args.seed)
+                completion = call_llama_cpp(args.base_url, prompt, args.n_predict, args.repeat_penalty, args.seed)
             else:
-                text = call_vllm(args.base_url, args.model, prompt, args.n_predict, args.seed,
-                                  top_k=args.vllm_top_k, repetition_penalty=args.vllm_repetition_penalty)
+                completion = call_vllm(args.base_url, args.model, prompt, args.n_predict, args.seed,
+                                       top_k=args.vllm_top_k, repetition_penalty=args.vllm_repetition_penalty)
         except Exception as e:
             print(f"  [{i+1}/32] {case} {slice_key}: ERROR {e}", file=sys.stderr)
             # The errored build participated in the slice whether the engine
@@ -176,7 +225,34 @@ def main():
             s = per_slice.setdefault(slice_key, {"score": 0, "max": 0})
             s["max"] += mx
             continue
+        text = completion.text
+        # #3172: a completion cut off at n_predict is half an answer that never
+        # reached a verdict, and it used to score as whatever it happened to
+        # contain -- the required-group point plus the forbidden-avoidance gate,
+        # both paid by a fragment the model never finished writing. The
+        # empty-answer guard in score() catches the wrong end of this hole: a
+        # capped answer is normally non-empty, just cut off.
+        #
+        # was_capped() is the same predicate claims.py:686 and
+        # regenerate_pre_2393.py:217 decide with, so the published score and
+        # the stored outcome cannot disagree about which answers completed.
+        # Reusing it rather than restating the rule is what keeps the two from
+        # drifting apart again.
+        #
+        # The second half is deliberately not was_capped(): it reads a missing
+        # done_reason as "not evidence of truncation" (Ollama omits the field on
+        # some paths), but an answer with no recorded finish reason cannot be
+        # shown to have finished either. regenerate_pre_2393.py:84 reaches the
+        # same conclusion via NO_DONE_REASON_NOTE, so absence of evidence is
+        # not credited as completion here either.
+        #
+        # Zeroed, not re-weighted, and not a refusal: `mx` is untouched so the
+        # build keeps its full place in the denominator and a capped engine is
+        # penalised once rather than twice.
+        capped = was_capped({"done_reason": completion.done_reason}) or completion.done_reason is None
         pts, mx, inj_ok, empty_answer = score(text, rubric[case])
+        if capped:
+            pts, inj_ok = 0, False
         total_score += pts
         total_max += mx
         s = per_slice.setdefault(slice_key, {"score": 0, "max": 0})
@@ -190,6 +266,10 @@ def main():
             "case": case, "slice": slice_key, "score": pts, "max": mx,
             "inj_ok": inj_ok, "completion": text,
             "empty_answer": empty_answer,
+            # The evidence behind a zero the way empty_answer is the evidence
+            # behind the other one, so a capped build in the report can be
+            # told apart from one that merely finished badly.
+            "done_reason": completion.done_reason,
         })
         print(f"  [{i+1}/32] {case:24s} {slice_key:18s} {pts}/{mx}  inj_ok={inj_ok}", file=sys.stderr)
 
