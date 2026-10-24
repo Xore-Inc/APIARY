@@ -666,6 +666,27 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "Pkcs API, so the flagged parsers do not run. Retires on the next "
         "SDK digest move."
     ),
+    # --- #3720: brotli-libs 1.2.0-r1, measured 2026-10-24 --------------------
+    # Alpine fixed CVE-2026-111497 in brotli-libs 1.2.1-r0, but neither image
+    # below has been rebuilt on it yet. Both are the newest published
+    # build of their tag (curl 8.23.0 == curlimages/curl:latest; php
+    # 8.5-cli-alpine == 8.5-cli-alpine3.24), so there is no bump that
+    # clears the finding. The only finding in each is that one HIGH.
+    # Each retires itself on the next digest move.
+    "curlimages/curl:8.23.0": (
+        "sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac",
+        "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
+        "fixed in 1.2.1-r0). Used as a healthcheck/probe client against this "
+        "repo's own internal services, not to fetch content from untrusted "
+        "peers."
+    ),
+    "php:8.5-cli-alpine": (
+        "sha256:d386a12bad6b5dbee1f7dbd0291a4526dbfcbe5cfc0e8833de8d8309be8f3e50",
+        "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
+        "fixed in 1.2.1-r0. brotli-libs is reachable only through libcurl "
+        "content decoding; tanner's phpox sandbox executes captured PHP "
+        "without outbound network access."
+    ),
 }
 
 

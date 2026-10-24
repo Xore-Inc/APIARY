@@ -2641,7 +2641,7 @@ step_verify_exited() {
 }
 
 step_verify_elasticsearch_events() {
-  docker run --rm --network honeynet curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -sf \
+  docker run --rm --network honeynet curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -sf \
     http://elasticsearch:9200/honeypot-v2-*/_count >/dev/null
 }
 

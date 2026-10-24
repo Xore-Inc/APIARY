@@ -148,7 +148,7 @@ bad()  { printf '  FAIL  %s\n' "$*"; fail=1; }
 wait_for_proxy_ready() {
   local name="$1"
   for _ in $(seq 1 30); do
-    code=$(docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -o /dev/null -w '%{http_code}' "http://${name}:4180/ping" 2>/dev/null || true)
+    code=$(docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -o /dev/null -w '%{http_code}' "http://${name}:4180/ping" 2>/dev/null || true)
     [ "${code}" = "200" ] && return 0
     sleep 1
   done
@@ -168,18 +168,18 @@ docker run -d --name "${kc}" --network "${network}" \
   -e KC_DB_USERNAME=keycloak -e KC_DB_PASSWORD=test-only-not-real \
   -e "KC_HOSTNAME=http://${kc}:8080" -e KC_HTTP_ENABLED=true -e KC_HEALTH_ENABLED=true \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=test-admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=test-only-not-real \
-  quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244 \
+  quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b \
   start --http-port=8080 >/dev/null
 
 printf 'Waiting for the disposable Keycloak...\n'
 for _ in $(seq 1 60); do
-  code=$(docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -o /dev/null -w '%{http_code}' "http://${kc}:8080/realms/master" 2>/dev/null || true)
+  code=$(docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -o /dev/null -w '%{http_code}' "http://${kc}:8080/realms/master" 2>/dev/null || true)
   [ "${code}" = "200" ] && break
   sleep 2
 done
 
 admin_token() {
-  docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -X POST "http://${kc}:8080/realms/master/protocol/openid-connect/token" \
+  docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -X POST "http://${kc}:8080/realms/master/protocol/openid-connect/token" \
     -d grant_type=password -d client_id=admin-cli -d username=test-admin -d password=test-only-not-real \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])"
 }
@@ -209,7 +209,7 @@ realm_json=$(cat <<EOF
 }
 EOF
 )
-import_status=$(docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -o /dev/null -w '%{http_code}' \
+import_status=$(docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -o /dev/null -w '%{http_code}' \
   -X POST "http://${kc}:8080/admin/realms" -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
   --data-binary "${realm_json}")
 [ "${import_status}" = "201" ] || { printf 'realm import failed: HTTP %s\n' "${import_status}" >&2; exit 1; }
@@ -244,7 +244,7 @@ chmod 777 "${flow_dir}"
 trap 'cleanup; rm -rf "${flow_dir}"' EXIT
 
 # --- 1: unauthenticated redirects only to the real Keycloak authorize endpoint ---
-auth_location=$(docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -c /tmp/j1 -D - -o /dev/null "http://${proxy}:4180/oauth2/start?rd=/" \
+auth_location=$(docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -c /tmp/j1 -D - -o /dev/null "http://${proxy}:4180/oauth2/start?rd=/" \
   | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r')
 case "${auth_location}" in
   "http://${kc}:8080/realms/gwtest/protocol/openid-connect/auth?"*"client_id=gwtest-client"*"code_challenge_method=S256"*)
@@ -253,7 +253,7 @@ case "${auth_location}" in
 esac
 
 # --- 2: forged callback (code/state neither side issued) is rejected ---
-forged_status=$(docker run --rm --network "${network}" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s -o /dev/null -w '%{http_code}' \
+forged_status=$(docker run --rm --network "${network}" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -s -o /dev/null -w '%{http_code}' \
   "http://${proxy}:4180/oauth2/callback?code=totally-fake&state=attacker-forged-state")
 if [ "${forged_status}" -ge 400 ]; then
   ok "forged callback (unknown code+state) rejected with HTTP ${forged_status}"
@@ -274,7 +274,7 @@ CALLBACK=\$(curl -s -c "\${JAR}" -b "\${JAR}" -D - -o /dev/null --data-urlencode
 curl -s -c "\${JAR}" -b "\${JAR}" -o /dev/null -w '%{http_code} ' "\${CALLBACK}"
 curl -s -b "\${JAR}" -o /dev/null -w '%{http_code}' "http://${proxy}:4180/"
 SCRIPT
-  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 sh /w/login.sh
+  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac sh /w/login.sh
 }
 
 # --- 3: real login, correct role -> granted ---
@@ -323,7 +323,7 @@ if not tampered:
 with open(path, "w") as f:
     f.writelines(out)
 PYEOF
-tampered_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+tampered_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
   curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-tampered.txt" "http://${proxy}:4180/")
 if [ "${tampered_status}" != "200" ]; then
   ok "tampered session cookie rejected (HTTP ${tampered_status}, not 200)"
@@ -398,7 +398,7 @@ CALLBACK=\$(curl -s -c "\${JAR}" -b "\${JAR}" -D - -o /dev/null --data-urlencode
 curl -s -c "\${JAR}" -b "\${JAR}" -o /dev/null -w '%{http_code} ' "\${CALLBACK}"
 curl -s -b "\${JAR}" -o /dev/null -w '%{http_code}' "http://${proxy_target}:4180/"
 SCRIPT
-  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 sh /w/login-short.sh
+  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac sh /w/login-short.sh
 }
 read -r short_callback_status short_protected_status <<< "$(drive_login_against "${proxy_short}" authorized-user 'TestPass123!' jar-shortlived.txt)"
 if [ "${short_callback_status}" = "302" ] && [ "${short_protected_status}" = "200" ]; then
@@ -408,7 +408,7 @@ else
 fi
 
 sleep 5
-expired_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+expired_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
   curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-shortlived.txt" "http://${proxy_short}:4180/")
 docker rm -f "${proxy_short}" >/dev/null 2>&1 || true
 if [ "${expired_status}" != "200" ]; then
@@ -471,7 +471,7 @@ else
   # backend logout call actually happened is functionally, below: if it
   # didn't fire, the saved pre-logout cookie's next refresh would still
   # succeed against a live Keycloak session.
-  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+  docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
     curl -s -o /dev/null -c "/w/jar-logout.txt" -b "/w/jar-logout.txt" "http://${proxy_logout}:4180/oauth2/sign_out?rd=/"
 
   # Past the 5s refresh interval: oauth2-proxy's next request against the
@@ -480,7 +480,7 @@ else
   # proving revocation is real, not merely that the browser lost its
   # cookie.
   sleep 8
-  old_cookie_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+  old_cookie_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
     curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-logout-presignout.txt" "http://${proxy_logout}:4180/")
   if [ "${old_cookie_status}" != "200" ]; then
     ok "a saved copy of the pre-logout session cookie no longer grants access after sign_out + one refresh interval (HTTP ${old_cookie_status}) -- real server-side revocation, not just a client-side cookie clear"
@@ -549,7 +549,7 @@ else
   # interval: the session should still be served from the still-valid
   # local cookie state, no Keycloak round trip needed yet.
   docker network disconnect "${network}" "${kc}" >/dev/null
-  immediate_outage_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+  immediate_outage_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
     curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-outage.txt" "http://${proxy_outage}:4180/")
   if [ "${immediate_outage_status}" = "200" ]; then
     ok "protected page still served immediately after Keycloak becomes unreachable (within the refresh grace window)"
@@ -570,7 +570,7 @@ else
   past_refresh_target=$((outage_login_epoch + 15))
   past_refresh_remaining=$((past_refresh_target - $(date +%s)))
   [ "${past_refresh_remaining}" -gt 0 ] && sleep "${past_refresh_remaining}"
-  past_refresh_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+  past_refresh_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
     curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-outage.txt" "http://${proxy_outage}:4180/")
   if [ "${past_refresh_status}" = "200" ]; then
     ok "confirmed: the gateway pattern still fails OPEN through a Keycloak network outage past its refresh interval, within the cookie's own lifetime (HTTP 200) -- a failed refresh attempt does not invalidate the still-cookie-valid session (see comment above; #1178 accepted this as a tradeoff and bounded it instead, proven in 9b below)"
@@ -588,7 +588,7 @@ else
   past_expire_target=$((outage_login_epoch + 50))
   past_expire_remaining=$((past_expire_target - $(date +%s)))
   [ "${past_expire_remaining}" -gt 0 ] && sleep "${past_expire_remaining}"
-  past_expire_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 \
+  past_expire_status=$(docker run --rm --network "${network}" -v "${flow_dir}:/w" curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac \
     curl -s -o /dev/null -w '%{http_code}' -b "/w/jar-outage.txt" "http://${proxy_outage}:4180/")
   docker network connect "${network}" "${kc}" >/dev/null
   if [ "${past_expire_status}" != "200" ]; then

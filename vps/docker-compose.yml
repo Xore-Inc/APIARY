@@ -603,7 +603,7 @@ services:
   # up either way, it just polls BLACKHOLE_LIST on a timer (blackhole.go).
   # See portbridge-blackhole-refresh.sh for the full reasoning.
   portbridge-blackhole-refresh:
-    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
     container_name: hp-portbridge-blackhole-refresh
     restart: unless-stopped
     user: root
@@ -637,7 +637,7 @@ services:
   # Enable only after the dashboard runs with EXPORT_TOKEN and this host's
   # .env carries the same value.
   portbridge-manual-blackhole-refresh:
-    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
     container_name: hp-portbridge-manual-blackhole-refresh
     restart: unless-stopped
     user: root
