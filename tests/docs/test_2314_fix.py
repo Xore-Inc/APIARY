@@ -343,7 +343,7 @@ def test_same_version_refresh_applied(image, spec):
                 f"{relpath} pins {image} at {spec['superseded']}, the digest a later "
                 f"version bump replaced -- #2314"
             )
-        if image not in text:
+        if f"{image}@" not in text:
             continue  # moved on to a newer tag since (#3720); the stale-digest checks above still hold
         assert spec["new"] in text, (
             f"{relpath} does not pin {image} at the refreshed digest {spec['new']} -- #2314"
