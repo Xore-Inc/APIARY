@@ -1,6 +1,6 @@
 # mushorg/redis — built from source (no published Docker Hub image)
 # Mirrors the upstream docker/redis/Dockerfile from mushorg/tanner.
-FROM redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+FROM redis:7-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541
 
 LABEL maintainer="honeypot-stack"
 
