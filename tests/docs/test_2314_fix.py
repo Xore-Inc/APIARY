@@ -76,7 +76,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SELF_RELPATH = "tests/docs/test_2314_fix.py"
 
 OLD_GOLANG_DIGEST = "sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
-NEW_GOLANG_DIGEST = "sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade"
+NEW_GOLANG_DIGEST = "sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba"
 
 # Issue #2314's "real bump" section names exactly these six Dockerfiles
 # for the golang:1.26-alpine bump.

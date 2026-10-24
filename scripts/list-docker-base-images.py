@@ -625,6 +625,22 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "This is an accepted DoS exposure until upstream rebuilds on Go "
         "1.26.9; digest-keyed so the next pin move re-applies the gate."
     ),
+    "ghcr.io/getarcaneapp/manager:v2.17.0": (
+        "sha256:47af3e1aa8492eb17276d0dcc6c55fb1dfde98cfd928c12f2961023221891f5a",
+        "measured 6 fixable CRITICAL/HIGH in /app/arcane, all in "
+        "labstack/echo (v5.4.0 direct, v4.15.4 indirect; fixed in 5.4.1 / "
+        "4.16.1, advisories published 2026-10-23): GHSA-cxf3-9h37-7rr8 and "
+        "GHSA-9969-6676-49h5 (echo's Proxy middleware WebSocket tunnel), "
+        "GHSA-f48p-c9v4-h7xv (BodyDump middleware) and GHSA-h7wr-284f-5qvc "
+        "(Decompress middleware). Arcane v2.17.0 source registers none of "
+        "those three middlewares; it uses echo's Gzip, CORS, Recover, "
+        "RequestID and Static only, and its environment proxy is its own "
+        "code, not echo's Proxy. v2.16.1 carried the same six plus a Go "
+        "stdlib finding, so the bump is strictly better. v2.17.0 is the "
+        "newest Arcane release; hp-arcane is reached only over WireGuard "
+        "behind OIDC. Digest-keyed so the next pin move re-applies the "
+        "gate (#3720)."
+    ),
     "traefik:v3.7.13": (
         "sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0",
         "measured 4 fixable HIGH in /usr/local/bin/traefik: Go stdlib 1.26.8 "
@@ -665,6 +681,27 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "The GHOSTS source does not reference SignedXml, EnvelopedCms or the "
         "Pkcs API, so the flagged parsers do not run. Retires on the next "
         "SDK digest move."
+    ),
+    # --- #3720: brotli-libs 1.2.0-r1, measured 2026-10-24 --------------------
+    # Alpine fixed CVE-2026-111497 in brotli-libs 1.2.1-r0, but neither image
+    # below has been rebuilt on it yet. Both are the newest published
+    # build of their tag (curl 8.23.0 == curlimages/curl:latest; php
+    # 8.5-cli-alpine == 8.5-cli-alpine3.24), so there is no bump that
+    # clears the finding. The only finding in each is that one HIGH.
+    # Each retires itself on the next digest move.
+    "curlimages/curl:8.23.0": (
+        "sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac",
+        "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
+        "fixed in 1.2.1-r0). Used as a healthcheck/probe client against this "
+        "repo's own internal services, not to fetch content from untrusted "
+        "peers."
+    ),
+    "php:8.5-cli-alpine": (
+        "sha256:d386a12bad6b5dbee1f7dbd0291a4526dbfcbe5cfc0e8833de8d8309be8f3e50",
+        "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
+        "fixed in 1.2.1-r0. brotli-libs is reachable only through libcurl "
+        "content decoding; tanner's phpox sandbox executes captured PHP "
+        "without outbound network access."
     ),
 }
 

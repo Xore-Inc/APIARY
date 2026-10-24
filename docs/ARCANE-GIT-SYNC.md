@@ -197,9 +197,12 @@ alone. Re-verify against whatever Arcane version is pinned in
 happened and the re-verification has not:** every item below was confirmed
 against `v2.8.0`–`v2.9.0` (including the no-`profiles:`-support finding,
 which cites the upstream issue as still open at `v2.8.1`), while
-`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.16.1`
-by digest (2026-10-18, #3697; previously `v2.15.1`, before that `v2.11.1`).
-Nothing here is claimed to be false of `v2.16.1` — it is claimed to be
+`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.0`
+by digest (2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
+before that `v2.11.1`). The edge agents on precision and the VPS run the
+matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.0`, digest-pinned in
+their host-local compose files (they are not tracked in this repo).
+Nothing here is claimed to be false of `v2.17.0` — it is claimed to be
 unconfirmed against it, and eight minor versions of upstream is exactly the
 gap that re-verification is for.
 
