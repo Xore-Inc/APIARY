@@ -201,21 +201,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "CRITICAL/HIGH after the pin moved to the tag's current digest, down "
         "from 147"
     ),
-    "rust:1-slim-bookworm": (
-        "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
-        "build stage only -- backend-service names it `AS build` and ships a "
-        "debian:bookworm-slim final image. Re-pinned to the tag's current "
-        "digest (#3667): the pcre2 finding is gone, and 7 fixable findings "
-        "remain, all in the perl packages (perl-base, perl, perl-modules-5.36, "
-        "libperl5.36) at 5.36.0-7+deb12u4. Debian has fixed these in its "
-        "archive, but no bookworm image tag carries the fix yet. perl-base is "
-        "an essential package the base image cannot drop. None of the "
-        "flagged code runs in the shipped image: it is the Archive::Tar, "
-        "IO::Compress, Storable and regex/pack paths, which only run when a "
-        "perl script loads them, and the backend-service final stage runs only "
-        "its own Rust binary. Retires itself when a bookworm rebuild lands "
-        "deb12u4 and the pin moves."
-    ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
         "build stage only -- the vendored ghosts Dockerfile-client-universal "
@@ -247,23 +232,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # shrug. Where a candidate DID come back clean the pin was moved
     # instead and no entry was written -- see the entries' "moved to"
     # comments in REPORT.md.
-    "debian:bookworm-slim": (
-        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
-        "re-pinned from 3783cc01 to the tag's current digest (#3667). The "
-        "pcre2 finding (CVE-2026-103111) is gone, but 7 fixable CRITICAL/HIGH "
-        "remain, all in perl (perl-base, perl-modules-5.36, libperl5.36) at "
-        "5.36.0-7+deb12u4: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 "
-        "(CRITICAL), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, "
-        "CVE-2026-57433 (HIGH). Debian has fixed them in its archive, but no "
-        "bookworm tag carries the fix yet (bookworm-slim and "
-        "bookworm-20261005-slim share this digest). perl-base is Essential, so "
-        "the base cannot drop it. The flagged code is the Archive::Tar, "
-        "IO::Compress, Storable and regex/pack paths, which run only when a "
-        "perl script loads them; none of the images that use this base "
-        "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
-        "attacker-controlled input. Retires itself when a bookworm rebuild "
-        "lands deb12u4 and the pin moves."
-    ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
         "measured 4 fixable CRITICAL/HIGH, all alpine 3.21 openssl 3.3.7-r2 "
@@ -357,8 +325,13 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "upgrade this repo does not own. It cannot leave the vulnerable Go "
         "stdlib without an upstream rebuild."
     ),
-    "node:22-alpine": (
-        "sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
+    "node:26-alpine": (
+        "sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797",
+        "#3720: frontend-next moved to node 26. Re-measured 2026-10-24 at 4 "
+        "fixable HIGH, all npm-bundled packages inside the image (brace-"
+        "expansion 5.0.9 CVE-2026-102276/-102278, undici 6.28.0 "
+        "CVE-2026-109869/-19534), fixed only by a node image rebuild; it is "
+        "the newest 26 tag. Previous measurement, carried over: "
         "measured 10 fixable CRITICAL/HIGH, all npm dependencies vendored "
         "into the image (brace-expansion, picomatch, pacote, sigstore, "
         "ip-address) rather than OS packages. Bumping the major does not "

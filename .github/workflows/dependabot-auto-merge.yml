@@ -61,7 +61,7 @@ jobs:
       # #2741: four times now, a dependabot frontend-next bump has resolved
       # its lockfile with npm 11/12 (whatever dependabot's own service
       # ships) and produced a package-lock.json that prunes optional-peer
-      # placements node:22-alpine's npm 10 -- the image the Dockerfile
+      # placements node:26-alpine's npm 11 -- the image the Dockerfile
       # actually builds on -- still requires. quality.yml's own "lockfile
       # installs under the image's npm" step (#1816) already catches this,
       # loudly, but `main` carries no branch protection at all (checked
@@ -82,20 +82,20 @@ jobs:
       # #2752: the pull and the install are split into their own steps with
       # their own outcome. `docker run ... npm ci` used to fail identically
       # whether npm ci genuinely rejected the lockfile or `docker pull
-      # node:22-alpine` itself failed first (Hub rate limit, a transient
+      # node:26-alpine` itself failed first (Hub rate limit, a transient
       # registry error, a runner network hiccup) -- so the "regenerate your
       # lockfile" comment below fired even when the lockfile was never
       # actually tested. Both failure classes still block auto-merge exactly
       # as before (the gate itself is unchanged); only the human-facing
       # message now says which one actually happened.
-      - name: Pull node:22-alpine (the Dockerfile's own image)
+      - name: Pull node:26-alpine (the Dockerfile's own image)
         id: image-pull
         if: >-
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
            steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
           hashFiles('arcane/home/honeypot-dashboard/frontend-next/package-lock.json') != ''
         continue-on-error: true
-        run: docker pull node:22-alpine
+        run: docker pull node:26-alpine
 
       - name: "lockfile installs under the image's npm (#2741, mirrors #1816)"
         id: lockfile-check
@@ -111,7 +111,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp -e npm_config_cache=/tmp/npm-cache \
             -v "$PWD:/app" -w /app \
-            node:22-alpine npm ci --no-audit --no-fund
+            node:26-alpine npm ci --no-audit --no-fund
 
       - name: Approve patch and minor updates
         if: >-
@@ -162,7 +162,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           gh pr comment "$PR_URL" --body \
-            "Not auto-merging: this lockfile does not install under node:22-alpine's npm (the Dockerfile's own image), the recurring #2741 failure mode. Regenerate it under that image before merging -- see #2741's canonical command."
+            "Not auto-merging: this lockfile does not install under node:26-alpine's npm (the Dockerfile's own image), the recurring #2741 failure mode. Regenerate it under that image before merging -- see #2741's canonical command."
 
       - name: Leave the registry pull failure for a human
         if: steps.image-pull.outcome == 'failure'
@@ -171,7 +171,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           gh pr comment "$PR_URL" --body \
-            "Not auto-merging: pulling node:22-alpine failed (registry rate limit, transient error, or a runner network hiccup) before the lockfile could even be tested. This is not a #2741 lockfile problem -- re-run this workflow (or push a new commit) to retry."
+            "Not auto-merging: pulling node:26-alpine failed (registry rate limit, transient error, or a runner network hiccup) before the lockfile could even be tested. This is not a #2741 lockfile problem -- re-run this workflow (or push a new commit) to retry."
 
       - name: Leave the 0.x minor bump for a human
         if: steps.zero-major.outputs.hold == 'true'
