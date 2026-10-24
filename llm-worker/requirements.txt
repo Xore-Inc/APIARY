@@ -11,7 +11,7 @@
 elasticsearch==8.19.3
 
 # Strict output contracts and JSON Schema sent to Ollama structured output.
-pydantic==2.13.5
+pydantic==2.14.1
 
 # Local-only Ollama client. The worker disables environment proxy use and
 # redirects before sending attacker-derived text.
