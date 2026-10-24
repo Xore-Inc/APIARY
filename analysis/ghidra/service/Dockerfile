@@ -14,7 +14,7 @@
 # own repository, not a third party) and checksum-verified, the same
 # pin-by-digest convention statictools/Dockerfile already uses for its own
 # third-party artifacts (capa-rules/capa-sigs).
-FROM eclipse-temurin:21-jdk@sha256:3e3c176ffed168beb42c607be9bc1639b466cf00261a0fb04425562c9d0c5c2b
+FROM eclipse-temurin:27-jdk@sha256:4a02e0ee713d13bb7974f4e19b7bea1746668603c3557fe09c4681784a86bb52
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 unzip curl ca-certificates \
