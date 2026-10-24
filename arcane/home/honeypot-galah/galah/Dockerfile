@@ -69,7 +69,7 @@
 # the golang:1.23 build stage, zero compatibility risk) plus
 # netcat-openbsd for the same `nc -z` HEALTHCHECK convention alpine gives
 # every other sensor here via busybox-extras.
-FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
+FROM golang:1.27-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 git \
  && rm -rf /var/lib/apt/lists/*
 ARG GALAH_REF=8f77b85e892731cf1402963d8121c79fef0e59c7
@@ -85,7 +85,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -trimpath \
     -ldflags "-s -w -X main.version=$GALAH_REF" \
     -o /galah ./cmd/galah
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 RUN apt-get update && apt-get install -y --no-install-recommends netcat-openbsd \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /galah /usr/local/bin/galah
