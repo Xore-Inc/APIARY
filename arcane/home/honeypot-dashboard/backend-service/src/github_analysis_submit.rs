@@ -57,7 +57,18 @@ fn audit(state: &AppState, body: &SubmitBody, hash: &str, result: &str) {
     ),
     security(("serviceToken" = [])),
 )]
-pub async fn submit(State(state): State<AppState>, Json(body): Json<SubmitBody>) -> (StatusCode, Json<Value>) {
+pub async fn submit(
+    State(state): State<AppState>,
+    binding: crate::trust::ActorBinding,
+    Json(mut body): Json<SubmitBody>,
+) -> (StatusCode, Json<Value>) {
+    match binding.bind_pair(&body.actor_subject, &body.actor_username) {
+        Ok(pair) => (body.actor_subject, body.actor_username) = pair,
+        // Unreachable behind the trust middleware, which refuses a mutation
+        // without an assertion before this runs; kept so the field can
+        // never be believed without one.
+        Err(refusal) => return (StatusCode::UNAUTHORIZED, Json(json!({"error": refusal.0}))),
+    }
     let hash = body.hash.to_lowercase();
     if !crate::payload_paths::is_valid_hash(&hash) {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid payload hash"})));

@@ -9,8 +9,8 @@
 //! says otherwise — see the library's `resolve_service_token`.
 
 use apiary_backend::{
-    allow_unauth_dev_from_env, audit, build_stamp, config_history, es, git_revision, obs,
-    resolve_service_token, worker, AppState,
+    allow_unauth_dev_from_env, audit, build_stamp, config_history, es, fleet, git_revision, obs,
+    resolve_service_token, trust, worker, AppState,
 };
 use std::{net::SocketAddr, sync::Arc};
 
@@ -23,9 +23,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Reject malformed fleet addresses before opening either HTTP listener.
+    let _ = (fleet::tunnel_peer_ip(), fleet::tunnel_sensor_ip());
+
     let es_url = std::env::var("ELASTICSEARCH_URL").unwrap_or_else(|_| "http://127.0.0.1:9200".into());
     let listen = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
-    let raw_service_token = std::env::var("SERVICE_TOKEN").ok();
+    // #3577: SERVICE_TOKEN or SERVICE_TOKEN_FILE (the swarm secret form).
+    let env = |key: &str| std::env::var(key).ok();
+    let read = |path: &str| std::fs::read_to_string(path);
+    let raw_service_token = trust::secret(&env, &read, "SERVICE_TOKEN")?;
     let allow_unauth_dev =
         allow_unauth_dev_from_env(std::env::var("APIARY_ALLOW_UNAUTH_DEV").ok().as_deref());
     let service_token = match resolve_service_token(raw_service_token.as_deref(), allow_unauth_dev)
@@ -45,6 +51,11 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(refusal) => return Err(refusal.into()),
     };
+    // #3577: the export-only credential, rotation windows, and the actor
+    // assertion key and mode. Refuses to boot on anything ambiguous, same
+    // posture as the service token above. Names only, never values.
+    let trust = trust::from_env(&env, &read, service_token)?;
+    tracing::info!(trust = %trust.describe(), "credentials");
     let audit_path =
         std::env::var("DASHBOARD_AUDIT_FILE").unwrap_or_else(|_| "/state/dashboard-audit.jsonl".into());
     let config_history_path = std::env::var("DASHBOARD_CONFIG_HISTORY_FILE")
@@ -55,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         es: Arc::new(es::Es::connect(&es_url)?),
-        service_token: Arc::new(service_token),
+        trust: Arc::new(trust),
         audit: Arc::new(audit::AuditLogger::new(audit_path)),
         config_history: Arc::new(config_history::ConfigHistory::new(config_history_path)),
         observability: Arc::new(obs::Obs::new(log_file)),

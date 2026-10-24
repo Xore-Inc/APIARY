@@ -175,6 +175,45 @@ cd /opt/stacks/honeypot-init && docker compose -f compose.yml up -d
 # persona-apply / snare-clone should all Exit(0) within ~30s
 ```
 
+### 3b. Swarm overlays before Ollama and Galah
+
+Since #3591, the Galah-to-Ollama broker runs as the Swarm stack
+[`swarm/stacks/galah-broker`](../swarm/stacks/galah-broker/README.md), not in
+Compose. Two Compose services join its encrypted overlays as
+`external: true` networks:
+
+- `ollama` in `analysis/ghidra/docker-compose.ghidra.yml` joins `galah-broker_back`.
+- `galah` in `arcane/home/honeypot-galah/compose.yml` joins `galah-broker_front`.
+
+Compose will not create a container whose external network is missing. So
+neither Ollama (the Ghidra/Ollama stack) nor `honeypot-galah` can start
+until the following hold:
+
+1. The homeserver is still a Swarm manager. A full reset does not leave the
+   Swarm (`docker swarm leave` is never part of this runbook), and the
+   homeserver's normal availability is `pause`:
+   ```bash
+   docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}'   # active true
+   ```
+2. The `galah-broker` stack is deployed through its Arcane GitOps sync and both
+   overlays exist:
+   ```bash
+   docker network ls --filter name=galah-broker_ --format '{{.Name}} {{.Driver}} {{.Scope}}'
+   # galah-broker_back overlay swarm
+   # galah-broker_front overlay swarm
+   ```
+
+Start the Ghidra/Ollama stack only after that, and `honeypot-galah` after
+Ollama (in step 4). If Compose still reports `network galah-broker_* not found`
+on the homeserver, follow the overlay-materialization workaround in the
+broker README.
+
+If the Swarm cannot be brought back, use the broker README's **Rollback**
+section. Starting the old Compose broker with
+`docker compose --profile legacy up -d galah-llm-broker` handles a failed
+broker, but on its own it does not handle a missing overlay. The overlay
+attachments in both Compose files have to be reverted first.
+
 ### 4. Bring up everything else
 
 Order doesn't matter much from here — every remaining stack either has no

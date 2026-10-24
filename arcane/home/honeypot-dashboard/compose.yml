@@ -165,23 +165,19 @@ services:
     restart: unless-stopped
     environment:
       - LISTEN_ADDR=0.0.0.0:8082
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
-      # #1801: reconcile workbench runs nobody is looking at.
-      #
-      # reconcile_run already times out a child that outlives its queue
-      # deadline, but it only ran inside get_run and child_action -- both
-      # request-driven -- so a run whose worker never reported back sat in its
-      # last-written state indefinitely. Measured on a real document:
-      # updated_at still equal to created_at a day later, against a 30-minute
-      # queue_deadline.
-      #
-      # It belongs on THIS tier and not on backend-worker: reconciliation
-      # reads the analyzer spool directories to decide whether a request is
-      # queued, claimed or finished, and those are mounted here. Anywhere else
-      # every marker lookup returns nothing and the sweep concludes the
-      # opposite of the truth about every run it touches.
-      - WORKER_LOOPS=workbench-reconcile
-      - WORKBENCH_RECONCILE_INTERVAL_SECONDS=${WORKBENCH_RECONCILE_INTERVAL_SECONDS:-60}
+      # The mounted HTTP API can move separately from sensor-bound workers.
+      # Override only after #3577 provides a private authenticated ES path.
+      - ELASTICSEARCH_URL=${BACKEND_MOUNTED_ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
+      # #3685: the #1801 workbench-reconcile sweep no longer runs here -- it
+      # moved to backend-worker (WORKER_LOOPS there), which already carries
+      # every spool mount it reads, read-only, and sits on the homeserver
+      # next to those spools. This service stays a pure HTTP API (no
+      # WORKER_LOOPS), so it can move to the precision host later without
+      # dragging a cross-host spool read along (#3592 decision 2). It keeps
+      # its own spool mounts below: get_run/child_action still reconcile on
+      # request and child_action removes cancelled .request markers.
       # #1677: addresses belonging to this fleet, excluded from the
       # dashboard's attacker aggregations. Suricata records `source.ip` as
       # whichever end it saw as the source, so our own hosts appear as
@@ -194,6 +190,15 @@ services:
       # the override below is the one sanctioned dev escape hatch.
       - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
       - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
+      # #3577: rotation overlap and verified actor assertions. All optional;
+      # unset keeps the pre-#3577 behaviour (ACTOR_ASSERTION_MODE=off).
+      # Runbook: docs/BACKEND-TRUST-BOUNDARY.md.
+      - SERVICE_TOKEN_PREVIOUS=${DASHBOARD_SERVICE_TOKEN_PREVIOUS:-}
+      - SERVICE_TOKEN_PREVIOUS_UNTIL=${DASHBOARD_SERVICE_TOKEN_PREVIOUS_UNTIL:-}
+      - ACTOR_ASSERTION_MODE=${ACTOR_ASSERTION_MODE:-off}
+      - ACTOR_ASSERTION_PUBLIC_KEY=${ACTOR_ASSERTION_PUBLIC_KEY:-}
+      - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS:-}
+      - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL:-}
       - SANDBOX_REQUEST_DIR=/sandbox-requests
       - WINDOWS_SANDBOX_REQUEST_DIR=${WINDOWS_SANDBOX_REQUEST_DIR:-}
       - GHOSTS_SANDBOX_REQUEST_DIR=${GHOSTS_SANDBOX_REQUEST_DIR:-}
@@ -206,7 +211,8 @@ services:
       # is also fed by ghidra-worker.py's drain_revdeck() for the "ghidra"
       # analyzer's embedded RevDeck enrichment (read, not written, here) —
       # SANDBOX_RESULTS_DIR is read-write-adjacent: this service only reads
-      # it (reconciliation), the host-side worker owns writing job results.
+      # it (on-request reconciliation), the host-side worker owns writing
+      # job results.
       - SANDBOX_RESULTS_DIR=/sandbox-results
       - REVDECK_REQUEST_DIR=${REVDECK_REQUEST_DIR:-}
       - REVDECK_RESULTS_DIR=${REVDECK_RESULTS_DIR:-}
@@ -242,10 +248,12 @@ services:
       - /var/lib/honeypot-github/requests/pending:/github-analysis-requests
       - /var/lib/honeypot-revdeck/requests/pending:/revdeck-requests
       - /var/lib/honeypot-revdeck/results:/revdeck-results:ro
-      # Read-only: reconciliation polls job-completion state directly off
-      # disk (never through the ES mirror — see workbench_orchestrator.rs's
-      # module comment), the same reasoning golden-image-status already
-      # established for WINDOWS_SANDBOX_RESULTS_DIR above.
+      # Read-only: on-request reconciliation polls job-completion state
+      # directly off disk (never through the ES mirror — see
+      # workbench_orchestrator.rs's module comment), the same reasoning
+      # golden-image-status already established for
+      # WINDOWS_SANDBOX_RESULTS_DIR above. The periodic sweep that does the
+      # same for idle runs lives in backend-worker (#3685).
       - /var/lib/honeypot-sandbox/export:/sandbox-results:ro
     networks:
       - honeynet
@@ -280,6 +288,8 @@ services:
     environment:
       - LISTEN_ADDR=127.0.0.1:8099
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #1677: addresses belonging to this fleet, excluded from the
       # dashboard's attacker aggregations. Suricata records `source.ip` as
       # whichever end it saw as the source, so our own hosts appear as
@@ -332,7 +342,18 @@ services:
       # dashboard-rollups (#2046): same pure-ES shape — writes the three
       # derived rollup indices the overview/map/kill-chain endpoints read;
       # nothing mounted, nothing local, fully disposable/rebuildable.
-      - WORKER_LOOPS=alert-notifier,attacker-identity,agent-intrusion,correlator,dashboard-rollups,threat-intel,zeek-proxy-attribution
+      # workbench-reconcile (#3685, moved here from backend-service-mounted):
+      # the #1801 sweep that times out / re-classifies workbench runs nobody
+      # is looking at. It is the one loop here that reads the analyzer spools
+      # (marker_state / spool_status_stale / result files) rather than pure
+      # ES, and it only ever READS them -- every spool mount below is :ro and
+      # the sweep writes only dashboard-workbench-runs-v1 over ES (CAS). Must
+      # stay wired in exactly one service (#1628): a second consumer would
+      # race the same CAS updates. The homeserver pin is deliberate (#3592
+      # decision 2): spools are host paths, so the loop must stay on the
+      # tier that owns them when the mounted HTTP API moves to precision.
+      - WORKER_LOOPS=alert-notifier,attacker-identity,agent-intrusion,correlator,dashboard-rollups,threat-intel,workbench-reconcile,zeek-proxy-attribution
+      - WORKBENCH_RECONCILE_INTERVAL_SECONDS=${WORKBENCH_RECONCILE_INTERVAL_SECONDS:-60}
       - ROLLUP_RUN_INTERVAL_SECS=${ROLLUP_RUN_INTERVAL_SECS:-300}
       - ZEEK_PROXY_ATTRIBUTION_INTERVAL_SECONDS=${ZEEK_PROXY_ATTRIBUTION_INTERVAL_SECONDS:-120}
       - THREAT_CIDRS_FILE=/geoip/threat-cidrs.csv
@@ -381,6 +402,11 @@ services:
       - CAPE_REQUEST_DIR=${CAPE_REQUEST_DIR:-}
       - GITHUB_ANALYSIS_RESULTS_DIR=${GITHUB_ANALYSIS_RESULTS_DIR:-}
       - GITHUB_ANALYSIS_REQUEST_DIR=${GITHUB_ANALYSIS_REQUEST_DIR:-}
+      # #3685: workbench-reconcile also reads the Rev·Deck spool (the only
+      # analyzer spool backend-worker did not already see). Empty = inert,
+      # same posture as backend-service-mounted's identical pair.
+      - REVDECK_REQUEST_DIR=${REVDECK_REQUEST_DIR:-}
+      - REVDECK_RESULTS_DIR=${REVDECK_RESULTS_DIR:-}
       - GITHUB_ANALYSIS_ALERT_POSITIVES=${GITHUB_ANALYSIS_ALERT_POSITIVES:-10}
       - FILEBEAT_URL=${FILEBEAT_URL:-http://filebeat:5066}
       - TZ=Europe/Berlin
@@ -403,6 +429,9 @@ services:
       - /var/lib/honeypot-cape/requests/pending:/cape-requests:ro
       - /var/lib/honeypot-github/results:/github-analysis-results:ro
       - /var/lib/honeypot-github/requests/pending:/github-analysis-requests:ro
+      # #3685: Rev·Deck spool for workbench-reconcile, read-only.
+      - /var/lib/honeypot-revdeck/requests/pending:/revdeck-requests:ro
+      - /var/lib/honeypot-revdeck/results:/revdeck-results:ro
       - /opt/stacks/apiary/analysis/threat-intel:/geoip:ro
     networks:
       - honeynet
@@ -447,7 +476,19 @@ services:
         # footprint). 1536M for real headroom this time rather than another
         # minimum-viable guess -- same "no real reason to keep this tight"
         # reasoning as the 768M bump itself already gave.
-        limits: {cpus: "2.0", memory: 1536M}
+        #
+        # #3675: 1536M then OOM-killed it ~12x/hour once one source pushed
+        # ~120k events/hour into honeypot-v2-*. attacker-identity held its
+        # whole 6h evidence window as raw JSON hits (~4.5 KB each; 452k
+        # hits peaked the container at 2669M). The fetch now folds page by
+        # page, so its peak no longer scales with the window. 4096M stays
+        # until that build has been verified live: a sync of this stack
+        # before the backend image is rebuilt would otherwise bring the
+        # old binary back under the old limit. No swap: with the default
+        # memswap (2x) the cgroup thrashed 34 GB of block IO in four
+        # minutes and starved its own ES requests instead of failing fast.
+        limits: {cpus: "2.0", memory: 4096M}
+    memswap_limit: 4096M
 
   dashboard-next:
     <<: *runtime-defaults
@@ -629,6 +670,8 @@ services:
     environment:
       - LISTEN_ADDR=127.0.0.1:8098
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #1677: addresses belonging to this fleet, excluded from the
       # dashboard's attacker aggregations. Suricata records `source.ip` as
       # whichever end it saw as the source, so our own hosts appear as
@@ -811,6 +854,8 @@ services:
     environment:
       - LISTEN_ADDR=127.0.0.1:8097
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - HONEYPOT_TUNNEL_PEER_IP=${HONEYPOT_TUNNEL_PEER_IP:-10.8.0.1}
+      - HONEYPOT_TUNNEL_SENSOR_IP=${HONEYPOT_TUNNEL_SENSOR_IP:-10.8.0.2}
       # #1677: addresses belonging to this fleet, excluded from the
       # dashboard's attacker aggregations. Suricata records `source.ip` as
       # whichever end it saw as the source, so our own hosts appear as

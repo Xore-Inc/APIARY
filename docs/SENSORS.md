@@ -117,6 +117,7 @@ at 25 MiB with three files, independently from sensor event files under
 | EveBox (Suricata events) | `evebox.<domain>` | `evebox` :5636 |
 | Arkime (packet sessions) | `arkime.<domain>` | `arkime-viewer` :8005 |
 | Rev·Deck (Ghidra AI chat) | `rev.<domain>` | `revdeck` :5000 (separate `analysis/ghidra/` stack, `revdeck` profile — see [analysis/ghidra/revdeck/README.md](analysis/ghidra/revdeck/README.md)) |
+| Unsloth Studio (model training UI, #3689) | `unsloth.<domain>` | `hp-unsloth-studio` :8000, published on `UNSLOTH_BIND`:8899 (`arcane/home/unsloth`). **Not currently deployed on the homeserver** — the VPS gateway authenticates but upstream requests fail until Studio is brought back. |
 
 Each is bridged to the VPS by its own `socat-hp-*` service (one socat per
 service, the reliable/consistent way) and routed by

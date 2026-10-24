@@ -17,7 +17,7 @@ disk and then never restarted to pick it up.
 WHAT THIS TEST ASSERTS, AND WHY IT IS SHAPED THIS WAY
 
 The failure mode is a disagreement *between files*, so asserting that the
-script contains six hand-listed names proves nothing -- it only restates the
+script contains seven hand-listed names proves nothing -- it only restates the
 source. Every assertion below is therefore a cross-file consistency check
 against `vps/docker-compose.yml`, which is the artifact that actually
 rejects the run:
@@ -35,7 +35,7 @@ rejects the run:
     the path the script writes to the path the gateway reads and the realm
     client the secret belongs to -- the three ends of the rotation.
 
-Only the key set itself is pinned to a literal (the six clients as of
+Only the key set itself is pinned to a literal (the seven clients as of
 #2368), so an intentional gateway addition fails one explicit test with a
 readable diff instead of silently widening the contract.
 
@@ -60,7 +60,7 @@ SCRIPT = KEYCLOAK_DIR / "sync-client-secrets.sh"
 COMPOSE = REPO_ROOT / "vps/docker-compose.yml"
 RUNBOOK = REPO_ROOT / "docs/KEYCLOAK-OPERATIONS.md"
 
-# The six VPS-fronted oauth2-proxy gateway clients as of #2368. Pinned so
+# The seven VPS-fronted oauth2-proxy gateway clients as of #2368. Pinned so
 # that adding or dropping a gateway has to be a deliberate edit here.
 EXPECTED_GATEWAY_CLIENTS = {
     "kibana",
@@ -68,6 +68,7 @@ EXPECTED_GATEWAY_CLIENTS = {
     "arkime",
     "tanner",
     "revdeck",
+    "unsloth",  # #3689
     "traefik-dashboard",
 }
 
@@ -76,6 +77,7 @@ EXPECTED_GATEWAY_CLIENTS = {
 # owns its rotation instead.
 NON_GATEWAY_PROVISIONERS = {
     "apiary-dashboard": "provision-dashboard-oidc-secret.sh",
+    "apiary-dashboard-rewrite": "provision-dashboard-oidc-secret.sh",  # #3578
     "arcane": "provision-arcane-oidc-secret.sh",
     "auth-events-poller": "provision-events-poller.sh",
 }
@@ -163,7 +165,7 @@ def _markdown_table_after(heading_regex: str) -> list:
     return rows
 
 
-def test_client_containers_map_is_exactly_the_six_gateway_clients():
+def test_client_containers_map_is_exactly_the_seven_gateway_clients():
     """The pinned key set. Anything else is a deliberate gateway change and
     should have to be written down here too."""
     assert set(CLIENT_CONTAINERS) == EXPECTED_GATEWAY_CLIENTS
@@ -313,19 +315,19 @@ def test_non_gateway_client_is_documented_and_its_provisioner_exists(client, pro
 
 
 def test_script_preamble_states_the_realm_client_total():
-    """6 handled here + 3 elsewhere = 9. The count is what makes a future
+    """7 handled here + 4 elsewhere = 11. The count is what makes a future
     reader notice the script is not the all-secrets rotater."""
-    assert re.search(r"\b9 confidential clients\b", SCRIPT_TEXT), (
-        "the preamble must state the realm's 9-confidential-client total"
+    assert re.search(r"\b11 confidential clients\b", SCRIPT_TEXT), (
+        "the preamble must state the realm's 11-confidential-client total"
     )
-    assert re.search(r"\b6 VPS oauth2-proxy gateway\b", SCRIPT_TEXT), (
+    assert re.search(r"\b7 VPS oauth2-proxy gateway\b", SCRIPT_TEXT), (
         "the preamble must state how many of them this script handles"
     )
 
 
 def test_runbook_gateway_table_matches_the_script_map():
     """§3's per-client directory table is the manual fallback for the same
-    six clients; if it and the map disagree, one of them is wrong."""
+    seven clients; if it and the map disagree, one of them is wrong."""
     rows = _markdown_table_after(r"^\| Directory/client \| Public consumer \|")
     listed = {row[0] for row in rows}
     assert listed == set(CLIENT_CONTAINERS), (
@@ -335,8 +337,8 @@ def test_runbook_gateway_table_matches_the_script_map():
     )
 
 
-def test_runbook_non_gateway_table_lists_the_three_clients_with_real_provisioners():
-    """The other three, with links that resolve -- the runbook is the only
+def test_runbook_non_gateway_table_lists_every_client_with_real_provisioners():
+    """The others, with links that resolve -- the runbook is the only
     place the full clean-rebuild sequence is written down."""
     rows = _markdown_table_after(r"^### Non-gateway confidential clients\s*$")
     listed = {row[0] for row in rows}
@@ -361,16 +363,17 @@ def test_runbook_carries_no_stale_gateway_or_client_counts():
     """The counting mismatch #2368 flagged: the runbook claimed 8 gateways
     against 9 confidential clients, so neither number could be trusted."""
     stale = re.findall(
-        r"\b(?:7|8|seven|eight)\s+(?:VPS\s+)?(?:gateway|confidential)\w*",
+        r"\b(?:6|8|9|six|eight|nine)\s+(?:VPS\s+)?gateway\w*"
+        r"|\b(?:7|8|9|10|seven|eight|nine|ten)\s+confidential\w*",
         RUNBOOK_TEXT,
         re.IGNORECASE,
     )
     assert not stale, (
-        f"the runbook still carries pre-#2368 counts: {stale!r}. There are six "
-        f"VPS gateways and nine confidential clients."
+        f"the runbook still carries pre-#2368 counts: {stale!r}. There are seven "
+        f"VPS gateways and eleven confidential clients."
     )
-    assert re.search(r"\b(?:6|six)\s+(?:VPS\s+)?gateway", RUNBOOK_TEXT, re.IGNORECASE)
-    assert re.search(r"\b(?:9|nine)\s+confidential", RUNBOOK_TEXT, re.IGNORECASE)
+    assert re.search(r"\b(?:7|seven)\s+(?:VPS\s+)?gateway", RUNBOOK_TEXT, re.IGNORECASE)
+    assert re.search(r"\b(?:11|eleven)\s+confidential", RUNBOOK_TEXT, re.IGNORECASE)
 
 
 def test_runbook_never_names_dockge_as_a_client():

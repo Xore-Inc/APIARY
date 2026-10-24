@@ -1,8 +1,20 @@
 {
   "components": {
     "securitySchemes": {
+      "actorAssertion": {
+        "description": "The operator behind a BFF request (#3577): a compact JWS, alg EdDSA, signed with an Ed25519 key that is not the service token. Claims sub, username, role (admin or viewer), aud=apiary-backend, iat and exp (at most 300 s apart, 30 s clock skew), and htm/htu, the method and path it was minted for. Never sufficient on its own: it rides alongside serviceToken. Whether it is required depends on ACTOR_ASSERTION_MODE: off (the default) ignores it; log verifies it and only logs; enforce requires a valid one on every mutation and on any request that names an actor (X-Actor-Username, X-Actor-Role, or an actor field in the query or body), answers 401 without one and 403 to a verified viewer on an admin mutation, and replaces every client-named actor field with the asserted identity. See docs/BACKEND-TRUST-BOUNDARY.md.",
+        "in": "header",
+        "name": "X-Actor-Assertion",
+        "type": "apiKey"
+      },
+      "exportToken": {
+        "description": "The export-only credential (EXPORT_TOKEN, #3577) the VPS blocklist pull presents. It reaches exactly one operation, GET /api/v1/ip-block-export, which lists it as an alternative to serviceToken; every other /api/v1 operation answers 403 to it, whatever else the request carries. Only counted in this header, never as X-Service-Token.",
+        "in": "header",
+        "name": "X-Export-Token",
+        "type": "apiKey"
+      },
       "serviceToken": {
-        "description": "The shared secret the Nitro BFF presents on every /api/v1 call (SERVICE_TOKEN; lib.rs's require_service_token, #2183). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly.",
+        "description": "The BFF credential: the secret the dashboard BFF presents on every /api/v1 call (SERVICE_TOKEN, or SERVICE_TOKEN_PREVIOUS inside its rotation window; lib.rs's require_service_token, #2183, #3577). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly.",
         "in": "header",
         "name": "X-Service-Token",
         "type": "apiKey"
@@ -10,10 +22,11 @@
     }
   },
   "info": {
-    "description": "The /api surface of `backend-service/` (`apiary-backend`), the Rust service tier of the APIARY dashboard's modernization port (#1608). It is not a public API: the Nitro BFF in `frontend-next/` is the only intended caller and presents a shared service token on every /api/v1 route. /healthz and /metrics are the two exceptions, open on purpose for the container healthcheck and the #1972 metrics scrape.\n\nResponse bodies are deliberately left unconstrained here. The handlers return `Json<Value>` or a per-surface struct that nothing in this crate enforces, so restating 138 shapes would be 138 chances to publish something the code does not promise -- and a contract that lies about a response is worse than one that admits the gap. What this document does pin is the part that has been wrong before: the auth tier, the request parameters (including the enum-valued ones the handlers actually validate), the declared status codes, and the media type of every response. That is what `.github/workflows/weekly-schemathesis.yml` checks.\n\n`arcane/home/honeypot-dashboard/backend-service/src/openapi.rs` is the source of truth. Regenerate the committed copy with `cargo run --bin openapi > openapi.json`; the drift tests in that module and a diff step in `quality.yml` both fail if you forget.",
+    "description": "The /api surface of `backend-service/` (`apiary-backend`), the Rust service tier of the APIARY dashboard's modernization port (#1608). It is not a public API: the dashboard BFF is the only intended caller and presents the service token on every /api/v1 route, with a signed actor assertion for the operator behind the call (#3577). The VPS blocklist pull holds an export-only credential that reaches GET /api/v1/ip-block-export and nothing else. /healthz, /livez, /readyz and /metrics are the exceptions, open on purpose for the container healthcheck and the #1972 metrics scrape.\n\nResponse bodies are deliberately left unconstrained here. The handlers return `Json<Value>` or a per-surface struct that nothing in this crate enforces, so restating 138 shapes would be 138 chances to publish something the code does not promise -- and a contract that lies about a response is worse than one that admits the gap. What this document does pin is the part that has been wrong before: the auth tier, the request parameters (including the enum-valued ones the handlers actually validate), the declared status codes, and the media type of every response. That is what `.github/workflows/weekly-schemathesis.yml` checks.\n\n`arcane/home/honeypot-dashboard/backend-service/src/openapi.rs` is the source of truth. Regenerate the committed copy with `cargo run --bin openapi > openapi.json`; the drift tests in that module and a diff step in `quality.yml` both fail if you forget.",
     "summary": "The dashboard's Rust service tier: Elasticsearch-backed read APIs over the honeypot event corpus.",
     "title": "APIARY dashboard backend-service",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "x-api-version": 1
   },
   "openapi": "3.1.0",
   "paths": {
@@ -98,7 +111,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -113,6 +126,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -162,7 +179,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -197,6 +214,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -250,7 +271,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -275,6 +296,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -347,7 +372,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -392,6 +417,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -442,7 +471,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -457,6 +486,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -547,7 +580,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -562,6 +595,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -612,7 +649,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -637,6 +674,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -709,7 +750,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -744,6 +785,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -805,11 +850,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -900,7 +949,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -915,6 +964,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -945,7 +998,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -960,6 +1013,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1007,7 +1064,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -1063,6 +1120,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Mint a canarytoken.",
@@ -1092,11 +1153,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1142,7 +1207,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -1188,6 +1253,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "The canarytoken's landing URL, as a redirect.",
@@ -1228,7 +1297,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -1253,6 +1322,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1294,7 +1367,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -1319,6 +1392,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1349,7 +1426,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1364,6 +1441,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1414,7 +1495,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -1439,6 +1520,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1469,7 +1554,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1484,6 +1569,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1514,7 +1603,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1529,6 +1618,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1559,7 +1652,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1574,6 +1667,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1604,7 +1701,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1619,6 +1716,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1649,7 +1750,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1664,6 +1765,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1694,7 +1799,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1709,6 +1814,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1739,7 +1848,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1754,6 +1863,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1784,7 +1897,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1799,6 +1912,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1829,7 +1946,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1844,6 +1961,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1874,7 +1995,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1889,6 +2010,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1919,7 +2044,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1934,6 +2059,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -1964,7 +2093,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -1979,6 +2108,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2009,7 +2142,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2024,6 +2157,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2054,7 +2191,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2069,6 +2206,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2099,7 +2240,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2114,6 +2255,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2144,7 +2289,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2159,6 +2304,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2189,7 +2338,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2204,6 +2353,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2234,7 +2387,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2249,6 +2402,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2279,7 +2436,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2294,6 +2451,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2384,7 +2545,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2399,6 +2560,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2429,7 +2594,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -2444,6 +2609,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2474,11 +2643,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2551,7 +2724,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -2606,6 +2779,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2660,7 +2837,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -2716,6 +2893,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Restore a past configuration revision.",
@@ -2764,7 +2945,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -2789,6 +2970,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -2875,7 +3060,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -2931,6 +3116,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Replace one settings section.",
@@ -2970,7 +3159,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -2995,6 +3184,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3025,7 +3218,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -3040,6 +3233,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3070,15 +3267,19 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
-        "summary": "HoneyFS implant credentials, with secrets redacted.",
+        "summary": "HoneyFS implant credentials, including their bait passwords (not redacted).",
         "tags": [
           "operations"
         ]
@@ -3122,7 +3323,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -3177,6 +3378,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3236,7 +3441,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3281,6 +3486,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3330,7 +3539,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3396,6 +3605,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Rotate a honeyfs-implant credential's secret.",
@@ -3454,7 +3667,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3479,6 +3692,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3549,7 +3766,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3574,6 +3791,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3624,7 +3845,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3649,6 +3870,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -3699,7 +3924,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -3724,6 +3949,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -4013,7 +4242,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -4028,6 +4257,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -4091,7 +4324,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -4106,6 +4339,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -4162,7 +4399,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -4177,6 +4414,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -4466,7 +4707,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -4481,6 +4722,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -4770,7 +5015,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -4785,6 +5030,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5074,7 +5323,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -5089,6 +5338,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5152,7 +5405,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -5167,6 +5420,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5442,7 +5699,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5467,6 +5724,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5497,7 +5758,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -5512,6 +5773,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5553,7 +5818,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5578,6 +5843,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5627,7 +5896,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5673,6 +5942,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Queue a Ghidra analysis.",
@@ -5713,7 +5986,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5738,6 +6011,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5787,7 +6064,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5833,6 +6110,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Queue a GitHub analysis.",
@@ -5873,7 +6154,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -5898,6 +6179,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5928,7 +6213,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -5943,6 +6228,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -5983,7 +6272,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -5998,6 +6287,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6048,7 +6341,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6071,6 +6364,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6101,7 +6398,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -6116,6 +6413,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6156,7 +6457,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6179,6 +6480,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6209,7 +6514,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
@@ -6229,7 +6534,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -6244,6 +6549,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6289,7 +6598,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
@@ -6309,7 +6618,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6334,6 +6643,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6374,7 +6687,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6397,6 +6710,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6427,7 +6744,7 @@
                 "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
           },
           "400": {
             "content": {
@@ -6447,7 +6764,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6472,6 +6789,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6512,7 +6833,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6535,6 +6856,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6614,7 +6939,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -6629,6 +6954,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6697,7 +7026,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -6721,6 +7050,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "One indicator: counts, sensors, top sources, sessions, payloads and recent events.",
@@ -6739,7 +7072,7 @@
               "schema": {}
             }
           },
-          "description": "Deserialized by the handler into `BlockBody`. The shape is left open here on purpose -- see the module doc.",
+          "description": "Deserialized by the handler into `BlockBody`: `{ip, blocked, expires_days?, actor?}`. `expires_days` (days, integer >= 0) is required when `blocked` is true and `0` means a permanent block; omitting it on a block is a 422. It is ignored on an unblock. `actor` is bound to the verified actor. The shape is left open here on purpose -- see the module doc.",
           "required": true
         },
         "responses": {
@@ -6769,7 +7102,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -6789,7 +7122,7 @@
                 }
               }
             },
-            "description": "Well-formed but unprocessable. Two causes, both text/plain: the Json<T> extractor refused the body before the handler ran, or the route's own domain check rejected the reference it was asked to resolve (the reports store answers this for an unresolvable scope or an unexpected storage failure)."
+            "description": "Well-formed but unprocessable: the Json<T> extractor refused the body before the handler ran, or `blocked` is true and `expires_days` is absent (send `0` for a permanent block)."
           },
           "502": {
             "content": {
@@ -6804,6 +7137,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6834,7 +7171,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -6849,6 +7186,13 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "exportToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6899,7 +7243,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -6914,6 +7258,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -6944,11 +7292,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7019,11 +7371,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7074,7 +7430,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -7099,6 +7455,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7148,7 +7508,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -7183,6 +7543,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7222,7 +7586,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -7258,6 +7622,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Acknowledge every open ML anomaly.",
@@ -7287,7 +7655,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7302,6 +7670,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7351,7 +7723,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -7387,6 +7759,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Record an analyst disposition for anomalies.",
@@ -7416,7 +7792,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7431,6 +7807,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7461,7 +7841,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7476,6 +7856,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7526,7 +7910,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7541,6 +7925,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7571,7 +7959,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7586,6 +7974,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7676,7 +8068,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -7691,6 +8083,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7732,7 +8128,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -7757,6 +8153,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7808,7 +8208,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -7843,6 +8243,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -7889,7 +8293,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -7935,6 +8339,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "One-click payload PDF into the generated store.",
@@ -7974,7 +8382,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -7997,6 +8405,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8065,7 +8477,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -8080,6 +8492,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8127,7 +8543,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8172,6 +8588,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8221,7 +8641,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8266,6 +8686,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8329,7 +8753,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8385,6 +8809,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "File a problem report from the dashboard UI.",
@@ -8438,7 +8866,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8493,6 +8921,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8583,7 +9015,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -8598,6 +9030,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8638,7 +9074,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8663,6 +9099,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8703,7 +9143,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8728,6 +9168,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8768,7 +9212,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8803,6 +9247,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8843,7 +9291,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -8866,6 +9314,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8896,7 +9348,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "500": {
             "content": {
@@ -8919,6 +9371,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -8949,7 +9405,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -8964,6 +9420,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9006,7 +9466,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "409": {
             "content": {
@@ -9052,6 +9512,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Save a new report definition.",
@@ -9091,7 +9555,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9126,6 +9590,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9164,7 +9632,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9189,6 +9657,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9246,7 +9718,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9301,6 +9773,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9355,7 +9831,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9411,6 +9887,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Run a saved definition now and store the result.",
@@ -9450,7 +9930,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9475,6 +9955,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9524,7 +10008,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "415": {
             "content": {
@@ -9560,6 +10044,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "What a report definition would contain, without rendering it.",
@@ -9589,11 +10077,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9634,7 +10126,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9659,6 +10151,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9700,7 +10196,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9725,6 +10221,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9755,11 +10255,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9809,7 +10313,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9855,6 +10359,10 @@
         "security": [
           {
             "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
+            "serviceToken": []
           }
         ],
         "summary": "Queue a sandbox detonation.",
@@ -9884,7 +10392,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9899,6 +10407,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -9939,7 +10451,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -9964,6 +10476,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10014,7 +10530,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10029,6 +10545,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10059,7 +10579,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10074,6 +10594,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10104,7 +10628,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10119,6 +10643,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10179,7 +10707,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10194,6 +10722,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10245,7 +10777,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10260,6 +10792,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10290,7 +10826,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "503": {
             "content": {
@@ -10303,6 +10839,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10367,7 +10907,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "503": {
             "content": {
@@ -10380,6 +10920,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10465,7 +11009,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "503": {
             "content": {
@@ -10478,6 +11022,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10528,7 +11076,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -10553,6 +11101,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10583,7 +11135,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10598,6 +11150,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10628,7 +11184,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10643,6 +11199,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10706,7 +11266,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10721,6 +11281,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10780,7 +11344,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -10795,6 +11359,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10834,7 +11402,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -10857,6 +11425,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10907,7 +11479,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -10930,6 +11502,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -10989,7 +11565,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -11004,6 +11580,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11063,7 +11643,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -11078,6 +11658,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11157,7 +11741,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "405": {
             "content": {
@@ -11182,6 +11766,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11299,7 +11887,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -11324,6 +11912,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11373,7 +11965,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -11396,6 +11988,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11426,11 +12022,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11461,7 +12061,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -11476,6 +12076,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11526,11 +12130,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11561,11 +12169,15 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           }
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11619,7 +12231,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -11632,6 +12244,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11675,7 +12291,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -11688,6 +12304,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11746,7 +12366,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -11795,6 +12415,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11867,7 +12491,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "502": {
             "content": {
@@ -11880,6 +12504,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -11938,7 +12566,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -11979,6 +12607,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -12031,7 +12663,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -12052,6 +12684,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],
@@ -12134,7 +12770,7 @@
                 }
               }
             },
-            "description": "No valid service token (or, on the Workbench, no actor identity)."
+            "description": "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or invalid actor assertion; on the Workbench, also no actor identity."
           },
           "404": {
             "content": {
@@ -12155,6 +12791,10 @@
         },
         "security": [
           {
+            "serviceToken": []
+          },
+          {
+            "actorAssertion": [],
             "serviceToken": []
           }
         ],

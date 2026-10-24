@@ -63,11 +63,16 @@ VPS_ENV_EXAMPLE = REPO_ROOT / "vps/.env.example"
 DESIGN_DOC = REPO_ROOT / "docs/dashboard-manual-ip-block-design.md"
 BACKEND_IP_BLOCK = REPO_ROOT / "arcane/home/honeypot-dashboard/backend-service/src/ip_block.rs"
 OPENAPI_JSON = REPO_ROOT / "arcane/home/honeypot-dashboard/backend-service/openapi.json"
-TOKEN_ENV = "DASHBOARD_SERVICE_TOKEN"
+TOKEN_ENV = "BLACKHOLE_EXPORT_TOKEN"
+SERVICE_TOKEN_ENV = "DASHBOARD_SERVICE_TOKEN"
 
 # The route that actually serves the export, and the one that never existed.
+# #3578: the sidecar reads the rewrite dashboard's own export route.
+EXPORT_ROUTE = "/export/portbridge-manual-blackhole.txt"
+# The backend route (openapi.json) the dashboard's export is served from.
 REAL_ROUTE = "/api/v1/ip-block-export"
-DEAD_PATH = "/export/portbridge-manual-blackhole.txt"
+# The old dashboard's /bff proxy form, which needed the backend-wide token.
+OLD_BFF_PATH = "/bff/api/v1/ip-block-export"
 
 # What an operator's working list looks like before the sidecar runs. Any
 # refusal must leave exactly this, byte for byte.
@@ -94,7 +99,7 @@ needs_sh = pytest.mark.skipif(shutil.which("sh") is None, reason="no /bin/sh; th
 # does not match would fall through the handler to the "real export" branch,
 # and every negative test below would then pass vacuously against a working
 # sidecar.
-MODES = ("export", "empty-200", "redirect-307", "html-200", "not-found-404")
+MODES = ("export", "empty-200", "redirect-307", "html-200", "not-found-404", "unauthorized-401", "server-error-503")
 
 
 class _ExportHandler(BaseHTTPRequestHandler):
@@ -115,7 +120,13 @@ class _ExportHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 -- http.server's own name
         server = self.server
-        server.requests.append({"path": self.path, "token": self.headers.get("X-Service-Token")})
+        server.requests.append(
+            {
+                "path": self.path,
+                "token": self.headers.get("X-Export-Token"),
+                "service_token": self.headers.get("X-Service-Token"),
+            }
+        )
         mode = server.mode
         if self.path.startswith("/auth/login"):
             self._respond(200, LOGIN_PAGE, "text/html; charset=utf-8")
@@ -134,6 +145,12 @@ class _ExportHandler(BaseHTTPRequestHandler):
             # fetch ends up holding. The status gate cannot catch it; the
             # content-type and line-format gates exist for exactly this.
             self._respond(200, LOGIN_PAGE, "text/html; charset=utf-8")
+        elif mode == "unauthorized-401":
+            # What the dashboard answers a wrong, missing or SERVICE_TOKEN
+            # credential on the export route.
+            self._respond(401, b"unauthorized", "text/plain; charset=utf-8")
+        elif mode == "server-error-503":
+            self._respond(503, b"unavailable", "text/plain; charset=utf-8")
         elif mode == "not-found-404":
             self._respond(404, b"not found", "text/plain; charset=utf-8")
         else:
@@ -178,7 +195,13 @@ def export_server():
 SETTLED = re.compile(r"portbridge-manual-blackhole-refresh: (updated |\[E-)")
 
 
-def _run_sidecar(tmp_path: pathlib.Path, port: int, token: str | None, settle_timeout: float = 25.0):
+def _run_sidecar(
+    tmp_path: pathlib.Path,
+    port: int,
+    token: str | None,
+    settle_timeout: float = 25.0,
+    extra_env: dict | None = None,
+):
     """Run the real script once against the local server and return
     (stderr, list contents, stray files in the list's directory).
 
@@ -193,7 +216,9 @@ def _run_sidecar(tmp_path: pathlib.Path, port: int, token: str | None, settle_ti
     dest.write_text(WORKING_LIST)
 
     env = dict(os.environ)
-    env["MANUAL_BLACKHOLE_URL"] = f"http://127.0.0.1:{port}/bff{REAL_ROUTE}"
+    env["MANUAL_BLACKHOLE_URL"] = f"http://127.0.0.1:{port}{EXPORT_ROUTE}"
+    env.pop(SERVICE_TOKEN_ENV, None)
+    env.update(extra_env or {})
     env["BLACKHOLE_MANUAL_LIST"] = str(dest)
     env["MANUAL_REFRESH_INTERVAL_SECONDS"] = "3600"
     if token is None:
@@ -248,7 +273,7 @@ def test_a_200_with_zero_bytes_is_refused_and_the_list_survives(tmp_path, export
     was written to manual.txt every 300 seconds, emptying every operator
     block. A 0-byte export must be refused and the working list left alone."""
     server = export_server("empty-200")
-    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == WORKING_LIST, (
         "a 200 with a 0-byte body truncated the blocklist (#3403). The export "
@@ -273,7 +298,7 @@ def test_a_307_to_the_login_page_is_refused_and_the_list_survives(tmp_path, expo
     it. A redirect is not a blocklist, redirects are not followed, and the
     existing list survives."""
     server = export_server("redirect-307")
-    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == WORKING_LIST, (
         "a 307 to /auth/login was written over the blocklist (#3403); manual.txt "
@@ -296,7 +321,7 @@ def test_a_login_page_delivered_as_a_plain_200_is_still_refused(tmp_path, export
     proxy) must also be refused. The status gate cannot catch this one, which
     is why the content type and the line format are checked too."""
     server = export_server("html-200")
-    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == WORKING_LIST, (
         f"an HTML page was written over the blocklist (#3403): {contents!r}"
@@ -306,11 +331,42 @@ def test_a_login_page_delivered_as_a_plain_200_is_still_refused(tmp_path, export
 
 @needs_sh
 @needs_curl
+def test_an_auth_error_keeps_the_last_good_list(tmp_path, export_server):
+    """#3578: the dashboard answers 401 to a wrong or missing export token, or
+    to SERVICE_TOKEN now that the route no longer accepts it. That must cost
+    one skipped refresh, never the working list."""
+    server = export_server("unauthorized-401")
+    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
+
+    assert contents == WORKING_LIST, f"a 401 emptied or replaced the blocklist; manual.txt is now {contents!r}"
+    assert "[E-EXPORT-STATUS]" in stderr and "401" in stderr, (
+        f"the refusal must name the status so an operator can tell a revoked token from an outage: {stderr!r}"
+    )
+    assert "updated" not in stderr, f"a refused body must never be reported as an update: {stderr!r}"
+    assert "test-export-token" not in stderr, f"the token reached the log: {stderr!r}"
+    assert stray == [], f"a refusal must not leave temp files behind: {stray}"
+
+
+@needs_sh
+@needs_curl
+def test_an_upstream_outage_keeps_the_last_good_list(tmp_path, export_server):
+    """A 503 from a dashboard that is restarting or has lost its backend is an
+    outage, not an empty list."""
+    server = export_server("server-error-503")
+    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
+
+    assert contents == WORKING_LIST, f"a 503 replaced the blocklist; manual.txt is now {contents!r}"
+    assert "[E-EXPORT-STATUS]" in stderr and "503" in stderr, f"the refusal must name the status: {stderr!r}"
+    assert stray == [], f"a refusal must not leave temp files behind: {stray}"
+
+
+@needs_sh
+@needs_curl
 def test_a_missing_route_returning_404_is_still_refused(tmp_path, export_server):
     """The one case that already worked. #3403 must not have cost it: a 404
     keeps the existing list and says so."""
     server = export_server("not-found-404")
-    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == WORKING_LIST, f"a 404 must keep the existing list; manual.txt is now {contents!r}"
     assert "[E-" in stderr, f"a 404 must be refused loudly; stderr was: {stderr!r}"
@@ -325,7 +381,7 @@ def test_a_refused_export_leaves_no_temp_file_for_the_next_reader(tmp_path, expo
     writer would look like to the next reader, and it grows one per interval
     on a permanently broken endpoint."""
     server = export_server("empty-200")
-    _stderr, _contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    _stderr, _contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
     assert stray == [], (
         f"a refused export left files behind in the list's directory: {stray} -- "
         "these accumulate one per interval on a permanently broken endpoint"
@@ -342,7 +398,7 @@ def test_a_real_export_is_written_and_counted(tmp_path, export_server):
     addresses replaces the list, and the count in the log is the number of
     addresses in the file -- never a number that came from somewhere else."""
     server = export_server("export")
-    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == A_REAL_EXPORT, (
         f"a valid export was not written to the list (#3403); manual.txt is {contents!r}"
@@ -366,7 +422,7 @@ def test_comments_and_trailing_annotations_are_still_accepted(tmp_path, export_s
     server = export_server("export")
     server.export_body = annotated.encode()
 
-    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == annotated, (
         "a body of comments, blanks and annotated addresses is in the format "
@@ -396,7 +452,7 @@ def test_an_ipv6_entry_is_delivered_not_refused(tmp_path, export_server):
     server = export_server("export")
     server.export_body = mixed.encode()
 
-    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    stderr, contents, _stray = _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert contents == mixed, (
         "an export containing an IPv6 address must be delivered verbatim; "
@@ -408,23 +464,60 @@ def test_an_ipv6_entry_is_delivered_not_refused(tmp_path, export_server):
 
 @needs_sh
 @needs_curl
-def test_the_export_is_requested_with_the_service_token_header(tmp_path, export_server):
-    """`/api/v1/ip-block-export` is auth-gated (require_service_token, #2183;
-    `security: [{serviceToken: []}]` in the generated openapi.json). The
-    sidecar has to present the existing shared secret, in the existing
-    header, or the dashboard answers 307 -- which is #3403 again."""
+def test_the_export_is_requested_with_the_export_token_header(tmp_path, export_server):
+    """The dashboard's export route is auth-gated. The sidecar presents the
+    export-only secret in `X-Export-Token`, or the dashboard answers 401 --
+    which is #3403 and #3578 again."""
     server = export_server("export")
-    _run_sidecar(tmp_path, server.server_address[1], "test-service-token")
+    _run_sidecar(tmp_path, server.server_address[1], "test-export-token")
 
     assert server.requests, "the sidecar never requested the export route"
     request = server.requests[0]
-    assert REAL_ROUTE in request["path"], (
-        f"the sidecar must request the real export route; it requested {request['path']!r} (#3403)"
+    assert request["path"] == EXPORT_ROUTE, (
+        f"the sidecar must request the dashboard's export route; it requested {request['path']!r}"
     )
-    assert request["token"] == "test-service-token", (
-        "the export request must carry DASHBOARD_SERVICE_TOKEN in an "
-        f"X-Service-Token header; the server saw {request['token']!r} (#3403)"
+    assert request["token"] == "test-export-token", (
+        f"the export request must carry {TOKEN_ENV} in an X-Export-Token header; the server saw {request['token']!r}"
     )
+
+
+@needs_sh
+@needs_curl
+def test_the_backend_wide_service_token_is_never_sent(tmp_path, export_server):
+    """#3578: the VPS must not hold SERVICE_TOKEN. Even if the old variable is
+    still in the container's environment, nothing reads it or sends it."""
+    server = export_server("export")
+    stderr, _contents, _stray = _run_sidecar(
+        tmp_path,
+        server.server_address[1],
+        "test-export-token",
+        extra_env={SERVICE_TOKEN_ENV: "backend-wide-secret"},
+    )
+
+    assert server.requests, "the sidecar never requested the export route"
+    assert all(req["service_token"] is None for req in server.requests), (
+        f"an X-Service-Token header was sent: {server.requests!r}"
+    )
+    assert server.requests[0]["token"] == "test-export-token", (
+        "the export token must be what authenticates, whatever else is in the environment"
+    )
+    assert "backend-wide-secret" not in stderr
+
+
+@needs_sh
+@needs_curl
+def test_only_the_old_service_token_is_not_enough(tmp_path, export_server):
+    """With the old variable set and the export token unset, the sidecar must
+    refuse without making a request, not fall back to the backend-wide secret."""
+    server = export_server("export")
+    stderr, contents, _stray = _run_sidecar(
+        tmp_path, server.server_address[1], token=None, extra_env={SERVICE_TOKEN_ENV: "backend-wide-secret"}
+    )
+
+    assert server.requests == [], f"the sidecar fell back to another credential: {server.requests!r}"
+    assert contents == WORKING_LIST
+    assert "[E-NO-EXPORT-TOKEN]" in stderr, stderr
+    assert "backend-wide-secret" not in stderr
 
 
 @needs_sh
@@ -475,7 +568,7 @@ def test_an_unreachable_homeserver_keeps_the_list(tmp_path, export_server):
     server.shutdown()
     server.server_close()
 
-    stderr, contents, _stray = _run_sidecar(tmp_path, port, "test-service-token")
+    stderr, contents, _stray = _run_sidecar(tmp_path, port, "test-export-token")
     assert contents == WORKING_LIST, f"a failed fetch must keep the existing list; manual.txt is {contents!r}"
     assert "[E-" in stderr, f"a failed fetch must be refused loudly; stderr was: {stderr!r}"
 
@@ -487,43 +580,42 @@ def _script_text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_the_default_url_is_the_route_that_exists():
-    """Fix 1. The default pointed at a path the dashboard does not serve; the
-    export lives on `/api/v1/ip-block-export`, reached through the BFF's
-    `/bff/*` proxy -- the same seam
-    scripts/github-ci-runner/dashboard-source-health.sh already uses."""
+def test_the_default_url_is_the_dashboards_export_route():
+    """#3578: the default is the rewrite dashboard's own export route, the one
+    place that accepts the export-only token. The old /bff proxy form needed
+    the backend-wide token, and the old path answered a login page (#3403)."""
     text = _script_text()
     default = re.search(r'MANUAL_BLACKHOLE_URL:-([^}"]+)', text)
     assert default, "the sidecar must keep MANUAL_BLACKHOLE_URL overridable"
     url = default.group(1)
-    assert REAL_ROUTE in url, (
-        f"the sidecar's default URL must be the route that serves the export, {REAL_ROUTE!r}; got {url!r} (#3403)"
-    )
-    assert DEAD_PATH not in url, (
-        f"{DEAD_PATH} is not a route -- it answers 200 with a 0-byte auth-redirect page, which is #3403"
-    )
-    assert url.startswith("http://10.8.0.2:19090/"), (
-        "the host and port must stay the dashboard's real published binding "
-        f"(docs/CGNAT-DEPLOYMENT.md); got {url!r}"
+    assert url.endswith(EXPORT_ROUTE), f"the default URL must be the dashboard's export route; got {url!r}"
+    assert OLD_BFF_PATH not in url, f"the old /bff proxy form needs the backend-wide token; got {url!r}"
+    assert url.startswith("http://10.8.0.2:19092/"), (
+        f"the host and port must stay the rewrite dashboard's published binding; got {url!r}"
     )
 
 
-def test_compose_points_the_sidecar_at_the_same_route():
+def test_compose_points_the_sidecar_at_the_same_route_without_the_service_token():
     """The URL in docker-compose.yml overrides the script's default, so a
     fixed default alone would change nothing on a deployed VPS."""
     text = COMPOSE.read_text(encoding="utf-8")
     service = text[text.index("  portbridge-manual-blackhole-refresh:") :]
-    env = re.search(r"environment:\n((?:      - .*\n)+)", service)
+    service = service[: service.index("    profiles:")]
+    env = re.search(r"environment:\n((?:      - .*\n|      #.*\n)+)", service)
     assert env, "the sidecar's environment block was not found in vps/docker-compose.yml"
     entries = env.group(1)
     url = next((ln for ln in entries.splitlines() if "MANUAL_BLACKHOLE_URL=" in ln), None)
     assert url, "docker-compose.yml no longer sets MANUAL_BLACKHOLE_URL for the sidecar"
-    assert REAL_ROUTE in url, (
-        f"docker-compose.yml overrides the script's default, so it must carry the real route too; got {url!r} (#3403)"
+    assert url.rstrip().endswith(EXPORT_ROUTE), f"compose must carry the dashboard's export route; got {url!r}"
+    assert "DASHBOARD_CANDIDATE_HOST" in url and "DASHBOARD_CANDIDATE_PORT" in url, (
+        f"compose must follow the configurable dashboard destination (#3648); got {url!r}"
     )
-    assert DEAD_PATH not in text, (
-        f"{DEAD_PATH} is still configured somewhere in vps/docker-compose.yml (#3403)"
+    assert f"{TOKEN_ENV}=${{{TOKEN_ENV}:-}}" in entries, f"compose must pass {TOKEN_ENV} through"
+    code = "\n".join(ln for ln in service.splitlines() if not ln.lstrip().startswith("#"))
+    assert SERVICE_TOKEN_ENV not in code, (
+        f"the sidecar must not receive {SERVICE_TOKEN_ENV}: the VPS holds the export token only (#3578)"
     )
+    assert OLD_BFF_PATH not in text, "the old /bff export URL is still configured in vps/docker-compose.yml"
 
 
 def _script_code() -> str:
@@ -556,27 +648,25 @@ def test_redirects_are_not_followed():
 def test_the_token_is_handed_to_curl_out_of_argv():
     """The repo's own rule for this, from
     scripts/github-ci-runner/dashboard-source-health.sh: "the token is not
-    visible in the process list while the request runs." `-H "X-Service-Token:
+    visible in the process list while the request runs." `-H "X-Export-Token:
     $token"` puts it in argv; curl's stdin config (`-K -`) does not."""
     code = _script_code()
-    assert 'header = "X-Service-Token: %s"' in code, (
-        "the service token must be passed as an X-Service-Token header (#3403)"
-    )
+    assert 'header = "X-Export-Token: %s"' in code, "the export token must be passed as an X-Export-Token header"
     assert "-K -" in code, (
         "the token must reach curl through its stdin config (-K -) so it is "
-        "never in argv or the container's process list, the same way "
-        "dashboard-source-health.sh does it"
+        "never in argv or the container's process list"
     )
-    assert not re.search(r"-H\s+[\"']?X-Service-Token", code), (
-        "an -H flag would put the service token in the process list"
+    assert not re.search(r"-H\s+[\"']?X-Export-Token", code), "an -H flag would put the token in the process list"
+    assert "X-Service-Token" not in code and SERVICE_TOKEN_ENV not in code, (
+        f"the script must not read or send the backend-wide token (#3578): {SERVICE_TOKEN_ENV}"
     )
 
 
 def test_no_credential_is_committed_anywhere_it_touches():
     """No hardcoded token, and the .env.example entry ships empty. A literal
-    here would be a live credential for the whole service tier, in a public
-    repository, forever. Compose's own `${DASHBOARD_SERVICE_TOKEN:-}` is the
-    interpolation, not a literal, and is the only shape allowed."""
+    here would be a live credential, in a public repository, forever.
+    Compose's own `${BLACKHOLE_EXPORT_TOKEN:-}` is the interpolation, not a
+    literal, and is the only shape allowed."""
     for path, text in ((SCRIPT, _script_text()), (COMPOSE, COMPOSE.read_text(encoding="utf-8"))):
         assert not re.search(rf"{TOKEN_ENV}\s*=\s*(?!\$\{{|\$)\S", text), (
             f"{path.name} assigns a literal value to {TOKEN_ENV}; it must be an "
@@ -586,21 +676,19 @@ def test_no_credential_is_committed_anywhere_it_touches():
     assert f"{TOKEN_ENV}=\n" in example, (
         f"vps/.env.example must document {TOKEN_ENV} with an empty value, the way every other secret here is documented"
     )
-    assert DEAD_PATH not in example
-
-
-def test_the_env_example_names_the_one_token_in_the_fleet():
-    """There is exactly one service token in this deployment, already named
-    DASHBOARD_SERVICE_TOKEN by the home stack. The VPS must reuse that name
-    and value, not introduce a second mechanism for the puller to
-    authenticate with -- the design question #3403 actually turned on."""
-    example = VPS_ENV_EXAMPLE.read_text(encoding="utf-8")
-    section = example[example.index("DASHBOARD_SERVICE_TOKEN") :]
-    assert "SERVICE_TOKEN" in section, "the entry must say this is the same secret the home stack carries as SERVICE_TOKEN"
-    assert TOKEN_ENV in section
-    assert "chmod 600" in example or "600" in section, (
-        "the entry must record that the file holding the token is 600 and never in the repository"
+    assert f"\n{SERVICE_TOKEN_ENV}=" not in example, (
+        f"vps/.env.example must not ask the VPS for {SERVICE_TOKEN_ENV} any more (#3578)"
     )
+
+
+def test_the_env_example_says_this_is_not_the_service_token():
+    """The point of the export-only token: this host never holds the
+    backend-wide secret. The documentation must say so where the value is set."""
+    example = VPS_ENV_EXAMPLE.read_text(encoding="utf-8")
+    section = example[example.index("Blocklist export token") : example.index(f"{TOKEN_ENV}=")]
+    assert "EXPORT_TOKEN" in section, "the entry must name the dashboard's EXPORT_TOKEN as the value to copy"
+    assert "NOT the dashboard's SERVICE_TOKEN" in section
+    assert "chmod 600" in section, "the entry must record that the file holding the token is 600 and never in the repository"
 
 
 # ------------------------------------------- 5. the route itself is not changed ----
@@ -629,9 +717,16 @@ def test_the_export_routes_own_contract_is_unchanged():
         "the export route declares a 3xx; there is no legitimate redirect here, "
         "and the sidecar's do-not-follow decision is derived from that"
     )
-    assert spec["paths"][REAL_ROUTE]["get"]["security"] == [{"serviceToken": []}], (
-        "the export must stay service-token gated -- the sidecar authenticates "
-        "because of this, and it is the reason an unauthenticated fetch 307s"
+    security = spec["paths"][REAL_ROUTE]["get"]["security"]
+    assert {} not in security, (
+        "the export must stay credential gated -- an empty security alternative "
+        f"would make it reachable unauthenticated. Got {security}"
+    )
+    # #3577 added the export-only credential beside the service token; the
+    # service-token alternative is what the sidecar's 307 check relies on.
+    assert {"serviceToken": []} in security and {"exportToken": []} in security, (
+        "the export must accept the service token and the export-only token. "
+        f"Got {security}"
     )
 
 
@@ -665,8 +760,11 @@ def test_the_design_record_covers_the_correction():
         "#3403 -- both vps/docker-compose.yml and the sidecar's header cite it"
     )
     assert REAL_ROUTE in section, "decision 4 must name the route the puller actually fetches"
-    assert TOKEN_ENV in section, (
-        f"decision 4 must record that the puller authenticates with {TOKEN_ENV} -- the auth posture it cited is no longer true"
+    assert SERVICE_TOKEN_ENV in section, (
+        f"decision 4 must record that the puller authenticated with {SERVICE_TOKEN_ENV} -- the auth posture it cited"
+    )
+    assert TOKEN_ENV in section and "3578" in section, (
+        f"decision 4 must record that #3578 moved the puller to {TOKEN_ENV}, an export-only token"
     )
     assert "/auth/login" in section, "decision 4 must record the 307-to-login shape that hid the failure"
 

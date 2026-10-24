@@ -731,9 +731,11 @@ jobs:
           # override's warning. Throwaway and loopback-only; generated so
           # the value is obviously not a credential in the tree.
           token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          # #3700: run-scoped names (both smokes), so concurrent runs on one
+          # self-hosted runner never trip the script's refuse-to-reuse guard.
           scripts/boot-smoke-image.sh \
             --image-id "$IMAGE_ID" \
-            --name ci-bootsmoke-backend-service \
+            --name "ci-bootsmoke-backend-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --container-port 8081 \
             --health-timeout 120 \
             --stub-es-env ELASTICSEARCH_URL \
@@ -762,7 +764,7 @@ jobs:
           # deliberately needs no backend.
           scripts/boot-smoke-image.sh \
             --image-id "$IMAGE_ID" \
-            --name ci-bootsmoke-dashboard-next \
+            --name "ci-bootsmoke-dashboard-next-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --container-port 8080 \
             --health-timeout 120 \
             --env "SERVICE_TOKEN=$token" \

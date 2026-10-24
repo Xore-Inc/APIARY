@@ -180,7 +180,12 @@ services:
       # WireGuard-only network boundary -- see main.go's requireToken doc.
       # Empty by default, matching every other internal-only API in this
       # repo (network reachability is the trust boundary).
+      # The token may instead come from IMPLANT_TOKEN_FILE (#3690), a path
+      # inside the container, so a file must be mounted there to be useful.
+      # Setting both, or naming an unreadable/empty file, makes the service
+      # exit non-zero ([E-IMPLANT-TOKEN]); it never falls back to no auth.
       - IMPLANT_TOKEN=${HONEYFS_IMPLANT_TOKEN:-}
+      - IMPLANT_TOKEN_FILE=${HONEYFS_IMPLANT_TOKEN_FILE:-}
     ports:
       - ${HP_BIND:-10.8.0.2}:19428:8091
     volumes:
@@ -213,14 +218,18 @@ services:
           memory: 256M
 
 networks:
-  # #269: outbound is allowed by default, matching this repo's previous de
-  # facto behavior (no honeypot's network has ever set internal: true) and
-  # T-Pot's own explicitly-named design choice for the same reason -- Cowrie
+  # #269: outbound is allowed by default on decoy and sensor networks,
+  # matching this repo's previous de facto behavior (no decoy's per-stack
+  # network has ever set internal: true) and T-Pot's own explicitly-named
+  # design choice for the same reason -- Cowrie
   # only captures the attacker's actual malware, not just the download
   # attempt, if its fake shell's wget/curl/tftp can really reach the
   # internet to fetch it. Set COWRIE_AIR_GAPPED=true (.env) for a stricter,
   # fully air-gapped deployment that trades that capability away; see
   # docs/persona-design.md for the full tradeoff.
+  # Scoped deliberately: management-plane networks in other arcane/home stacks
+  # (keycloak-data, oidc-session, honeypot-llm-data) do set internal: true,
+  # because those services want no egress. They are not sensor networks.
   cowrie_net:
     driver: bridge
     internal: ${COWRIE_AIR_GAPPED:-false}

@@ -26,12 +26,12 @@ x-oidc-gateway: &oidc-gateway
     OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
     # #3120: oauth2-proxy answers its default /ping path unauthenticated,
     # ahead of its own auth handler -- a property of oauth2-proxy, not of
-    # any one Traefik host, so all six gateways sharing this anchor (kibana,
-    # tanner, evebox, arkime, revdeck, traefik) exposed it. Neither
+    # any one Traefik host, so all seven gateways sharing this anchor (kibana,
+    # tanner, evebox, arkime, revdeck, unsloth, traefik) exposed it. Neither
     # healthcheck in this file depends on the default path: Traefik's own
     # liveness check hits the loopback traefik-local entrypoint directly
     # (not through this gateway), and oauth2-proxy's container healthcheck
-    # runs `--version`, not an HTTP call. One line here closes all six at
+    # runs `--version`, not an HTTP call. One line here closes all seven at
     # once instead of a per-host Traefik deny router.
     OAUTH2_PROXY_PING_PATH: /__apiary_ping
     OAUTH2_PROXY_EMAIL_DOMAINS: "*"
@@ -149,6 +149,7 @@ services:
       - oidc-arkime
       - oidc-tanner
       - oidc-revdeck
+      - oidc-unsloth
       - oidc-traefik
       - oidc-dashboard
     # #117: `traefik healthcheck` does a full binary re-exec (new Go runtime
@@ -627,15 +628,14 @@ services:
   # same portbridge-blackhole volume as the maltrail refresh -- both write
   # different filenames into the same directory portbridge reads both from.
   #
-  # #3403: MANUAL_BLACKHOLE_URL pointed at /export/portbridge-manual-blackhole
-  # .txt, which the dashboard does not serve. The frontend answers an unknown
-  # path with an auth redirect, so curl -fsSL exited 0 on a 200 whose body was
-  # a login page and this sidecar replaced a working blocklist with nothing
-  # every 300s, with nothing in the log to say so. It now points at the route
-  # that actually serves the export -- backend-service's ip_block::export,
-  # reached through the BFF's /bff/* proxy, the same seam
-  # scripts/github-ci-runner/dashboard-source-health.sh uses to reach the Rust
-  # tier from a shell. That route is auth-gated (#2183), hence the token below.
+  # #3578 / apiary-dashboard#246: this sidecar holds an export-only token
+  # (BLACKHOLE_EXPORT_TOKEN), never the dashboard's SERVICE_TOKEN, which
+  # reaches the whole backend. It fetches the rewrite dashboard's own export
+  # route over the WireGuard tunnel; the host and port follow
+  # DASHBOARD_CANDIDATE_HOST/PORT, the same pair the staging bridge uses. An
+  # auth error or an outage keeps the last good list (see the script header).
+  # Enable only after the dashboard runs with EXPORT_TOKEN and this host's
+  # .env carries the same value.
   portbridge-manual-blackhole-refresh:
     image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-portbridge-manual-blackhole-refresh
@@ -644,20 +644,14 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/portbridge-manual-blackhole-refresh.sh"]
     environment:
       - BLACKHOLE_MANUAL_LIST=/blackhole/manual.txt
-      - MANUAL_BLACKHOLE_URL=http://10.8.0.2:19090/bff/api/v1/ip-block-export
+      - MANUAL_BLACKHOLE_URL=http://${DASHBOARD_CANDIDATE_HOST:-10.8.0.2}:${DASHBOARD_CANDIDATE_PORT:-19092}/export/portbridge-manual-blackhole.txt
       - MANUAL_REFRESH_INTERVAL_SECONDS=300
-      # The dashboard's shared service token, by the name the home stack
-      # already uses for it: arcane/home/honeypot-dashboard/compose.yml maps
-      # the same DASHBOARD_SERVICE_TOKEN to SERVICE_TOKEN for every tier. Set
-      # it in vps/.env (git-ignored, chmod 600) to the identical value; it is
-      # never written to the list file and never printed. Passed with the
-      # same ${VAR:-} the home stack's own compose uses rather than ${VAR:?}:
-      # an unset value must not take down an unrelated compose profile, and
-      # the sidecar's own [E-NO-SERVICE-TOKEN] refusal is the loud signal --
-      # the same split the Rust and BFF tiers draw in #2183. Without it the
-      # request is refused rather than sent, because an unauthenticated one
-      # answers 307 to /auth/login -- the #3403 failure, re-created on purpose.
-      - DASHBOARD_SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
+      # The dashboard's EXPORT_TOKEN. Set it in vps/.env (git-ignored, chmod
+      # 600); it is never written to the list file and never printed. Passed
+      # with ${VAR:-} rather than ${VAR:?}: an unset value must not take down
+      # an unrelated compose profile, and the script's own [E-NO-EXPORT-TOKEN]
+      # refusal is the loud signal.
+      - BLACKHOLE_EXPORT_TOKEN=${BLACKHOLE_EXPORT_TOKEN:-}
     volumes:
       - ./portbridge-manual-blackhole-refresh.sh:/usr/local/bin/portbridge-manual-blackhole-refresh.sh:ro
       - portbridge-blackhole:/blackhole
@@ -766,7 +760,7 @@ services:
     image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
     container_name: socat-hp-dashboard
     restart: unless-stopped
-    command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:10.8.0.2:19090
+    command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:${DASHBOARD_LEGACY_HOST:-10.8.0.2}:${DASHBOARD_LEGACY_PORT:-19090}
     networks: [oidc-dashboard]
 
   # Staging bridge, side by side with socat-hp-dashboard above (left
@@ -779,7 +773,7 @@ services:
     image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
     container_name: socat-hp-dashboard-next
     restart: unless-stopped
-    command: TCP4-LISTEN:8092,fork,reuseaddr TCP4:10.8.0.2:19092
+    command: TCP4-LISTEN:8092,fork,reuseaddr TCP4:${DASHBOARD_CANDIDATE_HOST:-10.8.0.2}:${DASHBOARD_CANDIDATE_PORT:-19092}
     networks: [oidc-dashboard]
 
   # Bridges the homeserver's Keycloak (Dockge-managed honeypot-keycloak
@@ -918,6 +912,37 @@ services:
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/revdeck:/run/oidc-secrets:ro
     networks: [oidc-revdeck]
+    labels:
+      - autoheal=true
+
+  # #3689: Unsloth Studio (arcane/home/unsloth/compose.yml on the home server,
+  # container hp-unsloth-studio :8000, published on 8899 via UNSLOTH_BIND,
+  # default 10.8.0.2, the WireGuard address). Same gateway pattern as Kibana/TANNER/
+  # Rev·Deck: gated by oidc-unsloth, Keycloak client `unsloth`, role
+  # unsloth:access. The upstream Studio is not deployed at the time of
+  # writing, so every request after login fails upstream until it is.
+  socat-hp-unsloth:
+    image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
+    container_name: socat-hp-unsloth
+    restart: unless-stopped
+    command: TCP4-LISTEN:8899,fork,reuseaddr TCP4:10.8.0.2:8899
+    networks: [oidc-unsloth]
+
+  oidc-unsloth:
+    <<: *oidc-gateway
+    container_name: oidc-unsloth
+    environment:
+      <<: *oidc-gateway-environment
+      OAUTH2_PROXY_CLIENT_ID: unsloth
+      OAUTH2_PROXY_CLIENT_SECRET_FILE: /run/oidc-secrets/client-secret
+      OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/oidc-secrets/cookie-secret
+      OAUTH2_PROXY_REDIRECT_URL: https://unsloth.${OIDC_PUBLIC_DOMAIN:?set OIDC_PUBLIC_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_ALLOWED_ROLES: unsloth:access
+      OAUTH2_PROXY_COOKIE_NAME: __Host-apiary-unsloth
+      OAUTH2_PROXY_UPSTREAMS: http://socat-hp-unsloth:8899
+    volumes:
+      - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/unsloth:/run/oidc-secrets:ro
+    networks: [oidc-unsloth]
     labels:
       - autoheal=true
 
@@ -1273,6 +1298,8 @@ networks:
   oidc-tanner:
     driver: bridge
   oidc-revdeck:
+    driver: bridge
+  oidc-unsloth:
     driver: bridge
   oidc-traefik:
     driver: bridge

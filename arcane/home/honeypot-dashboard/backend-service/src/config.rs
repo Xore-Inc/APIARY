@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 
 use crate::audit::AuditEvent;
 use crate::config_history::HistoryEntry;
+use crate::trust::ActorBinding;
 use crate::AppState;
 
 const CONFIG_INDEX: &str = "dashboard-config-v1";
@@ -148,11 +149,14 @@ pub struct ActorQuery {
 /// audit trail.
 async fn put_config_field(
     state: &AppState,
+    binding: &ActorBinding,
     actor: ActorQuery,
     expected: Option<u64>,
     payload_key: &str,
     value: Value,
 ) -> Result<Response, (StatusCode, String)> {
+    let (actor_subject, actor_username) = binding.bind_pair(&actor.actor_subject, &actor.actor_username)?;
+    let actor = ActorQuery { actor_subject, actor_username };
     let mut doc = load_config(state)
         .await
         .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?
@@ -223,6 +227,7 @@ async fn put_config_field(
 )]
 pub async fn put_presentation(
     State(state): State<AppState>,
+    binding: ActorBinding,
     Query(actor): Query<ActorQuery>,
     headers: HeaderMap,
     Json(presentation): Json<Value>,
@@ -231,7 +236,7 @@ pub async fn put_presentation(
         return Err((StatusCode::BAD_REQUEST, "presentation object required".into()));
     }
     let expected = expected_revision(&headers)?;
-    put_config_field(&state, actor, expected, "presentation", presentation).await
+    put_config_field(&state, &binding, actor, expected, "presentation", presentation).await
 }
 
 /// URL section name -> `payload.*` key. Only these three are exposed here;
@@ -278,6 +283,7 @@ fn config_section_key(section: &str) -> Option<&'static str> {
 /// this file that just round-trips whatever JSON `Value` it's given).
 pub async fn put_config_section(
     State(state): State<AppState>,
+    binding: ActorBinding,
     Path(section): Path<String>,
     Query(actor): Query<ActorQuery>,
     headers: HeaderMap,
@@ -290,7 +296,7 @@ pub async fn put_config_section(
         return Err((StatusCode::BAD_REQUEST, format!("{payload_key} object required")));
     }
     let expected = expected_revision(&headers)?;
-    put_config_field(&state, actor, expected, payload_key, value).await
+    put_config_field(&state, &binding, actor, expected, payload_key, value).await
 }
 
 #[utoipa::path(
@@ -356,9 +362,11 @@ pub struct RollbackBody {
 /// same optional `If-Match: <revision>` precondition as the PUT handlers.
 pub async fn rollback(
     State(state): State<AppState>,
+    binding: ActorBinding,
     headers: HeaderMap,
-    Json(body): Json<RollbackBody>,
+    Json(mut body): Json<RollbackBody>,
 ) -> Result<Response, (StatusCode, String)> {
+    (body.actor_subject, body.actor_username) = binding.bind_pair(&body.actor_subject, &body.actor_username)?;
     if body.revision < 0 {
         return Err((StatusCode::BAD_REQUEST, "a non-negative revision is required".into()));
     }

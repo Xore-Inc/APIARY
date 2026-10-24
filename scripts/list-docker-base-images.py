@@ -193,10 +193,19 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "from 147"
     ),
     "rust:1-slim-bookworm": (
-        "sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e",
+        "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
         "build stage only -- backend-service names it `AS build` and ships a "
-        "debian:bookworm-slim final image; measured 1 fixable CRITICAL/HIGH "
-        "after the pin moved to the tag's current digest, down from 74"
+        "debian:bookworm-slim final image. Re-pinned to the tag's current "
+        "digest (#3667): the pcre2 finding is gone, and 7 fixable findings "
+        "remain, all in the perl packages (perl-base, perl, perl-modules-5.36, "
+        "libperl5.36) at 5.36.0-7+deb12u4. Debian has fixed these in its "
+        "archive, but no bookworm image tag carries the fix yet. perl-base is "
+        "an essential package the base image cannot drop. None of the "
+        "flagged code runs in the shipped image: it is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which only run when a "
+        "perl script loads them, and the backend-service final stage runs only "
+        "its own Rust binary. Retires itself when a bookworm rebuild lands "
+        "deb12u4 and the pin moves."
     ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
@@ -226,21 +235,29 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # instead and no entry was written -- see the entries' "moved to"
     # comments in REPORT.md.
     "debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
-        "measured 1 fixable CRITICAL/HIGH (CVE-2026-103111 libpcre2-8-0), and "
-        "every point release of this tag measures the same 1: bookworm-slim, "
-        "bookworm-20260918-slim, 13.7-slim and trixie-slim were each scanned, "
-        "and trixie is worse at 5 (it trades this one for openssl 3.5.7 and "
-        "libssl3t64). Bookworm is what the tree targets -- the exemption "
-        "would have to become a distro migration, not a pin bump. Retires "
-        "itself when a bookworm rebuild lands the pcre2 fix."
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
+        "re-pinned from 3783cc01 to the tag's current digest (#3667). The "
+        "pcre2 finding (CVE-2026-103111) is gone, but 7 fixable CRITICAL/HIGH "
+        "remain, all in perl (perl-base, perl-modules-5.36, libperl5.36) at "
+        "5.36.0-7+deb12u4: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 "
+        "(CRITICAL), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, "
+        "CVE-2026-57433 (HIGH). Debian has fixed them in its archive, but no "
+        "bookworm tag carries the fix yet (bookworm-slim and "
+        "bookworm-20261005-slim share this digest). perl-base is Essential, so "
+        "the base cannot drop it. The flagged code is the Archive::Tar, "
+        "IO::Compress, Storable and regex/pack paths, which run only when a "
+        "perl script loads them; none of the images that use this base "
+        "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
+        "attacker-controlled input. Retires itself when a bookworm rebuild "
+        "lands deb12u4 and the pin moves."
     ),
     "docker.io/library/debian:bookworm-slim": (
-        "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
         "same artifact as the debian:bookworm-slim entry above, reached "
         "through a `docker.io/library/`-qualified FROM; the two keys are "
         "kept separate because main() emits them as two distinct references "
-        "and the matching rule is exact. Same measurement, same 1."
+        "and the matching rule is exact. Same measurement: 7 perl findings, "
+        "no pcre2."
     ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
@@ -584,20 +601,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "not rebuilt it. Digest-keyed, so the next pin move re-applies "
         "the gate to whatever the tag then points at."
     ),
-    "ghcr.io/getarcaneapp/manager:v2.15.1": (
-        "sha256:540c01198ca3e58dfd398d25c57c8dc241fa7e7f3d1d8d646c8268f19525b1a8",
-        "measured 4 fixable HIGH in the /app/arcane binary: Go stdlib 1.27.1 "
-        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
-        "golang.org/x/net v0.59.0 (CVE-2026-78669). All are denial of "
-        "service; fixed only by a new Arcane release rebuilt on Go 1.27.2 "
-        "(v2.15.1 is the newest published tag). The pin is held at v2.15.1 "
-        "on purpose: the swarm epic (#3587) is built against this API and a "
-        "bump has not been verified compatible. The control plane is bound "
-        "to the WireGuard address only (HP_BIND, default 10.8.0.2 in "
-        "docker-compose.arcane.yml), not the public internet. Revisit when "
-        "Arcane ships a Go 1.27.2 build and the swarm work has been "
-        "validated against it."
-    ),
     "jasonish/evebox:latest": (
         "sha256:34be7618354071a19d2f16d7ebcde6556a960f414ed957a1e82495c42f152b6c",
         "measured 1 fixable HIGH: openssl-libs 3.5.8-1.el9_8 "
@@ -642,6 +645,27 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # The 1.26 and 1.27 alpine toolchains need no entry for the same
     # reason: re-pinned to the 1.26.9 / 1.27.2 digests, measured clean.
     # The entry above is the one that had to be argued rather than bumped.
+    # --- #3667: drift after #3668 -------------------------------------------
+    # sdk:10.0.402 is the newest 10.0 SDK. Its four findings are NuGet-packaged
+    # System.Security.Cryptography.Pkcs and .Xml bundled in the SDK. Every
+    # sdk reference in this tree is a build stage that is not shipped:
+    # Dockerfile.api-prep and Dockerfile.client-win (final stage is aspnet /
+    # runtime), and Dockerfile-api (verbatim, not built). The GHOSTS source
+    # never uses SignedXml, EnvelopedCms or the Pkcs API, so these libraries
+    # are not exercised at runtime.
+    "mcr.microsoft.com/dotnet/sdk:10.0.402": (
+        "sha256:0d99ebf1ccad15037b5c98c9fe8979d6b8dbac23812feae2277a0b277b5c5ffa",
+        "measured 4 fixable HIGH, all in SDK-bundled NuGet packages: "
+        "System.Security.Cryptography.Pkcs (CVE-2026-84008) and "
+        "System.Security.Cryptography.Xml (CVE-2026-96958, -96959, -96960), "
+        "fixed in 10.0.13 and later. Down from 40 at 10.0.401. The SDK is "
+        "build-stage only: sandbox/ghosts/Dockerfile.api-prep and "
+        "Dockerfile.client-win end in aspnet:10.0 and runtime:10.0, which "
+        "measure 0, and the vendored Dockerfile-api is not built. "
+        "The GHOSTS source does not reference SignedXml, EnvelopedCms or the "
+        "Pkcs API, so the flagged parsers do not run. Retires on the next "
+        "SDK digest move."
+    ),
 }
 
 

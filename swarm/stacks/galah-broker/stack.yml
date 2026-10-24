@@ -2,7 +2,7 @@
 # remain in Compose; each joins only its side of this encrypted bridge.
 services:
   broker:
-    image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:5f6ce56a0a6be90b985dd1b106090d3a5a6af6e3f6ef47e0ee7f6d8c5d0390d4
+    image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:e7f48b58804f3c19766190eba95c33aa96df5a83cb7e5e17d091a107cc032886
     labels:
       apiary.swarm.migration: galah-broker
     environment:
@@ -10,6 +10,8 @@ services:
       LISTEN_ADDR: :11434
       MAX_BODY_BYTES: "65536"
       UPSTREAM_TIMEOUT_SECONDS: "90"
+      # #3666: in-flight cap per replica; 2 replicas keep the compose total of 4.
+      MAX_INFLIGHT: "2"
       INJECTION_SHAPES: ""
     networks:
       front:

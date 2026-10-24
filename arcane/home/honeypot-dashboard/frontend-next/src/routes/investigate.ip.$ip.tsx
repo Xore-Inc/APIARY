@@ -90,6 +90,7 @@ const fetchBlockState = createServerFn({ method: 'GET' })
   })
 
 const setBlock = createServerFn({ method: 'POST' })
+  // expires_days is required on a block (#3525): 0 = permanent.
   .validator((input: { ip: string; blocked: boolean; expires_days?: number }) => input)
   .handler(async ({ data }): Promise<boolean> => {
     const { getSessionUser } = await import('../lib/auth')
@@ -120,7 +121,7 @@ function BlockControl({ ip }: { ip: string }) {
   const apply = async (blocked: boolean, expiresDays?: number) => {
     setBusy(true)
     try {
-      const ok = await setBlock({ data: { ip, blocked, ...(expiresDays ? { expires_days: expiresDays } : {}) } })
+      const ok = await setBlock({ data: { ip, blocked, ...(expiresDays === undefined ? {} : { expires_days: expiresDays }) } })
       if (ok) {
         const fresh = await fetchBlockState({ data: { ip } })
         if (fresh) setState(fresh)
@@ -137,6 +138,7 @@ function BlockControl({ ip }: { ip: string }) {
   // pipeline behind it survived the port (the server fn validator accepts
   // expires_days and spreads it straight through to ip_block.rs), so with
   // no control to set it every block placed through this UI was permanent.
+  // The select below restores it, and the backend now requires it (#3525).
   if (state.Active) {
     return (
       <span className="hp-row">
@@ -163,19 +165,17 @@ function BlockControl({ ip }: { ip: string }) {
         event.preventDefault()
         const raw = new FormData(event.currentTarget).get('expires_days')
         const days = Number(raw)
-        void apply(true, Number.isFinite(days) && days > 0 ? days : undefined)
+        // 0 = permanent; never fall back to an absent duration (#3525).
+        void apply(true, Number.isInteger(days) && days >= 0 ? days : 7)
       }}
     >
-      <label htmlFor="attacker-block-expires">expire after</label>
-      <input
-        type="number"
-        id="attacker-block-expires"
-        name="expires_days"
-        min="1"
-        placeholder="never"
-        className="hp-input hp-num"
-      />
-      <span>day(s)</span>
+      <label htmlFor="attacker-block-expires">block for</label>
+      <select id="attacker-block-expires" name="expires_days" className="form-input" defaultValue="7">
+        <option value="1">1 day</option>
+        <option value="7">7 days</option>
+        <option value="30">30 days</option>
+        <option value="0">permanent</option>
+      </select>
       <button
         className="btn btn-sm btn-danger"
         type="submit"

@@ -120,6 +120,15 @@ services:
       # galah's own deadline doesn't cut the connection before the broker's
       # does.
       - UPSTREAM_TIMEOUT_SECONDS=90
+      # #3666: at most this many requests are forwarded to Ollama at once;
+      # the next one is answered immediately with 503 instead of joining
+      # Ollama's queue. A client that gives up does not shorten that queue
+      # (requests waited 10+ hours behind a benchmark), and
+      # UPSTREAM_TIMEOUT_SECONDS above cannot either. galah turns the 503
+      # into its usual failedResponse, now indexed as
+      # honeypot.response_outcome=llm_failed. 0 disables the cap. Pair with
+      # OLLAMA_MAX_QUEUE on the Ollama side (docs/OPERATIONS.md).
+      - MAX_INFLIGHT=${GALAH_BROKER_MAX_INFLIGHT:-4}
       # #3448: prompt-injection detection on the text galah hands the local
       # model. Empty means every shape is enabled; comma-separated to run a
       # subset. Deliberately NO count and NO rate: the research note puts

@@ -489,6 +489,27 @@ So the honest summary of what a pause buys you: CPU scheduling, and the
 *appearance* of a dark decoy. On a CPU-starved leg that is real. On a
 RAM-starved leg it is close to nothing.
 
+### Where `autoheal=true` actually does something (#3578)
+
+The label restarts nothing by itself. It is read by an autoheal container
+(`willfarrell/autoheal`) that polls the Docker daemon it is attached to, so it
+only covers containers on that one host:
+
+| Host | Autoheal | State |
+|---|---|---|
+| homeserver | `hp-autoheal`, defined in `arcane/home/honeypot-utilities/compose.yml` | Not running at the 2026-10-10 check: the container was removed, so every `autoheal=true` label on the host was inert (#3585, #3658). Recreate it only after the dionaea health check is fixed, or it will restart dionaea in a loop. |
+| VPS | `autoheal` in `vps/docker-compose.yml`, behind a docker-socket-proxy (#2762) | Part of the VPS compose project. |
+| precision | none | Labels on a service deployed there do nothing until an autoheal or a swarm `restart_policy` exists there (#3583). |
+
+A new label on a host without an autoheal container gives a service that stays
+`unhealthy` forever, so check `docker ps --filter name=autoheal` on that host
+before relying on it. Autoheal also only reacts to the container's own health
+status: a service whose check fails because a remote dependency is down will be
+restarted too, so keep health checks local to the container.
+
+The longer-term plan replaces the label with swarm `restart_policy` once the
+hosts form one swarm (#3587, #3585); until then autoheal is per host.
+
 ### Why `hp-autoheal` is paused first and resumed last
 
 This is the part that will bite you if you improvise. Every decoy on this
@@ -680,6 +701,42 @@ mechanism is unchanged by #3135, and `honeypot-pause.sh` does not stop,
 start, or otherwise manage a worker. It only refuses to run while a cold-run
 pattern is live, so that ad-hoc pausing cannot become a second, competing
 record of which workers are down.
+
+### The Galah broker and a saturated Ollama (#3666)
+
+`honeypot-galah` is already pause-safe as a unit (`hp-galah` + `hp-galah-llm-broker`
+above). What the pause does not do is drain Ollama. Requests that galah already
+forwarded sit in Ollama's own queue, and a client that disconnects does not
+shorten it: in the incident behind #3666 Ollama logged three requests as `499` after
+10h42m, 10h48m and 27m, long after galah and the broker had logged `context
+canceled`. The broker's `UPSTREAM_TIMEOUT_SECONDS` cannot help for the same reason.
+
+Two complementary limits now keep honeypot traffic from queueing behind a benchmark:
+
+- **Broker, `MAX_INFLIGHT` (default 4, `GALAH_BROKER_MAX_INFLIGHT` in the compose
+  file; 0 disables).** When every slot is taken the broker answers `503`
+  immediately and logs `saturated, refusing with 503`. A cancelled client releases
+  its slot and cancels the upstream call. galah turns the 503 into a
+  `failedResponse`, which is indexed as an event with
+  `honeypot.response_outcome: llm_failed`, so the refusals are counted, not lost.
+- **Ollama, `OLLAMA_MAX_QUEUE`.** Ollama itself rejects requests beyond this queue
+  depth with a 503. Set it on the Ollama service when you start a benchmark leg;
+  it is not set by this repository's compose files, because Ollama is shared with
+  the leg and is not changed by the pause procedure.
+
+Procedure additions for a leg that holds the GPU:
+
+1. Before pausing, check that nothing is already queued: `docker logs --since 10m
+   hp-galah-llm-broker | grep -c saturated` and the Ollama log for pending
+   requests. A queue that already exists is not emptied by pausing galah.
+2. Pause `honeypot-galah` as a whole stack (`scripts/honeypot-pause.sh pause
+   honeypot-galah`); the broker is in the unit. If galah is left running during a
+   leg instead, rely on the two limits above and expect `llm_failed` events.
+3. For the swarm form of the broker (`galah-broker`, #3591/#3639), the stack file
+   needs the same `MAX_INFLIGHT` environment variable and its own
+   `apiary.pause` labels; `ops/swarm/stackctl.py pause` handles it as a unit.
+   `scripts/honeypot-pause.sh` needs no change for compose: its `honeypot-galah`
+   row already lists both containers.
 
 ### Swarm stacks: scale to 0, not `docker pause` (#3590)
 
