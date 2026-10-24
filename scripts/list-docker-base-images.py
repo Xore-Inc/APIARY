@@ -618,6 +618,17 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "This is an accepted DoS exposure until upstream rebuilds on Go "
         "1.26.9; digest-keyed so the next pin move re-applies the gate."
     ),
+    "ghcr.io/getarcaneapp/arcane-headless:v2.17.0": (
+        "sha256:fd96a4c53f1ff1b28f449d175923c91a856ab4fecedb5c779ade294b5bc58492",
+        "the Arcane edge agent (ops/arcane-agent/compose.yml), same release "
+        "and same Go module graph as the manager entry below: measured the "
+        "same 6 fixable CRITICAL/HIGH, all labstack/echo (v5.4.0, v4.15.4 "
+        "indirect; fixed in 5.4.1 / 4.16.1) in echo's Proxy, BodyDump and "
+        "Decompress middleware, none of which Arcane registers. The agent "
+        "publishes no port (edge mode, dials out to the manager). "
+        "v2.17.0 is the newest release; digest-keyed so the next pin move "
+        "re-applies the gate (#3720)."
+    ),
     "ghcr.io/getarcaneapp/manager:v2.17.0": (
         "sha256:47af3e1aa8492eb17276d0dcc6c55fb1dfde98cfd928c12f2961023221891f5a",
         "measured 6 fixable CRITICAL/HIGH in /app/arcane, all in "

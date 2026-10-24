@@ -1,0 +1,35 @@
+# Arcane edge agent (#3720) -- the compose file each non-homeserver host runs
+# so the Arcane manager (hp-arcane, docker-compose.arcane.yml) can manage it
+# as a remote environment. Deployed by hand, not by Arcane itself:
+#   precision: /home/xore/arcane-agent/compose.yml  (environment "precision")
+#   VPS:       /root/vps/arcane-agent/compose.yml   (environment "vps")
+#
+# The agent dials out to the manager (edge mode, poll control plane, then a
+# gRPC tunnel), so it publishes no port. The live copies inline their values;
+# here they come from .env (see .env.example), since AGENT_TOKEN is a secret.
+#
+# Keep the image on the same Arcane release as the manager pin in
+# docker-compose.arcane.yml. Upgrade one host at a time: back up the live
+# compose.yml alongside, edit the image line only, `docker compose up -d`,
+# then check the environment shows online in Arcane. Only the agent
+# container restarts.
+services:
+  arcane-edge-agent:
+    image: ghcr.io/getarcaneapp/arcane-headless:v2.17.0@sha256:fd96a4c53f1ff1b28f449d175923c91a856ab4fecedb5c779ade294b5bc58492
+    container_name: arcane-edge-agent
+    restart: unless-stopped
+    environment:
+      - EDGE_AGENT=true
+      - LISTEN=127.0.0.1
+      - ANALYTICS_DISABLED=true
+      - EDGE_TRANSPORT=poll
+      - AGENT_TOKEN=${ARCANE_AGENT_TOKEN:?set ARCANE_AGENT_TOKEN in .env}
+      - MANAGER_API_URL=${ARCANE_MANAGER_API_URL:?set ARCANE_MANAGER_API_URL in .env}
+    network_mode: host
+    security_opt: [label:disable]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - arcane-data:/app/data
+
+volumes:
+  arcane-data:
