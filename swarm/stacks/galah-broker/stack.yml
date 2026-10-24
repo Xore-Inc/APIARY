@@ -1,0 +1,75 @@
+# #3591: stateless Galah-to-Ollama policy broker. The sensor and Ollama
+# remain in Compose; each joins only its side of this encrypted bridge.
+services:
+  broker:
+    image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:e7f48b58804f3c19766190eba95c33aa96df5a83cb7e5e17d091a107cc032886
+    labels:
+      apiary.swarm.migration: galah-broker
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      LISTEN_ADDR: :11434
+      MAX_BODY_BYTES: "65536"
+      UPSTREAM_TIMEOUT_SECONDS: "90"
+      # #3666: in-flight cap per replica; 2 replicas keep the compose total of 4.
+      MAX_INFLIGHT: "2"
+      INJECTION_SHAPES: ""
+    networks:
+      front:
+        aliases: [galah-llm-broker]
+      back: {}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, nc, -z, 127.0.0.1, "11434"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.role == manager
+        preferences:
+          - spread: node.labels.sensor
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "Galah decoy replies need the broker and Ollama together"
+networks:
+  front:
+    driver: overlay
+    attachable: true
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+  back:
+    driver: overlay
+    attachable: true
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"

@@ -13,12 +13,9 @@
 #   against the vendored source, no X-Forwarded-For/X-Real-IP trust
 #   anywhere. Same resolved-via-ip-enrichment-worker's-via_port-join
 #   posture as beelzebub/hellpot.
-# - galah-llm-broker is the sole bridge to the shared Ollama instance
-#   (analysis/ghidra/docker-compose.ghidra.yml) -- galah's own container
-#   is never attached to the llm_clients/honeypot-llm network, mirroring
-#   that network's own "sensors must never be able to submit prompts or
-#   observe model traffic" invariant. See galah-llm-broker/main.go's own
-#   doc comment for what the broker does and doesn't allow.
+# - galah-llm-broker is the sole bridge to the shared Ollama instance.
+#   The sensor joins only the broker's front overlay; Ollama joins only its
+#   back overlay. The legacy Compose broker remains defined for rollback.
 # - LLM_MODEL=qwen2.5:7b-instruct-q4_K_M, not any of the Qwen3/3.5 models
 #   already pulled on this host (qwen3:14b, and qwen3.5:4b which this PR
 #   originally picked from docs/local-llm-model-evaluation.md's own
@@ -84,7 +81,7 @@ services:
     cap_drop:
       - ALL
     read_only: true
-    networks: [galah_net]
+    networks: [galah_net, broker_front]
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8888"]
       interval: 30s
@@ -98,15 +95,12 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
-    depends_on:
-      galah-llm-broker:
-        condition: service_healthy
-
   galah-llm-broker:
     <<: *runtime-defaults
     build: ./galah-llm-broker
     container_name: hp-galah-llm-broker
     restart: unless-stopped
+    profiles: [legacy]
     environment:
       - OLLAMA_URL=http://ollama:11434
       - LISTEN_ADDR=:11434
@@ -176,6 +170,9 @@ services:
 networks:
   galah_net:
     driver: bridge
+  broker_front:
+    name: galah-broker_front
+    external: true
   # Shared with analysis/ghidra/docker-compose.ghidra.yml's own ollama
   # service (that file creates the real network: internal: true,
   # confirmed there). galah itself never joins this network -- only the
