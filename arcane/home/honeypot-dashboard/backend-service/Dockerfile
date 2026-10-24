@@ -2,7 +2,7 @@
 # release build, then a slim runtime with just the binary. rustls-only
 # (no OpenSSL); ca-certificates + curl for TLS trust and the container
 # healthcheck.
-FROM rust:1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c AS build
+FROM rust:1-slim-trixie@sha256:aab42391a986424e22d6a3ec14f37bc6dd3dacff4d457ca7cccd781e02297cc6 AS build
 # #3315: which revision of the repository this binary is built from. Declared
 # in the build stage as well as the runtime one because build.rs reads it from
 # the environment to compile it in (/healthz's `revision` field) and the
@@ -29,7 +29,7 @@ COPY src ./src
 COPY assets_pdf ./assets_pdf
 RUN cargo build --release
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 # Redeclared per stage: Docker scopes an ARG to the stage that declares it, so
 # the value the build stage compiled in is not in scope here on its own.
 ARG GIT_SHA
