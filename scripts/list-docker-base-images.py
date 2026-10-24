@@ -759,6 +759,19 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "binary. Bumping does not help -- 0.35.1 measures 43, so the newer "
         "tag is measurably no better and the pin stays where it is."
     ),
+    "mcr.microsoft.com/dotnet/sdk:10.0.402@sha256:0d99ebf1ccad15037b5c98c9fe8979d6b8dbac23812feae2277a0b277b5c5ffa": (
+        None,
+        "measured 4 fixable HIGH, all in SDK-bundled NuGet packages: "
+        "System.Security.Cryptography.Pkcs (CVE-2026-84008) and "
+        "System.Security.Cryptography.Xml (CVE-2026-96958, -96959, -96960), "
+        "fixed in 10.0.13 and later. Down from 40 at 10.0.401. The SDK is "
+        "build-stage only: sandbox/ghosts/Dockerfile.api-prep and "
+        "Dockerfile.client-win end in aspnet:10.0 and runtime:10.0, which "
+        "measure 0, and the vendored Dockerfile-api is not built. "
+        "The GHOSTS source does not reference SignedXml, EnvelopedCms or the "
+        "Pkcs API, so the flagged parsers do not run. Retires on the next "
+        "SDK digest move."
+    ),
 }
 
 
