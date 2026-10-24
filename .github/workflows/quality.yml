@@ -128,7 +128,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: python scripts/check-public-leaks.py
@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: python scripts/check-public-leaks.py
@@ -171,7 +171,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - run: node --test branding/design-lab/lab.test.mjs
@@ -188,7 +188,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - run: node --test branding/design-lab/lab.test.mjs
@@ -450,7 +450,7 @@ jobs:
       - name: Node major from the image (#3331)
         id: node-runtime
         run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ steps.node-runtime.outputs.node-version }}
           cache: npm
@@ -597,7 +597,7 @@ jobs:
       # per-run suffix costs no consumer.
       - name: Upload unit test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-unit-junit-${{ github.run_id }}-${{ github.run_attempt }}
           # The file is named explicitly rather than uploading its directory:
@@ -669,7 +669,7 @@ jobs:
       # files the coverage reporter wrote, from the run above, can land here.
       - name: Upload unit test coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: arcane/home/honeypot-dashboard/frontend-next/coverage/
@@ -710,7 +710,7 @@ jobs:
       - name: Node major from the image (#3331)
         id: node-runtime
         run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ steps.node-runtime.outputs.node-version }}
           cache: npm
@@ -758,7 +758,7 @@ jobs:
       # gone and why the path is not the `.ci-artifacts/` directory.
       - name: Upload unit test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-unit-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/frontend-next-unit-junit.xml
@@ -782,7 +782,7 @@ jobs:
         run: npm run test:discovery
       - name: Upload unit test coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: arcane/home/honeypot-dashboard/frontend-next/coverage/
@@ -833,7 +833,7 @@ jobs:
       - name: Node major from the image (#3331)
         id: node-runtime
         run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ steps.node-runtime.outputs.node-version }}
           cache: npm
@@ -878,7 +878,7 @@ jobs:
       # upload above.
       - name: Upload browser test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-browser-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/playwright-junit.xml
@@ -889,7 +889,7 @@ jobs:
       # run it holds nothing worth storing.
       - name: Upload Playwright report and traces
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-browser-report-${{ github.run_id }}-${{ github.run_attempt }}
           # Both directories are named, not the frontend-next tree around
@@ -922,7 +922,7 @@ jobs:
       - name: Node major from the image (#3331)
         id: node-runtime
         run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ steps.node-runtime.outputs.node-version }}
           cache: npm
@@ -949,7 +949,7 @@ jobs:
       # names, same explicit paths, no `overwrite: true`.
       - name: Upload browser test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-browser-junit-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/playwright-junit.xml
@@ -957,7 +957,7 @@ jobs:
           retention-days: 7
       - name: Upload Playwright report and traces
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-next-browser-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1225,7 +1225,7 @@ jobs:
       # twin's upload for the full argument.
       - name: Upload test log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-service-cargo-test-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/cargo-test.log
@@ -1322,7 +1322,7 @@ jobs:
       # same named-file path, no `overwrite: true`.
       - name: Upload test log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-service-cargo-test-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/cargo-test.log
@@ -2246,7 +2246,7 @@ jobs:
           # signing-key-rotation chaos. One shared build feeds both via
           # DASHBOARD_BFF_SKIP_BUILD.
           - name: Set up Node for the dashboard OIDC suites
-            uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+            uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
             with:
               node-version: "22"
               cache: npm
@@ -2589,7 +2589,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       # Needed below by the two dashboard-binary Keycloak integration tests
@@ -2648,7 +2648,7 @@ jobs:
       # sanitise a free-text field, so fixing that means renaming the row.
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scripts-${{ matrix.name }}-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
