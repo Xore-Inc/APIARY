@@ -68,7 +68,7 @@ services:
   # Dionaea's FTP/TFTP/UPnP/printer files are copied into its persistent volume.
   persona-apply:
     <<: *runtime-defaults
-    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+    image: python:3.15-alpine@sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb
     container_name: hp-persona-apply
     restart: no
     working_dir: /stack
@@ -100,7 +100,7 @@ services:
   # ===================== Log dir ownership bootstrap =====================
   log-init:
     <<: *runtime-defaults
-    image: busybox:latest@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
     container_name: hp-log-init
     restart: no
     depends_on:
@@ -208,7 +208,7 @@ services:
 
   elasticsearch-setup:
     <<: *runtime-defaults
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.3@sha256:f456578fc2a620a8a4f4c21d070fff1f6070345adb2be5e5626b65be72aea350
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5@sha256:13b4a40bb095774f5fda635e45fd5677cc6a26565e42b24997b0c72b88e75984
     container_name: hp-elasticsearch-setup
     restart: no
     entrypoint:
@@ -292,7 +292,7 @@ services:
 
   arkime-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6-latest@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
+    image: ghcr.io/arkime/arkime/arkime:v6-latest@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
     container_name: hp-arkime-init
     restart: no
     command:
@@ -597,7 +597,7 @@ services:
   # refresh to take effect (#1659; previously geoip.go's
   # threatIntelReloadLoop, retired with the Go dashboard).
   threat-cidrs-refresh:
-    image: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    image: alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
     container_name: hp-threat-cidrs-refresh
     profiles: [threat-intel]
     restart: unless-stopped

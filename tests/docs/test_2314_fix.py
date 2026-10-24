@@ -343,11 +343,14 @@ def test_same_version_refresh_applied(image, spec):
                 f"{relpath} pins {image} at {spec['superseded']}, the digest a later "
                 f"version bump replaced -- #2314"
             )
-        if f"{image}@" not in text:
-            continue  # moved on to a newer tag since (#3720); the stale-digest checks above still hold
-        assert spec["new"] in text, (
-            f"{relpath} does not pin {image} at the refreshed digest {spec['new']} -- #2314"
-        )
+        # #3720: later bumps move both tags and digests on, so the exact
+        # "new" digest of this one-time sweep is no longer required. What still
+        # holds is that a file naming the tag pins it by digest, and that none
+        # of the stale digests above is present.
+        if f"{image}:" in text or f"{image}@" in text:
+            assert re.search(re.escape(image) + r"@sha256:[0-9a-f]{64}", text) or image not in text, (
+                f"{relpath} names {image} without a digest pin -- #2314"
+            )
 
 
 def test_no_stale_digest_pins_remain_anywhere():
