@@ -97,6 +97,30 @@ endpoint.
 sandbox/ghosts/install-host.sh --skip-enroll-test   # containers only
 ```
 
+### Postgres major upgrade (16 -> 18, #3720)
+
+`ghosts-postgres` runs `postgres:18.6-bookworm`, the same digest as Keycloak's
+database. 18's image mounts the parent `/var/lib/postgresql` and keeps
+`PGDATA` at `/var/lib/postgresql/18/docker`, and 16's on-disk format cannot be
+opened by 18, so the stack uses a new volume, `ghosts_ghosts-postgres18-data`.
+A host that still has the old `ghosts_ghosts-postgres-data` (16) volume keeps
+it untouched; to carry its data over:
+
+```bash
+# 1. dump from 16 (old volume, read-only, throwaway container)
+docker run -d --name ghosts-pg16-dump -e POSTGRES_PASSWORD=x \
+  -v ghosts_ghosts-postgres-data:/var/lib/postgresql/data postgres:16.15
+docker exec ghosts-pg16-dump pg_dumpall -U ghosts > ghosts-pg16.sql
+docker rm -f ghosts-pg16-dump
+# 2. bring the 18 database up empty, then restore
+docker compose --project-directory /opt/stacks/ghosts up -d --wait ghosts-postgres
+docker exec -i ghosts-ghosts-postgres-1 psql -q -U ghosts -d postgres < ghosts-pg16.sql
+```
+
+Rollback: point the image back at 16 and the volume back at
+`ghosts-postgres-data:/var/lib/postgresql/data`; the old volume was never
+written by 18.
+
 ## Network isolation as it actually stands (#325, #2444, #2257)
 
 #325 has landed, so this is no longer a note to a future issue — it is the

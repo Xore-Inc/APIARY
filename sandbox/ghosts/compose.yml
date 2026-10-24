@@ -94,13 +94,23 @@ name: ghosts
 
 services:
   ghosts-postgres:
-    image: postgres:16.8@sha256:301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae
+    # #3720: postgres 16 -> 18, the same image and digest as Keycloak's.
+    # 18's image keeps PGDATA under a major-versioned path and mounts the
+    # parent, so the volume mount moved with it (mounting the old
+    # /var/lib/postgresql/data path makes the 18 entrypoint refuse to start).
+    # The volume is a NEW one, ghosts-postgres18-data: 16's on-disk format
+    # cannot be opened by 18, and a fresh name leaves any old
+    # ghosts-postgres-data volume untouched for rollback. To carry data from
+    # a 16 volume: pg_dumpall from a postgres:16 container on the old volume,
+    # bring this one up empty, restore with psql (docs/sandbox/ghosts).
+    image: postgres:18.6-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650
     environment:
       POSTGRES_DB: ghosts
       POSTGRES_USER: ghosts
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATA: /var/lib/postgresql/18/docker
     volumes:
-      - ghosts-postgres-data:/var/lib/postgresql/data
+      - ghosts-postgres18-data:/var/lib/postgresql
     networks:
       # Static, not auto-assigned: without this, Docker hands ghosts-postgres
       # 10.90.0.2 first (lowest free address after the .1 gateway) and then
@@ -168,4 +178,4 @@ networks:
         - subnet: 10.90.0.0/24
 
 volumes:
-  ghosts-postgres-data:
+  ghosts-postgres18-data:

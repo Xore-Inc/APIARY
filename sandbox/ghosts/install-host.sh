@@ -4,7 +4,7 @@
 # Brings up two containers, isolated from every other stack this repo
 # deploys:
 #
-#   ghosts-postgres   postgres:16.8, GHOSTS' own database
+#   ghosts-postgres   postgres:18.6, GHOSTS' own database
 #   ghosts-api        CMU SEI's Ghosts.Api, built from source, pinned to v9.0.0
 #
 # Frontend/Grafana/n8n are deliberately not deployed -- see the header on
