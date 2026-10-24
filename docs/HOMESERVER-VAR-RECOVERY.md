@@ -66,11 +66,12 @@ that had held it showed no filesystem signature.
    for off in $(seq 0 4096 1048576); do
      [ "$(dd if=/dev/sdb1 bs=1 skip=$off count=4 2>/dev/null)" = XFSB ] && echo "XFSB at $off"
    done
+   OFF=<offset reported above, in bytes>   # 65536 in #3708
    ```
 3. Attach a **read-only** loop device at that offset and look at the
    filesystem without modifying it:
    ```bash
-   LOOP=$(losetup -r -f --show -o 65536 /dev/sdb1)
+   LOOP=$(losetup -r -f --show -o "$OFF" /dev/sdb1)
    xfs_db -r -c 'sb 0' -c p "$LOOP" | head -40
    xfs_repair -n "$LOOP"
    ```
@@ -104,8 +105,16 @@ content (with SELinux labels) before anything else starts.
    ```bash
    systemctl stop docker.socket docker containerd
    ```
-2. Make the filesystem. The label and device below are the ones from #3708;
-   confirm the device with `lsblk` first.
+2. Make the filesystem. The label and device below are the ones from #3708.
+
+   **Warning: `mkfs.xfs -f` irreversibly destroys everything on the device.**
+   Run it only after the "When to give up on salvage" criteria in part 1 are
+   met, and after the optional 1 GiB head copy is taken if you want one.
+   Confirm the device by size and model, not just by name (device names can
+   change between boots):
+   ```bash
+   lsblk -o NAME,SIZE,MODEL,LABEL
+   ```
    ```bash
    mkfs.xfs -f -L var /dev/sdb1
    blkid /dev/sdb1          # note the new UUID
