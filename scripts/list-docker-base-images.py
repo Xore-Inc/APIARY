@@ -232,23 +232,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # shrug. Where a candidate DID come back clean the pin was moved
     # instead and no entry was written -- see the entries' "moved to"
     # comments in REPORT.md.
-    "debian:bookworm-slim": (
-        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
-        "re-pinned from 3783cc01 to the tag's current digest (#3667). The "
-        "pcre2 finding (CVE-2026-103111) is gone, but 7 fixable CRITICAL/HIGH "
-        "remain, all in perl (perl-base, perl-modules-5.36, libperl5.36) at "
-        "5.36.0-7+deb12u4: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376 "
-        "(CRITICAL), CVE-2026-42497, CVE-2026-48962, CVE-2026-57432, "
-        "CVE-2026-57433 (HIGH). Debian has fixed them in its archive, but no "
-        "bookworm tag carries the fix yet (bookworm-slim and "
-        "bookworm-20261005-slim share this digest). perl-base is Essential, so "
-        "the base cannot drop it. The flagged code is the Archive::Tar, "
-        "IO::Compress, Storable and regex/pack paths, which run only when a "
-        "perl script loads them; none of the images that use this base "
-        "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
-        "attacker-controlled input. Retires itself when a bookworm rebuild "
-        "lands deb12u4 and the pin moves."
-    ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
         "measured 4 fixable CRITICAL/HIGH, all alpine 3.21 openssl 3.3.7-r2 "
@@ -670,20 +653,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "fixed in 1.2.1-r0. brotli-libs is reachable only through libcurl "
         "content decoding; tanner's phpox sandbox executes captured PHP "
         "without outbound network access."
-    ),
-    "python:3.15-slim": (
-        "sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51",
-        "#3720: the python workers moved from 3.14 to 3.15 (3.15.1 is the "
-        "newest stable). Measured 4 fixable HIGH on 2026-10-24, all pip "
-        "packages baked into the image: "
-        "msgpack 1.1.2 (GHSA-6v7p-g79w-8964), setuptools 70.3.0 "
-        "(CVE-2025-47273) and urllib3 2.7.0 (CVE-2026-97687, CVE-2026-97689)."
-        " These are the pre-installed "
-        "site-packages of the official image, not the services' own "
-        "requirements (each Dockerfile installs its pinned requirements on "
-        "top), and the debian trixie base "
-        "itself is clean. The tag is the newest 3.15, so only an upstream "
-        "rebuild clears them. Retires itself when the digest moves."
     ),
     "jasonish/suricata:8.0.7": (
         "sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26",
