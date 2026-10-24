@@ -176,8 +176,13 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # (tests/docs/test_2314_fix.py counts the files carrying the 1.26-alpine
     # pin and requires exactly the six it names; an exemption table is not a
     # seventh pin -- it names an artifact without controlling it).
-    "node:22": (
-        "sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7",
+    "node:26": (
+        "sha256:a98e6fda54fdbb22d4238054cca9a2a113bcd1191c09193a535aae22f400aa8e",
+        "#3720: canarytokens' frontend-builder moved to node 26. Re-measured "
+        "2026-10-24 at 6 fixable HIGH: brace-expansion 5.0.9 and undici "
+        "6.28.0 (npm-bundled), and libbrotli1/libbrotli-dev 1.1.0-2+b7 "
+        "(CVE-2026-111497); still a discarded build stage. Previous "
+        "measurement, carried over: "
         "build stage only -- canarytokens names it `AS frontend-builder` and "
         "the final image does not inherit it; measured 28 fixable "
         "CRITICAL/HIGH, all in the discarded build layer. The pin was moved "
@@ -219,8 +224,12 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "digest-pins this tag, so main() emits it bare and the digest field "
         "is None."
     ),
-    "golang:1.27-bookworm": (
-        "sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195",
+    "golang:1.27-trixie": (
+        "sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4",
+        "#3720: galah's build stage moved to trixie. Re-measured 2026-10-24 "
+        "at 1 fixable HIGH: libbrotli1 1.1.0-2+b7 (CVE-2026-111497, no trixie"
+        " rebuild carries the fix yet). Still build stage only; it ships the "
+        "trixie-slim final image. Previous measurement, carried over: "
         "build stage only -- galah names it `AS build` and ships a separate "
         "debian:bookworm-slim final image; measured 7 fixable CRITICAL/HIGH, "
         "all debian 12.15 libexpat1 and libpcre2-8-0 that upstream has not "
@@ -564,20 +573,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "in the debian base, jaraco.context and wheel in the image -- and "
         "3.11.17-slim, the newest 3.11, was scanned and measures the same 3."
     ),
-    "python:3.12-slim": (
-        "sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d",
-        "measured 1 fixable CRITICAL/HIGH: CVE-2026-103111 in the debian "
-        "trixie base's libpcre2-8-0. 3.12.15-slim, the newest 3.12, measures "
-        "the same 1 -- this is the smallest finding in the tree and it is "
-        "entirely upstream debian's, with no image-layer fix available."
-    ),
-    "python:3.13.16-slim": (
-        "sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f",
-        "measured 5 fixable CRITICAL/HIGH: the same libpcre2-8-0 plus four "
-        "pip packages pinned in the image (msgpack, setuptools, urllib3 "
-        "twice). This tag is already the newest 3.13, so there is nothing to "
-        "move to; the fix is a python upstream rebuild."
-    ),
     "python:3.14-slim": (
         "sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151",
         "same five findings as the python:3.13.16-slim entry (libpcre2-8-0, "
@@ -636,6 +631,17 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "use. It is reached through Traefik on the internal proxy network. "
         "This is an accepted DoS exposure until upstream rebuilds on Go "
         "1.26.9; digest-keyed so the next pin move re-applies the gate."
+    ),
+    "ghcr.io/getarcaneapp/arcane-headless:v2.17.0": (
+        "sha256:fd96a4c53f1ff1b28f449d175923c91a856ab4fecedb5c779ade294b5bc58492",
+        "the Arcane edge agent (ops/arcane-agent/compose.yml), same release "
+        "and same Go module graph as the manager entry below: measured the "
+        "same 6 fixable CRITICAL/HIGH, all labstack/echo (v5.4.0, v4.15.4 "
+        "indirect; fixed in 5.4.1 / 4.16.1) in echo's Proxy, BodyDump and "
+        "Decompress middleware, none of which Arcane registers. The agent "
+        "publishes no port (edge mode, dials out to the manager). "
+        "v2.17.0 is the newest release; digest-keyed so the next pin move "
+        "re-applies the gate (#3720)."
     ),
     "ghcr.io/getarcaneapp/manager:v2.17.0": (
         "sha256:47af3e1aa8492eb17276d0dcc6c55fb1dfde98cfd928c12f2961023221891f5a",

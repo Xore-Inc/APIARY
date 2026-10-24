@@ -24,7 +24,7 @@
 ARG ARCH=amd64
 # the build pins its target platform on purpose (ARCH above)
 # hadolint ignore=DL3029
-FROM --platform=linux/${ARCH} python:3.13.16-slim@sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f AS builder
+FROM --platform=linux/${ARCH} python:3.15-slim@sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51 AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.11.24 /uv /uvx /usr/local/bin/
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV UV_LINK_MODE=copy
@@ -42,7 +42,7 @@ RUN wget -O archive.zip "https://github.com/thinkst/canarytokens/archive/${CANAR
     rm -rf /canarytokens-* archive.zip && \
     echo "${CANARYTOKENS_REF}" > /COMMIT_SHA
 
-FROM node:22@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7 AS frontend-builder
+FROM node:26@sha256:a98e6fda54fdbb22d4238054cca9a2a113bcd1191c09193a535aae22f400aa8e AS frontend-builder
 WORKDIR /build
 COPY --from=builder /srv/frontend_vue /build/frontend
 WORKDIR /build/frontend
