@@ -1,0 +1,58 @@
+# Phase 5 (#3592): session store for the future dashboard Swarm stack.
+# No published port or persistent data; the current Compose session store
+# remains in service until the dashboard cutover.
+services:
+  valkey:
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    command: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    networks: [session]
+    read_only: true
+    tmpfs: ["/data:size=16m,mode=0700"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # The image entrypoint chowns /data and then drops privileges.
+    cap_add: [CHOWN, SETUID, SETGID]
+    healthcheck:
+      test: [CMD, valkey-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == manager
+          - node.labels.sensor == false
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 320M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 65s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 65s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "Dashboard sessions must pause with the dashboard"
+networks:
+  session:
+    driver: overlay
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
