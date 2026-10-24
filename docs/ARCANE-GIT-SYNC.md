@@ -201,7 +201,8 @@ which cites the upstream issue as still open at `v2.8.1`), while
 by digest (2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
 before that `v2.11.1`). The edge agents on precision and the VPS run the
 matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.0`, digest-pinned in
-their host-local compose files (they are not tracked in this repo).
+their host-local compose files; the template is
+`ops/arcane-agent/compose.yml`.
 Nothing here is claimed to be false of `v2.17.0` — it is claimed to be
 unconfirmed against it, and eight minor versions of upstream is exactly the
 gap that re-verification is for.
