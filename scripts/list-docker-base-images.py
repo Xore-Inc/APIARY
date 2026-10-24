@@ -185,8 +185,9 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "remainder is not reachable in any running image, and the key is "
         "digest-keyed so the next pin move retires it."
     ),
-    "rust:1-bookworm": (
-        "sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0",
+    "rust:1-trixie": (
+        "sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc",
+        "#3720: moved to trixie; re-measured 2026-10-24 at 2 fixable HIGH, both libbrotli1/libbrotli-dev 1.1.0-2+b7 (CVE-2026-111497, no trixie rebuild carries the fix yet), build stage only for the same reason as before. Previous measurement, carried over: "
         "build stage only -- vps/huginn-sidecar names it `AS build` and ships "
         "a separate debian:bookworm-slim final image; measured 18 fixable "
         "CRITICAL/HIGH after the pin moved to the tag's current digest, down "
@@ -250,14 +251,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "(cowrie, galah, backend-service, huginn-sidecar) runs perl on "
         "attacker-controlled input. Retires itself when a bookworm rebuild "
         "lands deb12u4 and the pin moves."
-    ),
-    "docker.io/library/debian:bookworm-slim": (
-        "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
-        "same artifact as the debian:bookworm-slim entry above, reached "
-        "through a `docker.io/library/`-qualified FROM; the two keys are "
-        "kept separate because main() emits them as two distinct references "
-        "and the matching rule is exact. Same measurement: 7 perl findings, "
-        "no pcre2."
     ),
     "redis:7-alpine": (
         "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
@@ -641,19 +634,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "behind OIDC. Digest-keyed so the next pin move re-applies the "
         "gate (#3720)."
     ),
-    "traefik:v3.7.13": (
-        "sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0",
-        "measured 4 fixable HIGH in /usr/local/bin/traefik: Go stdlib 1.26.8 "
-        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
-        "golang.org/x/net v0.58.0 (CVE-2026-78669). The patch bump was "
-        "tried: v3.7.14 (newest release) was scanned and still carries "
-        "stdlib 1.26.8 and x/net v0.59.0, so it measures the same shape and "
-        "buys nothing; the pin stays on v3.7.13. All are denial of service; "
-        "no fixed Traefik build exists. Traefik is the internet-facing "
-        "ingress, so this is a real but accepted DoS exposure until upstream "
-        "rebuilds on Go 1.26.9 / 1.27.2; digest-keyed so the next pin move "
-        "re-applies the gate."
-    ),
     # The other golang toolchain tags are deliberately absent. The stale
     # 1.23-bookworm and bare 1.23 pins are gone -- their three Dockerfiles
     # moved to golang:1.27-alpine, which measures 0 fixable CRITICAL/HIGH,
@@ -702,6 +682,13 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "fixed in 1.2.1-r0. brotli-libs is reachable only through libcurl "
         "content decoding; tanner's phpox sandbox executes captured PHP "
         "without outbound network access."
+    ),
+    "jasonish/suricata:8.0.7": (
+        "sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26",
+        "#3720: the vps suricata services are now pinned to the newest published tag, 8.0.7. Measured 17 fixable HIGH on 2026-10-24 (pcre2/pcre2-syntax 10.40-6.el9 incl. CVE-2026-103111, "
+        "expat CVE-2026-77214 and CVE-2026-102633, ca-certificates CVE-2026-114406), all in the RHEL 9 base layer of the suricata image. 8.0.7 is the newest "
+        "tag and no rebuild carries the fixes, so there is nothing to bump to. The findings sit in distro packages, not in anything this repo builds on top. "
+        "Retires itself when the digest moves."
     ),
 }
 

@@ -2,7 +2,7 @@
 #
 # Two stages because huginn-net pulls in a full Rust toolchain and ~200 crates
 # to build, none of which belong on a VPS that also fronts every honeypot.
-FROM rust:1-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 AS build
+FROM rust:1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS build
 
 # libpcap headers: huginn-net captures through libpcap, and the slim base has
 # the runtime library but not the headers.
@@ -15,7 +15,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked
 
-FROM docker.io/library/debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 # libpcap0.8 for capture; ca-certificates is not needed -- this talks to
 # nothing, it only reads packets and writes stdout.
