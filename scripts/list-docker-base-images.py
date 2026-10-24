@@ -625,6 +625,22 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "This is an accepted DoS exposure until upstream rebuilds on Go "
         "1.26.9; digest-keyed so the next pin move re-applies the gate."
     ),
+    "ghcr.io/getarcaneapp/manager:v2.17.0": (
+        "sha256:47af3e1aa8492eb17276d0dcc6c55fb1dfde98cfd928c12f2961023221891f5a",
+        "measured 6 fixable CRITICAL/HIGH in /app/arcane, all in "
+        "labstack/echo (v5.4.0 direct, v4.15.4 indirect; fixed in 5.4.1 / "
+        "4.16.1, advisories published 2026-10-23): GHSA-cxf3-9h37-7rr8 and "
+        "GHSA-9969-6676-49h5 (echo's Proxy middleware WebSocket tunnel), "
+        "GHSA-f48p-c9v4-h7xv (BodyDump middleware) and GHSA-h7wr-284f-5qvc "
+        "(Decompress middleware). Arcane v2.17.0 source registers none of "
+        "those three middlewares; it uses echo's Gzip, CORS, Recover, "
+        "RequestID and Static only, and its environment proxy is its own "
+        "code, not echo's Proxy. v2.16.1 carried the same six plus a Go "
+        "stdlib finding, so the bump is strictly better. v2.17.0 is the "
+        "newest Arcane release; hp-arcane is reached only over WireGuard "
+        "behind OIDC. Digest-keyed so the next pin move re-applies the "
+        "gate (#3720)."
+    ),
     "traefik:v3.7.13": (
         "sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0",
         "measured 4 fixable HIGH in /usr/local/bin/traefik: Go stdlib 1.26.8 "
