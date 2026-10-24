@@ -282,13 +282,17 @@ track feature branches (swarm work). Do not "fix" this during a recovery.
 Compare the restored syncs with what you had, and leave them. Background in
 [`ARCANE-GIT-SYNC.md`](ARCANE-GIT-SYNC.md).
 
-If a sync tracks an unmerged feature branch whose compose cannot start on
-the current host (the Galah broker moved to Swarm in #3639 while Swarm was
-`inactive` on the fresh `/var`), either leave that project stopped or point
-the sync at `main` for the duration. Use a **partial** `PUT` to
-`/api/environments/0/gitops-syncs/<id>` with `{"branch":"main"}`; a
+A restored sync can track a feature branch that has since been merged (the
+Galah and `swarm-*` syncs tracked swarm feature branches during #3708; #3639
+has landed on `main` since). Check each such sync against the branch the repo
+now expects before you deploy it. If a sync tracks a branch whose compose
+cannot start on the current host, leave that project stopped until the
+prerequisite exists (for Galah and Ollama that is the Swarm, see part 9). To
+re-point a sync use a **partial** `PUT` to
+`/api/environments/0/gitops-syncs/<id>` with `{"branch":"<branch>"}`; a
 full-object PUT is rejected with 422, and the partial one keeps every other
-field. Put it back before you finish.
+field. Write down the original branch and put it back if you changed it
+only temporarily.
 
 ## 5. GHCR access
 
@@ -485,7 +489,14 @@ Two stacks need care:
   containers`). In #3708 the following were deliberately left off:
   llm-worker, the four legacy `*-worker` stacks (replaced by the
   `hp-apiary-worker*` set, #1628), unsloth, ghosts, revdeck.
-- **honeypot-galah** follows its sync branch (see part 4).
+- **honeypot-galah** and the Ollama in the ghidra stack join Swarm overlays
+  (`galah-broker_front`, `galah-broker_back`) as external networks since
+  #3639. Do not start them until the Swarm is back (part 12) and the
+  `galah-broker` stack is deployed; see
+  [`STACK-REBUILD.md`](STACK-REBUILD.md) step 3b. Docker will not create a
+  container whose external network is missing. In #3708 the Galah broker ran
+  on Swarm before the incident, Swarm was `inactive` on the fresh `/var`,
+  and galah was left down until the Swarm had been recovered.
 
 ### 7.7 Backend and dashboard
 
@@ -599,7 +610,11 @@ runuser -u <runner-user> -- test -w /var/image-sbom
 
 ## 9. Workers, models, units
 
-1. **Analysis host (ghidra, Ollama, statictools).**
+1. **Analysis host (ghidra, Ollama, statictools).** On current `main` the
+   Ollama service joins the `galah-broker_back` overlay, so do the Swarm
+   recovery in part 12 and deploy the `galah-broker` stack first (or the
+   stack will not start). In #3708 this ran before #3639 landed and needed
+   no Swarm.
    ```bash
    cd /var/dockge/stacks/apiary/analysis/ghidra
    ./install-analysis-host.sh --stack-dir "" --skip-pull
