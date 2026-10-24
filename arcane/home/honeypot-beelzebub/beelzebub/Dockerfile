@@ -24,7 +24,7 @@
 # close/rename/reopen io.Writer wrapper inserted at build time, keeping
 # Builder.logsFile (which Builder.Close() closes) pointed at the live
 # generation. See that patch's own docstring.
-FROM golang:1.26-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS build
+FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 # python3 only runs json_log_rotation_patch.py (#2892) below; the runtime
 # stage never sees it.
 RUN apk add --no-cache git python3
@@ -39,7 +39,7 @@ RUN go mod download
 # compiling declared plugins in -- skipped here, plugins.yaml is empty.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /beelzebub .
 
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache ca-certificates busybox-extras
 COPY --from=build /beelzebub /usr/local/bin/beelzebub
 COPY configurations /etc/beelzebub/configurations

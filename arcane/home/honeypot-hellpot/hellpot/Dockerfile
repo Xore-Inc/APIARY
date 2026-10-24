@@ -53,7 +53,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
 # HEALTHCHECK pattern (beelzebub/Dockerfile, rdp-honeypot's Dockerfile,
 # etc.) -- consistency with the rest of this stack wins over matching
 # upstream's own base image exactly.
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache busybox-extras
 COPY --from=build /hellpot /usr/local/bin/hellpot
 COPY config.toml /config.toml
