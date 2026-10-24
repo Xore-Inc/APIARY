@@ -193,21 +193,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "CRITICAL/HIGH after the pin moved to the tag's current digest, down "
         "from 147"
     ),
-    "rust:1-slim-bookworm": (
-        "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
-        "build stage only -- backend-service names it `AS build` and ships a "
-        "debian:bookworm-slim final image. Re-pinned to the tag's current "
-        "digest (#3667): the pcre2 finding is gone, and 7 fixable findings "
-        "remain, all in the perl packages (perl-base, perl, perl-modules-5.36, "
-        "libperl5.36) at 5.36.0-7+deb12u4. Debian has fixed these in its "
-        "archive, but no bookworm image tag carries the fix yet. perl-base is "
-        "an essential package the base image cannot drop. None of the "
-        "flagged code runs in the shipped image: it is the Archive::Tar, "
-        "IO::Compress, Storable and regex/pack paths, which only run when a "
-        "perl script loads them, and the backend-service final stage runs only "
-        "its own Rust binary. Retires itself when a bookworm rebuild lands "
-        "deb12u4 and the pin moves."
-    ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
         "build stage only -- the vendored ghosts Dockerfile-client-universal "
@@ -345,8 +330,13 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "upgrade this repo does not own. It cannot leave the vulnerable Go "
         "stdlib without an upstream rebuild."
     ),
-    "node:22-alpine": (
-        "sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
+    "node:26-alpine": (
+        "sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797",
+        "#3720: frontend-next moved to node 26. Re-measured 2026-10-24 at 4 "
+        "fixable HIGH, all npm-bundled packages inside the image (brace-"
+        "expansion 5.0.9 CVE-2026-102276/-102278, undici 6.28.0 "
+        "CVE-2026-109869/-19534), fixed only by a node image rebuild; it is "
+        "the newest 26 tag. Previous measurement, carried over: "
         "measured 10 fixable CRITICAL/HIGH, all npm dependencies vendored "
         "into the image (brace-expansion, picomatch, pacote, sigstore, "
         "ip-address) rather than OS packages. Bumping the major does not "
@@ -682,6 +672,20 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "fixed in 1.2.1-r0. brotli-libs is reachable only through libcurl "
         "content decoding; tanner's phpox sandbox executes captured PHP "
         "without outbound network access."
+    ),
+    "python:3.15-slim": (
+        "sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51",
+        "#3720: the python workers moved from 3.14 to 3.15 (3.15.1 is the "
+        "newest stable). Measured 4 fixable HIGH on 2026-10-24, all pip "
+        "packages baked into the image: "
+        "msgpack 1.1.2 (GHSA-6v7p-g79w-8964), setuptools 70.3.0 "
+        "(CVE-2025-47273) and urllib3 2.7.0 (CVE-2026-97687, CVE-2026-97689)."
+        " These are the pre-installed "
+        "site-packages of the official image, not the services' own "
+        "requirements (each Dockerfile installs its pinned requirements on "
+        "top), and the debian trixie base "
+        "itself is clean. The tag is the newest 3.15, so only an upstream "
+        "rebuild clears them. Retires itself when the digest moves."
     ),
     "jasonish/suricata:8.0.7": (
         "sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26",
