@@ -23,6 +23,7 @@ kind of truth it holds.
 | [STACK-REBUILD.md](STACK-REBUILD.md) | rebuilding or migrating an Arcane-managed stack |
 | [RECOVERY.md](RECOVERY.md) | something is down |
 | [BACKUP-ESSENTIALS.md](BACKUP-ESSENTIALS.md) | backup scope and restore expectations |
+| [HOMESERVER-VAR-RECOVERY.md](HOMESERVER-VAR-RECOVERY.md) | the homeserver's `/var` is lost: rebuild the disk, restore, bring the stacks, runners and Swarm back (worked from #3708) |
 | [CONTAINER-UPDATES.md](CONTAINER-UPDATES.md) | updating images without breaking pinned contracts |
 | [KEYCLOAK-OPERATIONS.md](KEYCLOAK-OPERATIONS.md) | identity-tier administration |
 | [BACKEND-TRUST-BOUNDARY.md](BACKEND-TRUST-BOUNDARY.md) | backend credentials, actor assertions, enforcement modes; install/rotate/revoke/rollback |

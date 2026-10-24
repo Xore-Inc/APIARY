@@ -9,7 +9,10 @@ Elasticsearch documents the dashboard keeps — and deliberately nothing else.
 
 For a *deliberate* reset of a working host see [`RECOVERY.md`](RECOVERY.md);
 for restoring onto a replacement host see
-[`analysis/RECOVERY.md`](analysis/RECOVERY.md).
+[`analysis/RECOVERY.md`](analysis/RECOVERY.md); for the homeserver whose
+`/var` was lost, with this restore as one stage of a longer procedure, see
+[`HOMESERVER-VAR-RECOVERY.md`](HOMESERVER-VAR-RECOVERY.md) (the worked
+example is #3708).
 
 ## What is and isn't in it
 
@@ -291,8 +294,20 @@ gpg -d apiary-essentials-<stamp>.tar.gz.gpg | tar xz -C /tmp/restore
 cat /tmp/restore/MANIFEST.txt
 ```
 
+Read `MANIFEST.txt` before you start and note what it does **not** list
+(`homeserver/installer/` and `homeserver/es-operator-state/` were both
+missing from the 2026-10-17 archive, #3709). A step whose source is absent is
+skipped and recorded as a loss, not improvised.
+
 Then, onto a rebuilt host:
 
+0. **Re-clone the repository checkout first.** Every compose bind-mounts
+   `/opt/stacks/apiary/...` (`/opt/stacks` is a symlink to
+   `/var/dockge/stacks`), and the archive does not hold the checkout. The
+   directory is usually not empty (it holds `logs/`), so clone with init and
+   fetch, as the installer's `step_clone_repo` does:
+   `git init; git remote add origin <repo>; git fetch origin main; git
+   checkout -f -B main FETCH_HEAD`. Note the SHA, you need it for `GIT_SHA`.
 **Before any of the below**, put the newest file in `homeserver/installer/`
 back at the path you intend to pass to `scripts/install-homeserver.sh --config`.
 The installer will not run without it, and it is not reconstructible from the
@@ -300,11 +315,31 @@ repository — `install-homeserver.conf.example` carries only placeholders.
 
 1. **Stack `.env` files.** Copy each `homeserver/env/<stack>.env` back to
    `/var/dockge/stacks/<stack>/.env`. Restore ownership and mode
-   (`root:deploy-runner`, `0600` for most). Never overwrite a live `.env`
+   (`root:deploy-runner`, `0600`). `ghidra.env` goes to
+   `apiary/analysis/ghidra/.env`, with
+   `/var/dockge/stacks/ghidra` a symlink to it. Never overwrite a live `.env`
    wholesale without reading it first — the same rule that applies to any
-   edit on these hosts.
+   edit on these hosts. Two keys are **not** in any archived `.env` and must
+   be added: `GIT_SHA` (a build argument, #3315) in both
+   `honeypot-dashboard/.env` and `honeypot-dashboard-backend/.env`; without
+   it the built image reports revision `unknown`.
 2. **Secrets.** `homeserver/secrets/<stack>/secrets/*` back to the matching
-   `/var/dockge/stacks/<stack>/secrets/`, `0600`.
+   `/var/dockge/stacks/<stack>/secrets/`. **The mode depends on who reads
+   the file; `0600` root-only breaks two of them:**
+   - `honeypot-keycloak` secrets (`postgres-password`,
+     `bootstrap-admin-password`): `root:root 0440`, directory `0750`
+     (Postgres and Keycloak run as uid 1000).
+   - `oidc-client-secret` for `honeypot-dashboard` and `apiary-dashboard`:
+     `github-deploy-runner:deploy-runner 0440`, directory
+     `root:deploy-runner 0750`. dashboard-next runs as `node` and reads it
+     through `group_add`; with `0600` every sign-in fails with `EACCES`,
+     which the UI reports as the identity provider not answering.
+
+   Not in the archive at all, and recreated by other means: the
+   `auth-events-poller` client secret
+   (`/var/dockge/stacks/auth-events-worker-secrets/client-secret`; recover it
+   read-only from the Keycloak database, see the recovery runbook part 9) and
+   the Keycloak login theme (step 4).
 3. **WireGuard.** `homeserver/wireguard/wg0.conf` to `/etc/wireguard/`, `0600`
    root. Reusing the original private key means the derived public key still
    matches the peer record on the far side, so **the VPS needs no WireGuard
@@ -313,9 +348,15 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    `gunzip -c keycloak/keycloak.sql.gz | docker exec -i hp-keycloak-postgres psql -U keycloak -d keycloak`.
    The dump is `--clean --if-exists`, so it drops and recreates. Start
    `hp-keycloak` only once the restore has finished. This is what saves the
-   8-client OIDC secret resync that a fresh realm import otherwise forces —
+   per-client OIDC secret resync that a fresh realm import otherwise forces —
    the clients come back with their original secrets, matching the ones in
    `vps/secrets/oidc/`.
+
+   The login theme is **not** in the archive, and the compose bind-mounts it
+   from `/var/dockge/stacks/honeypot-keycloak/theme/apiary/`. Stage it from
+   the theme repository before starting Keycloak
+   (`step_stage_keycloak_theme` in `scripts/install-homeserver.sh`: clone
+   `auth-backend`, `rsync -a --delete themes/apiary/` into place).
 5. **Volumes.** For each `homeserver/volumes/<name>.tar.gz`, with the stack
    stopped, create the volume and unpack into it through a networkless
    container. `<name>` is the **full real volume name** — the archive is
@@ -329,12 +370,18 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    docker run --rm --network none -v <name>:/dst -v "$PWD/homeserver/volumes:/src:ro" \
      busybox:1.36 tar -C /dst -xzf /src/<name>.tar.gz
    ```
-   Never unpack into a running container's volume.
+   Never unpack into a running container's volume. Restore the Arcane volume
+   (`honeypot-arcane_arcane-data`) **before** the first Arcane start. Volumes
+   made this way carry no Compose labels, so Compose later warns `already
+   exists but was not created by Docker Compose`; that is harmless.
 6. **Technitium DNS.** `homeserver/technitium/*` back into the stack's
    `config/`. Query logs and stats DBs are not in the archive by design —
    they rebuild themselves as the server runs. Re-apply the admin password
    and upstream (DoH/DoT) settings if the config dir was not captured.
-7. **Dashboard operator state.** With `honeypot-elk` up and healthy (it is,
+7. **Dashboard operator state.** Only if `MANIFEST.txt` lists
+   `es-operator-state`. If it does not, there is nothing to restore and the
+   state is lost (as in #3708); do not run the command below against an
+   absent directory. With `honeypot-elk` up and healthy (it is,
    or will be, whatever this list gets to first) and the tool from this
    archive, put the documents back:
    ```bash
@@ -355,8 +402,14 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    until 2028 and cannot be regenerated from this repo, which is why
    `deploy.yml` refuses to overwrite `traefik/` on a normal deploy.
 
-Then follow [`STACK-REBUILD.md`](STACK-REBUILD.md)'s start order —
-`honeypot-elk` healthy before `honeypot-init`, everything else after.
+Then bring the stacks up. For a deliberate reset follow
+[`STACK-REBUILD.md`](STACK-REBUILD.md)'s start order — `honeypot-elk`
+healthy before `honeypot-init`, everything else after. For a lost `/var`
+follow [`HOMESERVER-VAR-RECOVERY.md`](HOMESERVER-VAR-RECOVERY.md) instead:
+the restore above gives you inputs, but the installer steps a fresh `/var`
+needs (shared resources, enrichment directories, GeoIP profiles, backend ACLs,
+`/var/image-sbom`, the `xore-zeek:local` image, GHCR credentials, CI-runner
+re-registration) are in that runbook, not here.
 
 Verify with `analysis/verify-stack.py` — `DASHBOARD_SERVICE_TOKEN` from the
 stack's `.env`; it judges source-health through dashboard-next's `/bff`
