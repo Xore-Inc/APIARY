@@ -85,7 +85,12 @@ x-runtime-defaults: &runtime-defaults
 services:
   canarytokens-redis:
     <<: *runtime-defaults
-    image: redis:7.4-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541
+    # #3720: redis 7.4 -> 8. 8.x loads the existing 7.4 RDB/AOF on this
+    # volume unchanged (rehearsed against a copy of the live volume: same
+    # 17 keys); the move is one-way, an 8.x RDB does not load on 7.x, so
+    # rollback is the pre-upgrade volume tarball plus the old image. Redis 8
+    # is RSALv2/SSPLv1/AGPLv3; private use only, never redistributed.
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
     container_name: hp-canarytokens-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --protected-mode no --save 60 1
