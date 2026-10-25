@@ -113,7 +113,8 @@ cleanup() {
   fi
   [ -n "${bff_pid}" ] && kill "${bff_pid}" >/dev/null 2>&1 || true
   # -v matters: postgres:18.4-bookworm declares an anonymous VOLUME for
-  # /var/lib/postgresql and redis:7-alpine one for /data. Without -v,
+  # /var/lib/postgresql (redis:7-alpine also declared one for /data;
+  # the redis 8 image pinned below no longer does). Without -v,
   # `docker rm -f` deletes the container but leaves that volume behind,
   # dangling and unnamed, on every run.
   #
@@ -183,7 +184,7 @@ done
 # Redis BEFORE the BFF starts -- same ordering rule the Go suite recorded:
 # startup-time pending-state/session writes must not race container boot.
 docker run -d --name "${redis}" --network "${network}" -p "127.0.0.1:${redis_port}:6379" \
-  redis:7-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541 >/dev/null
+  redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0 >/dev/null
 for _ in $(seq 1 30); do docker exec "${redis}" redis-cli ping >/dev/null 2>&1 && break; sleep 1; done
 
 kcadm() { docker exec "${kc}" /opt/keycloak/bin/kcadm.sh "$@"; }
