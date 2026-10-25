@@ -27,9 +27,9 @@ line, `#` comments and blank lines ignored.
 
 | Profile | Backbone | Sensors | Shape |
 |---|---|---|---|
-| [`full.txt`](../../deploy-profiles/full.txt) | keycloak, init, elk, dashboard, utilities, payload-analysis | the 20 classic deception sensor stacks under `arcane/home/` -- but see the gap below | the standard deployment -- everything this repo ships |
-| [`ics-focused.txt`](../../deploy-profiles/ics-focused.txt) | keycloak, init, elk, dashboard, utilities | conpot, dnp3 | OT/ICS-only exposure -- skip the general-purpose/web/SSH/legacy-protocol sensors entirely |
-| [`minimal-web.txt`](../../deploy-profiles/minimal-web.txt) | keycloak, init, elk, dashboard, utilities | http, tanner | web-attack-focused -- HTTP/API honeypot + SNARE/TANNER, skip ICS/SSH/legacy-protocol sensors |
+| [`full.txt`](../../deploy-profiles/full.txt) | keycloak, init, elk, dashboard, backend-workers, utilities, payload-analysis | the 20 classic deception sensor stacks under `arcane/home/` -- but see the gap below | the standard deployment -- everything this repo ships |
+| [`ics-focused.txt`](../../deploy-profiles/ics-focused.txt) | keycloak, init, elk, dashboard, backend-workers, utilities | conpot, dnp3 | OT/ICS-only exposure -- skip the general-purpose/web/SSH/legacy-protocol sensors entirely |
+| [`minimal-web.txt`](../../deploy-profiles/minimal-web.txt) | keycloak, init, elk, dashboard, backend-workers, utilities | http, tanner | web-attack-focused -- HTTP/API honeypot + SNARE/TANNER, skip ICS/SSH/legacy-protocol sensors |
 
 **`full.txt` is not actually "everything this repo ships".** It lists 26
 stacks (6 backbone + 20 sensors) and omits `honeypot-sonicwall-sma`, the
@@ -72,9 +72,9 @@ scripts/deploy-profile-sizing.py
 
 | profile | stacks | declared cpus | declared memory |
 |---|---|---|---|
-| `full` | 26 | 120.5 | 70.6 GiB |
-| `minimal-web` | 7 | 82 | 53.3 GiB |
-| `ics-focused` | 7 | 73 | 47.6 GiB |
+| `full` | 27 | 120.5 | 70.6 GiB |
+| `minimal-web` | 8 | 82 | 53.3 GiB |
+| `ics-focused` | 8 | 73 | 47.6 GiB |
 
 **These are ceilings, not measurements.** A `mem_limit` is the most a container
 may claim, so the column is an upper bound on what the profile could ask the
