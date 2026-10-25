@@ -2978,8 +2978,11 @@ def chat(
         for key in ("cli_artifacts", "cli_artifacts_relative", "cli_session_id",
                     "cli_wire_sha256", "cli_messages", "cli_conversation",
                     "backend_options", "backend_done_reasons", "cli_control_model",
-                    "cli_version"):
+                    "cli_version", "backend_done_reason", "backend_tools_sent",
+                    "upstream_aborted"):
             result[key] = response.get(key)
+    if response.get("error_kind"):
+        result["error_kind"] = response["error_kind"]
     if tool_fallback_reason:
         result["tool_fallback_reason"] = tool_fallback_reason
     if parser is not None:
@@ -4226,6 +4229,86 @@ def write_human_grades_template(writer: TranscriptWriter, artifact: dict[str, An
     return path
 
 
+# #3706 cause 0. A case scores zero when its answer did not end on `stop`, and
+# the slot verdict used to call every one of them "did not stop on its own
+# terms". Most were not model outcomes at all: a 400 because the model has no
+# tool template, a transport or HTTP failure, or Claude Code exiting. Those
+# three are reported apart from a real non-stop (`length`, a loop, a malformed
+# tool call), so the verdict says whose failure it was.
+NONSTOP_MODEL = "model"
+NONSTOP_HARNESS = "harness"
+NONSTOP_CAPABILITY = "capability"
+
+
+def _generation_nonstop_kind(raw: dict[str, Any]) -> str | None:
+    error = raw.get("error")
+    if error:
+        kind = raw.get("error_kind")
+        if kind == "capability" or (kind is None and "does not support" in str(error).lower()):
+            return NONSTOP_CAPABILITY
+        return NONSTOP_HARNESS
+    if was_capped(raw):
+        return NONSTOP_MODEL
+    return None
+
+
+def nonstop_kind(record: Any) -> str | None:
+    """Why a capped case did not finish, from the generations it holds.
+
+    Walks the case record for chat() results (any mapping with a
+    `done_reason`) because each slot nests them differently. A model-side
+    non-stop wins over a harness error in the same case: the model did get to
+    answer and did not finish. None when nothing inside is a non-stop.
+    """
+    kinds: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if "done_reason" in value:
+                kind = _generation_nonstop_kind(value)
+                if kind:
+                    kinds.add(kind)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(record)
+    for kind in (NONSTOP_MODEL, NONSTOP_HARNESS, NONSTOP_CAPABILITY):
+        if kind in kinds:
+            return kind
+    return None
+
+
+def describe_nonstops(slot: str, total: int, items: list[dict[str, Any]]) -> list[str]:
+    """The slot verdict's wording for capped cases, one clause per cause."""
+    groups: dict[str, list[str]] = {NONSTOP_MODEL: [], NONSTOP_HARNESS: [],
+                                    NONSTOP_CAPABILITY: []}
+    for item in items:
+        groups[nonstop_kind(item) or NONSTOP_MODEL].append(item["case"])
+    clauses = []
+    if groups[NONSTOP_MODEL]:
+        names = sorted(groups[NONSTOP_MODEL])
+        clauses.append(
+            f"{len(names)} of {total} {slot} answers did not stop on their own terms "
+            f"(done_reason other than 'stop') and scored zero instead of as "
+            f"answers: {', '.join(names)}")
+    if groups[NONSTOP_HARNESS]:
+        names = sorted(groups[NONSTOP_HARNESS])
+        clauses.append(
+            f"{len(names)} of {total} {slot} answers were lost to a harness, transport "
+            f"or HTTP error before the model finished (not a model outcome) and scored "
+            f"zero: {', '.join(names)}")
+    if groups[NONSTOP_CAPABILITY]:
+        names = sorted(groups[NONSTOP_CAPABILITY])
+        clauses.append(
+            f"{len(names)} of {total} {slot} answers were skipped because the model "
+            f"does not support a feature the request needs (e.g. tools) and scored "
+            f"zero: {', '.join(names)}")
+    return clauses
+
+
 def context_probe(
     base_url: str, model: str, context: int, recorder: SlotRecorder | None = None,
     transport: Callable[..., dict[str, Any]] | None = None,
@@ -4525,11 +4608,8 @@ def evaluate_slot(
         if capped or looped or capped_probe:
             stopped = []
             if capped:
-                stopped.append(
-                    f"{len(capped)} of {len(cases)} {slot} answers did not stop on their "
-                    f"own terms (done_reason other than 'stop') and scored zero instead of "
-                    f"as answers: {', '.join(capped)}"
-                )
+                stopped.extend(describe_nonstops(
+                    slot, len(cases), [item for item in cases if item.get("capped")]))
             if looped:
                 stopped.append(
                     f"{len(looped)} of {len(cases)} {slot} answers were degenerate "
@@ -4537,10 +4617,17 @@ def evaluate_slot(
                     f"one: {', '.join(looped)}"
                 )
             if capped_probe:
-                stopped.append(
-                    "the context probe did not stop on its own terms either (done_reason "
-                    "other than 'stop'), so it is not a pass"
-                )
+                probe_kind = nonstop_kind(probe.get("output")) or NONSTOP_MODEL
+                stopped.append({
+                    NONSTOP_MODEL: "the context probe did not stop on its own terms "
+                                   "either (done_reason other than 'stop'), so it is "
+                                   "not a pass",
+                    NONSTOP_HARNESS: "the context probe was lost to a harness, transport "
+                                     "or HTTP error, so it is not a pass",
+                    NONSTOP_CAPABILITY: "the context probe was skipped because the model "
+                                        "does not support a feature the request needs, "
+                                        "so it is not a pass",
+                }[probe_kind])
             result["error"] = "; ".join(stopped)
         return result
     except Exception as exc:  # Preserve evidence for other independent slots.
