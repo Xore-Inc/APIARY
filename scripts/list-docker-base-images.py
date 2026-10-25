@@ -276,24 +276,10 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "cannot move without a migration this repo does not own. Names no "
         "FROM in the tree, so main() emits it bare and the digest is None."
     ),
-    "postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97": (
-        None,
-        "#3720: sandbox/ghosts/compose.yml moved to postgres 16.15 (newest "
-        "16.x); re-measured 2026-10-24 at 26 fixable, all Go stdlib v1.24.6 "
-        "in the gosu helper binary, the same shape as before. Previous "
-        "measurement, carried over: "
-        "the same postgres:16.8 tag reached through the GHOSTS compose that "
-        "does digest-pin it (sandbox/ghosts/compose.yml), which main() "
-        "therefore emits as a digest-keyed reference. Same 122 findings, "
-        "same reason as the bare-keyed entry above -- both keys exist "
-        "because the matching rule is exact and main() emits two distinct "
-        "references for one tag. Keyed by the whole reference with a None "
-        "digest, since a second `postgres:16.8` key would collide with the "
-        "one above."
-    ),
     "postgres:18.6-bookworm": (
         "sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc",
-        "#3720: digest refresh of the same 18.6-bookworm tag; re-measured "
+        "#3720: digest refresh of the same 18.6-bookworm tag, now also the "
+        "ghosts postgres (sandbox/ghosts/compose.yml moved 16 -> 18); re-measured "
         "2026-10-24 at 26 fixable, Go stdlib v1.24.6 in gosu. Previous "
         "measurement, carried over: "
         "measured 23 fixable CRITICAL/HIGH: 22 in the Go stdlib the postgres "
