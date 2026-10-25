@@ -10,7 +10,12 @@ import pathlib
 import re
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# #3575: the mounted API stays in honeypot-dashboard; backend-worker moved to
+# honeypot-backend-workers. Both files are checked so a second copy of the loop
+# in either one fails.
 COMPOSE = REPO_ROOT / "arcane" / "home" / "honeypot-dashboard" / "compose.yml"
+WORKERS = REPO_ROOT / "arcane" / "home" / "honeypot-backend-workers" / "compose.yml"
+WORKER_SERVICES = ("backend-worker",)
 
 LOOP = "workbench-reconcile"
 SPOOL_TARGETS = (
@@ -27,8 +32,10 @@ SPOOL_TARGETS = (
 )
 
 
-def _service_block(name):
-    text = COMPOSE.read_text(encoding="utf-8")
+def _service_block(name, compose=None):
+    if compose is None:
+        compose = WORKERS if name in WORKER_SERVICES else COMPOSE
+    text = compose.read_text(encoding="utf-8")
     match = re.search(rf"^  {re.escape(name)}:\n", text, re.M)
     assert match, f"service {name} not found"
     rest = text[match.end():]
@@ -59,11 +66,12 @@ def test_loop_not_in_mounted_api():
 
 
 def test_loop_wired_exactly_once_in_compose():
-    text = COMPOSE.read_text(encoding="utf-8")
     count = 0
-    for name in re.findall(r"^  ([A-Za-z0-9_-]+):\n", text, re.M):
-        if LOOP in _loops(_service_block(name)):
-            count += 1
+    for compose in (COMPOSE, WORKERS):
+        text = compose.read_text(encoding="utf-8")
+        for name in re.findall(r"^  ([A-Za-z0-9_-]+):\n", text, re.M):
+            if LOOP in _loops(_service_block(name, compose)):
+                count += 1
     assert count == 1
 
 
