@@ -194,10 +194,14 @@ def _error_kind(error: str | None, source: str) -> str | None:
     transport fault. Otherwise `source` says where the error was raised:
     `backend` for an HTTP or transport failure between the gateway and the
     engine, `cli` for Claude Code itself failing (non-zero exit, the harness's
-    deadline, no final result). None means no error.
+    deadline, no final result). `model` is the agent turn cap: the model kept
+    calling tools for every allowed turn and never finished -- a real non-stop,
+    not a harness fault. None means no error.
     """
     if not error:
         return None
+    if source == "model":
+        return "model"
     # Ollama's wording for a template without the feature: "<model> does not
     # support tools" (also "... thinking", "... insert").
     if "does not support" in error.lower():
@@ -812,6 +816,10 @@ class ClaudeCodeCLI:
                     "reason": result.get("is_error"),
                     "result": _block_text(result.get("content"))})
         final = result_event.get("result") or ""
+        if result_event.get("subtype") == "error_max_turns" and not backend_errors and \
+                error and error.startswith("Claude Code exited"):
+            error = f"agent turn cap reached ({self.steps} turns) without a final answer"
+            error_source = "model"
         if backend_errors:
             # A backend failure is the cause even when the CLI's reaction to
             # it (an error result, a non-zero exit, no model request on
@@ -821,6 +829,9 @@ class ClaudeCodeCLI:
             error = "Claude Code emitted no final result event"
         if not error and not halted and result_event.get("is_error"):
             error = str(final or result_event.get("subtype") or "Claude Code result error")
+            if result_event.get("subtype") == "error_max_turns":
+                error = f"agent turn cap reached ({self.steps} turns) without a final answer"
+                error_source = "model"
         if not error and not answers:
             error = "Claude Code made no benchmark model request"
         # #3706 cause 0: the backend's own reason is the answer's done_reason.

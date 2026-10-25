@@ -4246,6 +4246,8 @@ def _generation_nonstop_kind(raw: dict[str, Any]) -> str | None:
         kind = raw.get("error_kind")
         if kind == "capability" or (kind is None and "does not support" in str(error).lower()):
             return NONSTOP_CAPABILITY
+        if kind == "model":
+            return NONSTOP_MODEL
         return NONSTOP_HARNESS
     if was_capped(raw):
         return NONSTOP_MODEL

@@ -41,6 +41,12 @@ class NonstopVerdictTest(unittest.TestCase):
             case("timeout", done_reason="error", error="Claude Code timed out after 9000s")])
         self.assertNotIn("did not stop", " ".join(clauses))
 
+    def test_agent_turn_cap_is_a_model_nonstop(self):
+        self.assertEqual(evaluate_models.nonstop_kind(
+            {"output": {"done_reason": "error", "error_kind": "model",
+                        "error": "agent turn cap reached (16 turns) without a final answer"}}),
+            evaluate_models.NONSTOP_MODEL)
+
     def test_capability_is_recognised_without_error_kind(self):
         self.assertEqual(evaluate_models.nonstop_kind(
             {"output": {"done_reason": "error",

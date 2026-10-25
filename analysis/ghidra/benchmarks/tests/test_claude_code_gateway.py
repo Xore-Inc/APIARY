@@ -183,6 +183,34 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(result["done_reason"], "error")
         self.assertEqual(result["error_kind"], "backend")
 
+    def test_agent_turn_cap_is_a_model_nonstop_not_a_harness_error(self):
+        script = self.root / "claude-max-turns"
+        script.write_text(f"""#!{sys.executable}
+import http.client, json, os, sys
+from urllib.parse import urlparse
+args = sys.argv[1:]
+system = open(args[args.index("--system-prompt-file") + 1]).read()
+prompt = json.loads(sys.stdin.readline())["message"]["content"][0]["text"]
+base = urlparse(os.environ["ANTHROPIC_BASE_URL"])
+conn = http.client.HTTPConnection(base.hostname, base.port, timeout=30)
+conn.request("POST", "/v1/messages", json.dumps({{"model": "sonnet", "stream": False,
+    "system": system, "messages": [{{"role": "user", "content": prompt}}]}}),
+    {{"Content-Type": "application/json"}})
+conn.getresponse().read()
+print(json.dumps({{"type": "result", "subtype": "error_max_turns", "is_error": True,
+                  "session_id": "fake"}}))
+sys.exit(1)
+""")
+        script.chmod(0o755)
+        cli = ClaudeCodeCLI("stub", lambda _u, _b: ok_answer(), str(script), 60, 16,
+                            self.root / "run" / "transcripts" / "stub", version="fake")
+        cli.workspace = self.workspace
+        cli.set_case("coder", "case-1")
+        result = cli("http://backend", benchmark_body(tools=[{}]))
+        self.assertEqual(result["done_reason"], "error")
+        self.assertEqual(result["error_kind"], "model")
+        self.assertIn("turn cap", result["error"])
+
     # Cause C: headers at once, keepalive pings while the backend works.
     def test_stream_starts_at_once_and_pings_while_the_backend_works(self):
         def slow(_u, _b):
