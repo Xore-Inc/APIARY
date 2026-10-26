@@ -67,7 +67,7 @@ jobs:
           # does not have.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - name: Select the scoped rows to build
@@ -447,14 +447,14 @@ jobs:
       # FROM against the registry. Guarded on the secret being non-empty
       # so a fork pull_request -- which by design cannot see secrets --
       # keeps building anonymously rather than failing on empty creds.
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: env.DOCKERHUB_USERNAME != ''
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
@@ -850,7 +850,7 @@ jobs:
 
       - name: "Upload the digest-bound SBOM as a CI artifact (#3321)"
         if: matrix.sbom == true && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Keyed by the digest, not the run: two builds of the same commit
           # produce the same name, and a digest-keyed name is the one an
@@ -911,10 +911,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -931,7 +931,7 @@ jobs:
             --owner "$OWNER" --sha "$COMMIT" \
             --out "$RUNNER_TEMP/digests/image-digests.json"
       - name: Upload the digest manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digests
           path: ${{ runner.temp }}/digests/image-digests.json
