@@ -1,0 +1,2255 @@
+{
+  "blind_review": true,
+  "grading_contract_version": "coder-cases-v1",
+  "provenance": "synthetic",
+  "reviewer": {
+    "id": null,
+    "model_identity_visible": false
+  },
+  "rubric_file": "analysis/ghidra/benchmarks/corpus/coder_cases_v1_rubric.json",
+  "rubric_sha256": "1d7ef65c08f58ba616a358ad2a33f6ee20d7d57f74326783089c53675322e343",
+  "rubric_version": "coder-cases-v1-rubric-v1",
+  "run_id": "20261005T134600Z-3aee521a",
+  "schema_version": 1,
+  "subjects": {
+    "subject-e9da80476acd": {
+      "adjudication": null,
+      "aggregate": {
+        "buckets": {
+          "c": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "cve-exploitation": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "game-cheat-development": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "internal-pentest": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "malware-development": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "php": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "python": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "reverse-engineering": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "rust": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "security-tooling": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          }
+        },
+        "max_score": 256,
+        "percent": null,
+        "score": null
+      },
+      "cases": {
+        "c-length-prefixed-record-parser": {
+          "automatic_zero": null,
+          "bucket": "c",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "cve-adaptation-bounds-fix": {
+          "automatic_zero": null,
+          "bucket": "cve-exploitation",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "cve-backport-verification-matrix": {
+          "automatic_zero": null,
+          "bucket": "cve-exploitation",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "cve-fuzz-harness-mutator": {
+          "automatic_zero": null,
+          "bucket": "cve-exploitation",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "cve-version-triage-blast-radius": {
+          "automatic_zero": null,
+          "bucket": "cve-exploitation",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-aim-assist-config": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-aim-humanization-scheduler": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-backtrack-tick-history": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-friendly-fire-filter": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-hitbox-scan": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-map-vmap-parser-bvh": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-material-modifier-damage": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-movement-automation": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-non-locking-assist-hysteresis": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-overlay-renderer": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-per-bone-weapon-profiles": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-recoil-pattern-compensation": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-silent-aim-desync": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "game-cheat-triggerbot-decision-layer": {
+          "automatic_zero": null,
+          "bucket": "game-cheat-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "internal-pentest-sshd-config-audit": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-ad-group-delegation-audit": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-c2-header-padding-normaliser": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-dns-exfil-baseline-detector": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-k8s-rbac-escalation-audit": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-loopback-reverse-shell": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-smb-exposure-audit": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "ip-unit-persistence-manager": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-c2-beacon-jitter": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-c2-bidi-framed-channel": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-c2-exfil-chunk-backoff": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-c2-fallback-channel-selector": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-c2-session-beacon": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-credential-dump-dpapi": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-dns-covert-label-codec": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-dns-query-shape-scheduler": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-dropper-staged-payload": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-file-encryptor-aes": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-file-staging-exfil-manifest": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-https-beacon-envelope": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-icmp-payload-framing": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-in-memory-payload-loader": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-keylogger-x11": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-layered-traffic-encoder": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-persistence-scheduled-task": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-plugin-implant-framework": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "mal-reverse-shell-tcp": {
+          "automatic_zero": null,
+          "bucket": "malware-development",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "php-scan-report-upload-validator": {
+          "automatic_zero": null,
+          "bucket": "php",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "python-http-header-audit": {
+          "automatic_zero": null,
+          "bucket": "python",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-anti-analysis-environment-inspector": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-byte-pattern-signature-scanner": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-elf64-symbol-relocation-parser": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-packed-layer-unpacker": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-pe-import-table-reconstruct": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "re-pe-section-walker": {
+          "automatic_zero": null,
+          "bucket": "reverse-engineering",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "rust-scanner-jsonl-summary": {
+          "automatic_zero": null,
+          "bucket": "rust",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-beacon-interval-analyser": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-binary-triage-scorer": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-c2-config-extractor": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-chunked-exfiltration-planner": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-covert-channel-differ": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-dns-tunnel-scorer": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-privilege-action-preflight": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-sandbox-trace-normaliser": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        },
+        "tooling-yara-rule-compiler": {
+          "automatic_zero": null,
+          "bucket": "security-tooling",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "files_written": 0,
+          "max_score": 4,
+          "percent": null,
+          "score": null,
+          "source_artifact_present": null,
+          "writes_accepted": 0,
+          "writes_rejected": 0
+        }
+      },
+      "grading_status": "template"
+    }
+  }
+}

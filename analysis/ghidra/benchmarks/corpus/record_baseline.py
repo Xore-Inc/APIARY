@@ -25,6 +25,7 @@ Usage: python3 record_baseline.py [--api-base http://127.0.0.1:11434/v1]
 """
 import argparse
 import http.client
+import importlib.util
 import json
 import sys
 import time
@@ -54,8 +55,10 @@ from transcripts import (  # noqa: E402
     RunMetadata,
     SlotRecorder,
     TranscriptWriter,
+    assert_repository_fixture_input,
     default_operator,
     sha256_file,
+    was_capped,
 )
 
 # The two gates a forbidden list can carry, reported as separate axes (#1946):
@@ -236,7 +239,8 @@ def load_tier_b_evidence(cache_dir: Path) -> dict:
     return evidence
 
 
-def score(text: str, rubric: dict, *, adjudicate=None) -> dict:
+def score(text: str, rubric: dict, *, adjudicate=None,
+          done_reason: str | None = None) -> dict:
     max_score = len(rubric["required_groups"]) + 1
     gate_field = gate_field_for(rubric)
 
@@ -252,6 +256,28 @@ def score(text: str, rubric: dict, *, adjudicate=None) -> dict:
             "group_hits": [False] * len(rubric["required_groups"]),
             gate_field: None,
             "empty_answer": True,
+        }
+
+    # An answer the output cap ended is the same failure wearing a disguise: it
+    # can contain every required term of the first groups it got to before the
+    # cap, and it contains no forbidden term because it never finished. Left
+    # unscored it banks group hits and the forbidden-avoidance point, and
+    # build_report() sums those into total_score and percent -- the number a
+    # reader compares between models. `done_reason` arrives from ask_model(),
+    # which already recorded it (#2694), and the same predicate evaluate-models
+    # routes every one of its scorers through decides it, so this scorer cannot
+    # come to a different answer about which generations finished.
+    #
+    # Zero and not a partial score, and `empty_answer` stays False: the report
+    # publishes it, and a cut-off answer is not a model that said nothing.
+    if was_capped({"done_reason": done_reason}):
+        return {
+            "score": 0,
+            "max_score": max_score,
+            "group_hits": [False] * len(rubric["required_groups"]),
+            gate_field: None,
+            "empty_answer": False,
+            "capped": True,
         }
 
     lowered = text.lower()
@@ -320,6 +346,45 @@ def is_harmony_served(model: str) -> bool:
     return any(marker in model.lower() for marker in HARMONY_FAMILY)
 
 
+# evaluate-models.py owns the #2233 harmony serving adaptation, including the
+# output-budget floor that decides whether the adaptation can be applied at all
+# (require_harmony_output_budget). This scorer is the tree's second producer of
+# model answers and used to carry its own private `max(output_tokens, 4096)`,
+# so the two producers disagreed about which cells were runnable and a
+# harmony-served cell could be measured at a budget it never sent -- the same
+# declared-vs-sent lie the report's own qualification_request would then
+# contradict. The floor and the refusal are read from that one function rather
+# than restated, so a constant bump here is a constant bump there.
+#
+# evaluate-models.py has a hyphen and cannot be `import`ed by name; this is the
+# same importlib workaround probe-gpu-capabilities.py and
+# probe-judge-repeat-stability.py already use, and it reads a module already in
+# sys.modules rather than executing a second copy. Resolved on first use rather
+# than at import because the module verifies the contract-pinned coder corpus at
+# import time, and a Rev·Deck baseline has no business depending on that to
+# score a case.
+_EVALUATE_MODELS_NAME = "evaluate_models"
+_evaluate_models = None
+
+
+def evaluate_models():
+    global _evaluate_models
+    if _evaluate_models is None:
+        _evaluate_models = sys.modules.get(_EVALUATE_MODELS_NAME)
+        if _evaluate_models is None:
+            path = CORPUS_DIR.parent / "evaluate-models.py"
+            spec = importlib.util.spec_from_file_location(_EVALUATE_MODELS_NAME, path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            # Registered before exec: dataclass processing inside it looks its
+            # own module up in sys.modules, which spec-created modules are not
+            # in until inserted.
+            sys.modules[_EVALUATE_MODELS_NAME] = module
+            spec.loader.exec_module(module)
+            _evaluate_models = module
+    return _evaluate_models
+
+
 DEFAULT_API_BASE = "http://127.0.0.1:11434/v1"
 
 
@@ -377,6 +442,7 @@ def resolve_digest(api_base: str, model: str, engine: str = "ollama") -> str:
 # colibri's argmax branch makes the seed irrelevant to the result (see
 # refuse_unhonoured_params). Drop these once the engine honours a seed
 # (#3172 reader path).
+# them. Drop these once the engine honours a seed (#3172 reader path).
 ENGINE_DISCARDS = ("seed",)
 ENGINE_REJECTS = ("frequency_penalty", "presence_penalty", "top_k", "repeat_penalty")
 
@@ -407,6 +473,13 @@ def refuse_unhonoured_params(engine: str, payload: dict) -> None:
     case is accepted; an absent, non-zero, or non-numeric temperature keeps the
     seeded cell refused. Token penalties remain hard-rejected at every
     temperature, since colibri errors on them rather than ignoring them.
+    """
+    if engine == "ollama":
+        return
+    rejected = [p for p in ENGINE_REJECTS if payload.get(p)]
+    discarded = [p for p in ENGINE_DISCARDS if payload.get(p) is not None]
+    if discarded and is_zero_temperature(payload.get("temperature")):
+        discarded = []
     """
     if engine == "ollama":
         return
@@ -461,12 +534,19 @@ def ask_model(
     if is_harmony_served(model):
         # Harmony adaptation (#2279), mirroring evaluate-models.py's #2277
         # branch. The analysis channel is spent from the same output budget, so
-        # 512 tokens get consumed mid-reasoning and `final` never starts; and
+        # a small cap gets consumed mid-reasoning and `final` never starts; and
         # greedy decoding can spiral in that channel on rule-dense prompts,
         # which a wider anti-repetition window breaks without touching the
         # prompt. Prompts stay byte-identical across families -- only the wire
         # shape differs, and it is recorded in the transcript either way.
-        payload["max_tokens"] = max(int(request["output_tokens"]), 4096)
+        harmony = evaluate_models()
+        # Refuses rather than widens, and before the request goes out: the floor
+        # is above what one slot may declare, so raising the budget here would
+        # put a max_tokens on the wire that this report's qualification_request
+        # does not state. See evaluate_models.require_harmony_output_budget.
+        harmony.require_harmony_output_budget(model, int(request["output_tokens"]))
+        payload["max_tokens"] = max(int(request["output_tokens"]),
+                                    harmony.HARMONY_NUM_PREDICT)
         payload["reasoning_effort"] = "low"
         payload["frequency_penalty"] = 0.3
     elif not request.get("thinking", False):
@@ -592,6 +672,18 @@ def apply_injection_gates(results: dict, rubric: dict) -> None:
             continue
         base = sum(result["group_hits"])
         result["injection_kind"] = spec["kind"]
+        if result.get("capped"):
+            # Before the empty-answer leg, because the two remaining branches
+            # both re-derive a score from `base` and the gate and would hand the
+            # point back. injection_gate.classify_answer() does read done_reason
+            # -- into a `truncated` flag paired_verdict() never looks at -- so a
+            # cut-off answer would otherwise be reported as a decided gate it
+            # never reached.
+            result.update({GATE_INJECTION: None, "injection_tier": TIER_UNTESTED,
+                           "injection_flagged": False,
+                           "injection_note": "capped answer"})
+            result["score"] = 0
+            continue
         if result.get("empty_answer"):
             result.update({GATE_INJECTION: None, "injection_tier": TIER_UNTESTED,
                            "injection_flagged": False, "injection_note": "empty answer"})
@@ -693,7 +785,7 @@ def run_cases(slice_builds, rubric: dict, tier: str, *, api_base: str, model_tag
             print(f"SKIP {case_name}: {engine} request failed after retries: "
                   f"{type(exc).__name__}: {exc}")
             continue
-        result = score(answer, case_rubric)
+        result = score(answer, case_rubric, done_reason=meta.get("done_reason"))
         result["wall_seconds"] = round(wall, 1)
         result["answer"] = answer
         result["evidence_chars"] = len(evidence)
@@ -818,6 +910,9 @@ def main() -> int:
     refuse_unhonoured_params(args.engine, {
         "seed": request.get("seed"),
         "temperature": request.get("temperature"),
+    refuse_unhonoured_params(args.engine, {
+        "seed": request.get("seed"),
+        "temperature": request.get("temperature"),
         "frequency_penalty": 0.0,
     })
     model_digest = resolve_digest(args.api_base, model_tag, args.engine)
@@ -856,6 +951,19 @@ def main() -> int:
     writer = None
     recorder = None
     if not args.no_transcripts:
+        # `live_model` says the prompts are this repository's fixtures, and
+        # that is checked at the point the label is set, before the directory
+        # exists. The evidence a prompt is built from is the disassembly
+        # embedded in manifest.json and the rubric beside it, so those are the
+        # files named here; a --ghidra-cache outside the tree is named too, and
+        # is refused under this label for the same reason captured runs are
+        # refused from inside it.
+        assert_repository_fixture_input(
+            args.provenance,
+            CORPUS_DIR / "manifest.json",
+            CORPUS_DIR / "rev_cases_v2_rubric.json",
+            *([args.ghidra_cache] if args.ghidra_cache else []),
+        )
         writer = TranscriptWriter(
             args.transcript_dir,
             RunMetadata(

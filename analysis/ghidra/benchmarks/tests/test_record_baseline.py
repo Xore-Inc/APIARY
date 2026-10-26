@@ -618,6 +618,7 @@ class ColibriEngineContractTest(unittest.TestCase):
     discarded seed cannot change the text -- measured byte-stable across three
     identical requests on a real qwen36 checkpoint. Anything else still refuses,
     and `bool` temperatures must not sneak through as an int 0/1."""
+    letting an unseeded run into the matrix as a seeded one."""
 
     REQUEST = {"temperature": 0, "output_tokens": 512, "seed": 144, "thinking": False}
 
@@ -636,6 +637,7 @@ class ColibriEngineContractTest(unittest.TestCase):
     def test_a_seeded_colibri_cell_above_temperature_zero_is_refused(self):
         """The discard only stops mattering at exactly 0; a sampled cell that
         still carries a seed must never enter the matrix as a seeded one."""
+    def test_a_seeded_colibri_cell_is_refused_before_any_request(self):
         sent = []
 
         def fake_urlopen(req, timeout=None):
@@ -643,6 +645,9 @@ class ColibriEngineContractTest(unittest.TestCase):
             return _FakeChatResponse("answer text")
 
         sampled = {**self.REQUEST, "temperature": 0.7}
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(SystemExit) as caught:
+                record_baseline.ask_model("http://fake/v1", "model", sampled,
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             with self.assertRaises(SystemExit) as caught:
                 record_baseline.ask_model("http://fake/v1", "model", sampled,
@@ -877,10 +882,6 @@ class RunCasesIncrementalSaveTest(unittest.TestCase):
         self.assertEqual(seen_case_counts, [0, 1, 2])
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class HarmonyServingTest(unittest.TestCase):
     """#2279: gpt-oss-family tags are rendered through Ollama's harmony
     template, where reasoning_effort:"none" empties the answer instead of
@@ -889,13 +890,18 @@ class HarmonyServingTest(unittest.TestCase):
     answers empty -- null-field artifacts recorded as if they were scores."""
 
     REQUEST = {"temperature": 0, "output_tokens": 512, "seed": 144, "thinking": False}
+    # 512 is below the #2233 harmony floor, and a cell declaring less than the
+    # floor is now refused rather than widened. The adaptation itself is still
+    # asserted at a budget that covers it; the refusal has its own test, and
+    # test_harmony_budget_guard.py owns the no-request-on-the-wire half.
+    FLOOR_REQUEST = {"temperature": 0, "output_tokens": 4096, "seed": 144, "thinking": False}
 
     def setUp(self):
         record_baseline._harmony_by_tag.clear()
 
     tearDown = setUp
 
-    def _body(self, model):
+    def _sent(self, model, request=None):
         sent = []
 
         def fake_urlopen(req, timeout=None):
@@ -903,20 +909,35 @@ class HarmonyServingTest(unittest.TestCase):
             return _FakeChatResponse("answer text")
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            record_baseline.ask_model("http://fake/v1", model, self.REQUEST, "prompt")
-        return sent[0]
+            record_baseline.ask_model(
+                "http://fake/v1", model, request or self.REQUEST, "prompt")
+        return sent
 
-    def test_a_harmony_tag_keeps_the_analysis_channel_and_widens_the_budget(self):
-        body = self._body("gpt-oss:20b")
+    def _body(self, model, request=None):
+        return self._sent(model, request)[0]
+
+    def test_a_harmony_tag_keeps_the_analysis_channel_and_sends_the_declared_floor(self):
+        body = self._body("gpt-oss:20b", self.FLOOR_REQUEST)
         self.assertNotEqual(
             body.get("reasoning_effort"), "none",
             'reasoning_effort:"none" is what empties the answer for this family',
         )
-        self.assertGreaterEqual(
+        self.assertEqual(
             body["max_tokens"], 4096,
-            "the analysis channel is spent from the same budget, so 512 is "
-            "consumed mid-reasoning and `final` never starts",
+            "the analysis channel is spent from the same budget, so a cap under "
+            "4096 is consumed mid-reasoning and `final` never starts",
         )
+
+    def test_a_harmony_tag_declaring_512_is_refused_rather_than_widened(self):
+        """#3172. This asserted `max_tokens >= 4096` for a cell declaring 512:
+        the scorer sent 4096 while the report's qualification_request still
+        said 512, so the number a reader compares between models described a
+        measurement that was never taken. Refused now, before anything is sent.
+        The live revdeck slot declares 4096 (approved-models.json), so this is
+        a refusal of an under-declaring caller, not of the roster sweep."""
+        with self.assertRaises(ValueError) as caught:
+            self._sent("gpt-oss:20b")
+        self.assertIn("4096", str(caught.exception))
 
     def test_a_non_harmony_tag_is_untouched(self):
         body = self._body("qwen3:14b")
@@ -932,8 +953,8 @@ class HarmonyServingTest(unittest.TestCase):
         """CyberPal2.0-20B is GptOssForCausalLM with a tag that never says
         'gpt-oss'; a name test would silently miss it."""
         record_baseline._harmony_by_tag["cyberpal2.0-20b:q4_k_m"] = True
-        body = self._body("cyberpal2.0-20b:q4_k_m")
-        self.assertGreaterEqual(body["max_tokens"], 4096)
+        body = self._body("cyberpal2.0-20b:q4_k_m", self.FLOOR_REQUEST)
+        self.assertEqual(body["max_tokens"], 4096)
 
     def test_resolve_digest_records_the_family(self):
         payload = {
@@ -959,3 +980,16 @@ class HarmonyServingTest(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             record_baseline.resolve_digest("http://fake/v1", "x:latest")
         self.assertTrue(record_baseline.is_harmony_served("x:latest"))
+
+
+# #3172: this block sat above HarmonyServingTest, so the CI row that runs this
+# file as a script (`python analysis/ghidra/benchmarks/tests/
+# test_record_baseline.py`) stopped reading at line 880 and reported 62 of the
+# 67 tests pytest collects -- the four harmony tests covering the #2233
+# adaptation and its refusal never ran in CI at all, while pytest in a developer
+# run reported everything passing. Standalone and pytest have to agree, which
+# means the entry point goes at the end of the file: any class added below this
+# line is silently skipped by the row that gates the merge, and nothing in the
+# row's output says so.
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
