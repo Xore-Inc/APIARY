@@ -1,0 +1,14 @@
+{
+  "rust-scanner-jsonl-summary": {
+    "attempted": false,
+    "reason": "no source prose or unambiguous written file",
+    "ok": null,
+    "diagnostics": ""
+  },
+  "python-http-header-audit": {
+    "attempted": false,
+    "reason": "no source prose or unambiguous written file",
+    "ok": null,
+    "diagnostics": ""
+  }
+}
