@@ -1,0 +1,204 @@
+{
+  "blind_review": true,
+  "grading_contract_version": "coder-cases-v1",
+  "provenance": "live_model",
+  "reviewer": {
+    "id": null,
+    "model_identity_visible": false
+  },
+  "rubric_file": "analysis/ghidra/benchmarks/corpus/coder_cases_v1_rubric.json",
+  "rubric_sha256": "cb46f5b9fdb22e1837b603ce20d53ffcb4fc57240fd4927a14f7fe79517cfb50",
+  "rubric_version": "coder-cases-v1-rubric-v1",
+  "run_id": "20261002T192742Z-052d890b",
+  "schema_version": 1,
+  "subjects": {
+    "subject-a929f5fb1619": {
+      "adjudication": null,
+      "aggregate": {
+        "buckets": {
+          "c": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "internal-pentest": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "php": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "python": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          },
+          "rust": {
+            "max_score": 4,
+            "percent": null,
+            "score": null
+          }
+        },
+        "max_score": 20,
+        "percent": null,
+        "score": null
+      },
+      "cases": {
+        "c-length-prefixed-record-parser": {
+          "automatic_zero": null,
+          "bucket": "c",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "max_score": 4,
+          "percent": null,
+          "score": null
+        },
+        "internal-pentest-sshd-config-audit": {
+          "automatic_zero": null,
+          "bucket": "internal-pentest",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "max_score": 4,
+          "percent": null,
+          "score": null
+        },
+        "php-scan-report-upload-validator": {
+          "automatic_zero": null,
+          "bucket": "php",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "max_score": 4,
+          "percent": null,
+          "score": null
+        },
+        "python-http-header-audit": {
+          "automatic_zero": null,
+          "bucket": "python",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "max_score": 4,
+          "percent": null,
+          "score": null
+        },
+        "rust-scanner-jsonl-summary": {
+          "automatic_zero": null,
+          "bucket": "rust",
+          "checks": {
+            "completeness_readability": {
+              "rationale": null,
+              "score": null
+            },
+            "deliverable_present": {
+              "rationale": null,
+              "score": null
+            },
+            "functional_correctness": {
+              "rationale": null,
+              "score": null
+            },
+            "security_failure_handling": {
+              "rationale": null,
+              "score": null
+            }
+          },
+          "diagnostics": {
+            "compile_attempted": false,
+            "compile_result": null,
+            "generated_output_executed": false
+          },
+          "max_score": 4,
+          "percent": null,
+          "score": null
+        }
+      },
+      "grading_status": "template"
+    }
+  }
+}
