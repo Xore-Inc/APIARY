@@ -61,7 +61,7 @@ LEDGER: dict[str, dict[str, str]] = {
     "go": {"kind": "applies", "why": "gomod entry; created 2026-09-27, closing #3216 decision 1"},
     "github-actions": {"kind": "applies", "why": "github-actions entry; created 2026-09-27, closing #3216 decision 1"},
     "containers": {"kind": "applies", "why": "both docker entries; created 2026-09-27, closing #3216 decision 1"},
-    "frontend": {"kind": "applies", "why": "npm entry; distinct from the dashboard product-area topic (#3216 decision 2)"},
+    # "frontend" (the frontend-next npm entry) left with #3749.
     # --- creates: a watcher owns the label and recreates it on demand ---------
     "ci-queue-stall": {"kind": "creates", "why": "scripts/ci-queue-watch.py"},
     "disk-usage-alarm": {"kind": "creates", "why": "scripts/disk-usage-watch.py"},
