@@ -111,7 +111,7 @@ at 25 MiB with three files, independently from sensor event files under
 
 | Dashboard | Subdomain | Container |
 |---|---|---|
-| Live sensor view (ours) | `honeypot.<domain>` | `dashboard-next` :8080 |
+| Live sensor view (ours) | `honeypot.<domain>` | apiary-dashboard :3000 |
 | Kibana (ELK + Suricata) | `kibana.<domain>` | `kibana` :5601 |
 | TANNER web-attack analysis | `tanner.<domain>` | `tanner_web` :8091 |
 | EveBox (Suricata events) | `evebox.<domain>` | `evebox` :5636 |

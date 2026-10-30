@@ -183,8 +183,8 @@ with whatever the other side currently runs.
    signs.
 3. **Ship the dashboard that signs** (Xore-Inc/apiary-dashboard#249), with
    the private key. Every other BFF that calls the backend with
-   `SERVICE_TOKEN` must sign too or be retired first; the legacy
-   `dashboard-next` in this repo does not sign.
+   `SERVICE_TOKEN` must sign too or be retired first. The legacy
+   `dashboard-next`, which did not sign, was retired in #3749.
 4. **Watch the log** until `[E-ACTOR-ASSERTION]` stays silent through a
    representative period: an admin and a viewer session, every admin action
    the team uses, a Workbench run.
