@@ -56,6 +56,26 @@ request fails; timeout, backend error, and step cap give that case a non-`ok`
 record. Tool support is measured by attempting the CLI, not inferred from
 Ollama capability metadata.
 
+The bridge forwards Claude Code's tool definitions to the engine only when the
+benchmark request itself asked for tools (the coder slot); ghidra, sessions,
+revdeck and the context probe reach the model without a `tools` array. A
+request never carries both `tools` and a grammar `format` (Ollama cannot build
+one sampler from both); when it would, the `format` is dropped and the wire log
+records `format_dropped_for_tools`. Streaming requests get response headers and
+`message_start` immediately and an SSE `ping` every 15 s while the engine
+works, and the CLI's stream watchdogs (`CLAUDE_STREAM_IDLE_TIMEOUT_MS`,
+`CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`, `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS`)
+follow `--coding-cli-timeout`. When Claude Code disconnects, the bridge closes
+the engine connection so the generation is cancelled rather than orphaned
+(`response.upstream_aborted`).
+
+Each CLI answer's `done_reason` is the engine's own (`stop`, `length`, ...);
+`error` means no answer was obtained, and `error_kind` says why: `capability`
+(the model lacks a feature such as tools), `backend` (HTTP or transport failure
+between bridge and engine), or `cli` (Claude Code exited, timed out or produced
+no result). The slot verdict reports model non-stops, harness errors and
+capability skips as separate clauses (#3706).
+
 Claude Code runs use schema `apiary-benchmark-transcript-v1` and the distinct
 benchmark version `-claude-code-cli-v1`. Each transcript records the original
 harness request, actual CLI messages, session ID, CLI version, and
