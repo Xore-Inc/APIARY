@@ -76,8 +76,6 @@ ALLOWED_FILES: dict[str, str] = {
     # anywhere in this repo or its history.
     "arcane/home/honeypot-citrix-honeypot/citrix-honeypot/cve_2026_88771_test.go":
         "structurally valid but unsigned JWT used as a request-body fixture for CVE-2026-88771",
-    "arcane/home/honeypot-dashboard/frontend-next/src/lib/credentialState.test.ts":
-        "credential-state unit-test constant; asserts redacted-vs-plain classification, not a live secret",
     # Same canary literal as the http/cisco fixtures above, asserted on by the
     # dashboard backend's own credential-redaction tests.
     "arcane/home/honeypot-dashboard/backend-service/src/stores.rs":

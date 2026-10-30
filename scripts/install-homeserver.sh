@@ -1504,7 +1504,7 @@ step_provision_buildx_cache() {
 
 step_provision_image_sbom() {
   # #3321: containers.yml writes a digest-keyed CycloneDX SBOM for the two
-  # dashboard images (backend-service, dashboard-next) to
+  # dashboard images (backend-service; dashboard-next until #3749) to
   # /var/image-sbom/<image>/ whenever a build lands on this box's self-hosted
   # runners, so the inventory of what is in a running image sits next to the
   # image rather than only in a CI artifact that expires.

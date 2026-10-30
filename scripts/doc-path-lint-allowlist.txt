@@ -112,3 +112,13 @@ graphify-out/.graphify_analysis.json # graphify analysis sidecar, untracked (#34
 graphify-out/.graphify_root # graphify scan-root marker, untracked (#3497)
 graphify-out/2026-10-04/graph.json # per-date generated graph, untracked (#3497)
 graphify-out/2026-10-04/manifest.json # per-date file index, untracked (#3497)
+
+# --- frontend-next, removed in #3749 (2026-10-30); era records that cite it ---
+arcane/home/honeypot-dashboard/frontend-next # removed in #3749; frontend-mutation-pilot.md is the pilot's dated record
+arcane/home/honeypot-dashboard/frontend-next/src/lib/oidc.server.ts # removed in #3749; threat-model §10 analysis of the legacy BFF, re-assessment is #3751
+arcane/home/honeypot-dashboard/frontend-next/src/lib/backend.server.ts # removed in #3749; threat-model §10 analysis of the legacy BFF, re-assessment is #3751
+arcane/home/honeypot-dashboard/frontend-next/src/lib/cspNonce.server.ts # removed in #3749; threat-model §11 analysis of the legacy renderer, re-assessment is #3751
+arcane/home/honeypot-dashboard/frontend-next/src/routes/llm-analysis.tsx # removed in #3749; dated roadmap entry
+arcane/home/honeypot-dashboard/frontend-next/src/routes/ml-anomalies.tsx # removed in #3749; dated plan entry
+scripts/test-dashboard-oidc-pkce-totp-login.sh # removed in #3749 (port is #3750); cited by the dated 2026-09-03 audit
+scripts/test-dashboard-oidc-chaos.sh # removed in #3749 (port is #3750); cited by the dated 2026-09-03 audit

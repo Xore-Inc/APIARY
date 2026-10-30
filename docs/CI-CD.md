@@ -23,59 +23,36 @@ per-failure traces, and the Rust test log. See
 below.
 - hadolint over every tracked Dockerfile, failing on warnings and errors
   (policy and exemptions in `.hadolint.yaml`, #3320);
-- a digest-bound CycloneDX SBOM for the `backend-service` and
-  `dashboard-next` images, uploaded as an artifact and kept on the homeserver
+- a digest-bound CycloneDX SBOM for the `backend-service` image (the
+  `dashboard-next` one left with frontend-next, #3749), uploaded as an artifact and kept on the homeserver
   at `/var/image-sbom/`, plus a `trivy sbom` scan over that same file
   (#3321, [below](#digest-bound-sboms-for-the-two-dashboard-images-3321));
 - CodeQL for Go, JavaScript/TypeScript, and Python;
 - dependency review on pull requests;
-- fast-check properties for the dashboard-next appearance cookie
-  (9 properties at 100 runs on a pinned seed, inside the ordinary
-  `frontend-next` unit job — the file matches `vitest.config.ts`'s own include
-  glob, so it costs no extra step, install, or second run). Pinned because a
-  property suite whose cases change every run reports "green" for a defect that
-  is still there; the nightly's unseeded high-run search is the lane that is
-  *meant* to move (#3326, [record](frontend-mutation-pilot.md)).
 
 ### Ubuntu 26.04 trial (#3608)
 
 `ubuntu-latest` moves to Ubuntu 26.04 from 2026-10-19. `ubuntu-26-trial.yml`
 runs the image-dependent hosted legs (shellcheck, hadolint, bare `python3`,
-docker tooling, the Playwright `--with-deps` + `redis-server` browser suite) on
+docker tooling) on
 `ubuntu-26.04`. Every job is `continue-on-error: true` and nothing gates on it;
 a red job is the evidence for pinning the matching `quality.yml` job to
 `ubuntu-24.04`. Delete the workflow once `ubuntu-latest` has settled.
 
-### Advisory frontend testing pilot (#3326)
+### Advisory frontend testing pilot (#3326), retired
 
-`frontend-testing-pilot.yml` runs nightly (`41 4 * * *`) and on
-`workflow_dispatch`, and has **no `pull_request` trigger** — the property pass
-that PRs depend on is already the one in `npm test` above, and the mutation run
-is a measurement rather than a check.
-
-| Job | What it does | Failure means |
-|---|---|---|
-| `property` | 100-run pinned pass, then a 2000-run `FC_SEED=random` search; opens an issue on a counterexample | a real defect, not a score — a counterexample is shrunk small enough to paste into a generator |
-| `mutation` | Stryker over two modules, `continue-on-error: true`, no `thresholds` block | nothing; the run records killed/survived and uploads the report |
-
-The asymmetry is deliberate and is the "no gate" requirement in the two places
-it can be expressed. Nothing anywhere reads the mutation score, and there is no
-threshold to breach: a number that has already started failing CI has stopped
-being a measurement. A property counterexample is the opposite case — it is a
-defect with a reproducer, and a scheduled run's own red X is not an alert
-anyone is watching, which is why that job files an issue instead (the same
-reasoning as #2222 in `diagnostics.yml`).
-
-Both jobs derive their node major from the dashboard-next Dockerfile via
-`scripts/node-runtime-major.sh` rather than writing a second copy (#3331), and
-both run on GitHub-hosted runners only: a measurement has nothing to buy from
-the homeserver, and keeping the pilot off that box costs it nothing.
+`frontend-testing-pilot.yml` (nightly fast-check and Stryker runs over the
+dashboard-next frontend's pure logic) left with `frontend-next` in #3749,
+together with the four `frontend-next*` Quality jobs and the design-lab
+read-only job. The production dashboard, Xore-Inc/apiary-dashboard, runs its
+own suites in that repository's CI. The record of the pilot stays in
+[frontend-mutation-pilot.md](frontend-mutation-pilot.md).
 
 Container images are built for pull requests. A push to `main` or a version tag
 publishes the custom images to the repository's GitHub Container Registry.
 Base images are watched for advisories on a weekly cron and on any Dockerfile
-change (`image-security-scan.yml`); the two dashboard images additionally get
-a package inventory of the built result (#3321).
+change (`image-security-scan.yml`); the backend image additionally gets a
+package inventory of the built result (#3321).
 
 ### CodeQL setup guardrail
 
@@ -318,28 +295,20 @@ that ran and passed. Both are now fixed.
 Every upload uses `actions/upload-artifact` pinned by SHA, with a 7-day
 retention — long enough that the evidence is still there when a red run is
 picked up the following week, short enough that a busy `main` does not
-accumulate them indefinitely. The nightly mutation pilot (#3326) is the one
-exception at 14 days: it runs once a day rather than once a PR, and its report
-is the record a later ratchet decision is read off, so the gap between two runs
-has to be coverable by a reviewer who was away for a fortnight.
+accumulate them indefinitely.
 
 | Lane | Artifact | Uploaded |
 | --- | --- | --- |
-| Dashboard frontend (next) | `frontend-next-unit-junit.xml` | `always()` |
-| Dashboard-next browser matrix | `playwright-junit.xml` | `always()` |
-| Dashboard-next browser matrix | `playwright-report/` + `test-results/` (HTML report, per-failure traces and screenshots) | `failure()` |
 | Dashboard backend-service (Rust) | `cargo-test.log` | `failure()` |
 | `scripts-and-compose` pytest rows | `ml-worker-junit.xml`, `auth-events-worker-junit.xml` | `always()` |
-| Frontend mutation pilot (nightly) | `frontend-mutation-report` (`reports/mutation/` + `stryker.log`) | `always()`, 14-day retention |
 
 JUnit XML is uploaded on `always()`, not only on failure, because it is the
 record of *what ran* rather than of what the exit code happened to be. The
-Playwright report and the Rust log are `failure()`-only: on a green run they
-hold nothing worth storing.
+Rust log is `failure()`-only: on a green run it holds nothing worth storing.
+(The frontend-next JUnit and Playwright rows left with #3749.)
 
 The report files are all written under `.ci-artifacts/` at the workspace root,
-which is git-ignored. `playwright-report/` and `test-results/` stay where the
-Playwright config already put them inside `frontend-next/`.
+which is git-ignored.
 
 The Rust lane gets a log rather than JUnit XML on purpose: `cargo` has no
 built-in JUnit reporter, and its per-test result stream is only reachable
@@ -378,23 +347,10 @@ The table above names *files*; the artifact each one lands in is named
 
 ### The switch
 
-Both reporters are opt-in through a single environment variable,
-`CI_ARTIFACTS_DIR`, which the workflow sets and nothing else does:
-
-- `arcane/home/honeypot-dashboard/frontend-next/vitest.config.ts` adds
-  `junit` alongside the existing `default` reporter and writes
-  `frontend-next-unit-junit.xml` when it is set.
-- `arcane/home/honeypot-dashboard/frontend-next/playwright.config.ts` inserts
-  a `junit` reporter *between* the existing `github` and `html` reporters, so
-  inline PR annotations and the browsable report are unchanged.
-
-Gating on the variable rather than on `CI` is deliberate: the same `npm test`
-and `npm run test:browser` a developer runs locally, and that `deploy.yml`
-runs, keep their console output and write no report file.
-
-`trace: "retain-on-failure"` and `screenshot: "only-on-failure"` were already
-set in the Playwright config (#2034). What was missing was uploading what they
-produced, which is what the `failure()` step above does.
+The reporters are opt-in through a single environment variable,
+`CI_ARTIFACTS_DIR`, which the workflow sets and nothing else does. The vitest
+and Playwright reporters that used it lived in `frontend-next` and left with
+it (#3749); the pytest rows and the Rust log above still write under it.
 
 ### Lane summary
 
@@ -907,22 +863,14 @@ group) has since split out too -- see the `honeypot-dionaea`,
 `honeypot-payload-analysis` and `honeypot-tanner` sections below. Nothing
 remains in `APIARY`: the root `docker-compose.yml` is `services: {}`.
 
-#### Dashboard redeploy (single replica; #266 rolling pair retired, #1659 legacy `dashboard` removed)
+#### Dashboard redeploy (#3749)
 
-The dashboard runs one replica (per Xore). The legacy Go `dashboard` service
-and `scripts/deploy-dashboard-rolling.sh` that redeployed it are both gone
-(#1659) -- `dashboard-next` is the only tier now, and redeploying it (like
-`backend-service`, `backend-service-mounted`, and `backend-worker`) is a
-plain build + recreate from each stack's own directory, no wrapper script:
-
-```bash
-cd /var/dockge/stacks/honeypot-dashboard
-docker compose build dashboard-next && docker compose up -d dashboard-next
-```
-
-The brief recreate window is accepted on this single-operator deployment;
-Traefik's active `/healthz` check (vps/traefik/dynamic.yml) fails fast during
-it instead of hanging connections.
+The dashboard is Xore-Inc/apiary-dashboard, its own Arcane project
+(`apiary-dashboard`), pinned by release tag and digest in that project's
+host-local `.env`. A redeploy is an Arcane redeploy of that project; nothing
+is built on the host. The legacy `dashboard-next` this section used to
+describe was removed in #3749, after production moved on 2026-10-30.
+`honeypot-dashboard` now carries only `backend-service-mounted`.
 
 ### honeypot-dashboard-backend (#1622)
 
@@ -933,14 +881,12 @@ just the modernization-port `backend-service` (moved out of
 restarted/redeployed without touching `dashboard-next` or anything else in
 the combined stack -- the deployment-layer counterpart to #1608's
 `SERVE_MODE`/`BFF_INTERNAL_URL` cross-host application-code work.
-`backend-service-mounted`, `backend-worker`, `backend-worker-importer`,
-`backend-worker-enrichment`, and `dashboard-next` are unaffected and stay in
-`honeypot-dashboard`'s own compose file; splitting those out is further
-work, not part of #1622.
+Since then the workers moved to `honeypot-backend-workers` (#3575) and
+`dashboard-next` was removed (#3749), so `honeypot-dashboard` carries only
+`backend-service-mounted`.
 
-`backend-service` still resolves `dashboard-next`'s
-`BACKEND_URL=http://backend-service:8081` (and vice versa) because both
-stacks attach to the same explicitly-named `honeynet` bridge -- the same
+The dashboard (apiary-dashboard) still resolves
+`BACKEND_URL=http://backend-service:8081` because both stacks attach to the same explicitly-named `honeynet` bridge -- the same
 cross-project DNS mechanism described above. It also still mounts
 `dashboard-state`, `dionaea-lib`, and (new as of this split)
 `services-adapter-socket` by explicit shared `name:`, so it reads/writes the
@@ -1678,8 +1624,9 @@ log line -- is the evidence the cache is doing anything.
 
 ### Digest-bound SBOMs for the two dashboard images (#3321)
 
-There used to be no inventory of what is inside `apiary-backend`
-(`honeypot-backend-service`) or `dashboard-next`. Every other image in the
+Since #3749 only the backend image remains of the two; `dashboard-next` left
+with frontend-next. There used to be no inventory of what is inside
+`apiary-backend` (`honeypot-backend-service`) or `dashboard-next`. Every other image in the
 fleet was at least covered at its base — `image-security-scan.yml` walks the
 tree's Dockerfiles and compose files and Trivy-scans every base image they
 pull — but a built dashboard image is its base plus everything `COPY`ed in

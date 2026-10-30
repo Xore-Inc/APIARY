@@ -71,9 +71,13 @@ Suricata, and dead-letter data views plus the **XORE Honeypot — enriched
 investigation** dashboard. Panels cover recent attacks, OT personas,
 commands/credentials, payloads, enriched IDS alerts, and ingest failures.
 
-- **Dashboard** (built in) → `https://honeypot.<domain>`, authenticated via
-  its own native OIDC session against Keycloak directly (no gateway hop,
-  unlike the investigation UIs below -- #1026). Live
+- **Dashboard** → `https://honeypot.<domain>`, served since 2026-10-30 by
+  [Xore-Inc/apiary-dashboard](https://github.com/Xore-Inc/apiary-dashboard)
+  (Arcane project `apiary-dashboard`; the in-repo `frontend-next` was removed
+  in #3749). The feature notes below were written for frontend-next and
+  describe the same backend views. Authenticated via its own native OIDC
+  session against Keycloak directly (no gateway hop, unlike the investigation
+  UIs below -- #1026). Live
   KPIs, feed-freshness states, per-sensor/protocol counts, top IPs/creds/commands,
   payload downloads, attack chains, and 7-day `/24`/`/64` campaign correlation
   scored across sensors, credentials, ports, IDS alerts, and payload hashes.
@@ -134,9 +138,8 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   or tiles fail, the current OpenStreetMap container remains visible with an
   availability message; there is no local basemap fallback.
   #2425: `HONEYPOT_MAP_TILE_URL` / `HONEYPOT_MAP_ATTRIBUTION` are gone --
-  they fed the retired Go dashboard's server-side template; the Leaflet layer
-  hardcodes both values outright (`frontend-next/src/components/
-  OverviewPanels.tsx`), so there is no basemap env surface to set anymore.
+  they fed the retired Go dashboard's server-side template, and the dashboard
+  has no basemap env surface to set anymore.
   The hourly activity chart also exposes exact counts on hover/focus. The 24-hour
   KPI compares activity with the preceding 24 hours and labels large changes;
   source health reports dashboard process uptime and memory (RSS + virtual)
@@ -172,10 +175,8 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   SSE, and events pivot directly to Kibana, EveBox, Arkime, and VirusTotal.
   Event tables support keyboard-accessible sorting, selectable columns, and an
   expandable normalized-row JSON view; live events on investigation pages raise
-  a transient notification. Browser API contracts live in
-  `arcane/home/honeypot-dashboard/frontend-next`
-  as strict TypeScript and compile to the committed, dependency-free production
-  bundle, so Node.js is only a development tool and never part of the container.
+  a transient notification. Browser API contracts live in apiary-dashboard
+  (`src/data/contracts`), pinned against this repo's `openapi.json`.
 - **Operational APIs** — `/metrics` exposes Prometheus text metrics for event,
   sensor, ingestion, Filebeat, runtime, dead-letter, and YARA health.
   `/dead-letters` investigates rejected Elasticsearch documents, and
