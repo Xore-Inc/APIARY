@@ -14,8 +14,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-# #1659: repointed at frontend-next after the Go dashboard's retirement.
-THEME = ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next" / "public" / "static" / "theme.css"
+# #1659: repointed at frontend-next after the Go dashboard's retirement;
+# #3749: the vendored copy moved to branding/vendor when frontend-next left.
+THEME = ROOT / "branding" / "vendor" / "xore-theme" / "theme.css"
 TOKENS = ROOT / "branding" / "tokens.json"
 
 # Xore/theme#104 renamed the surface and text tokens to numbered ramps and

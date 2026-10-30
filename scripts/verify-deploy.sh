@@ -15,9 +15,11 @@
 #
 #   backend-service  the revision is compiled into the binary by build.rs and
 #                    answered by /healthz as {"revision": ...}
-#   dashboard-next   the revision is baked into public/build.json, served at
-#                    /build.json
-#   both images      org.opencontainers.image.revision on the image config
+#   dashboard-next   the revision was baked into public/build.json (that
+#                    image left with frontend-next in #3749; the production
+#                    dashboard, Xore-Inc/apiary-dashboard, is pinned by
+#                    digest in its own project)
+#   the image        org.opencontainers.image.revision on the image config
 #
 # This script reads them and compares them against a git ref, so the question
 # becomes "is the deployed revision the one I asked for?" instead of a reading

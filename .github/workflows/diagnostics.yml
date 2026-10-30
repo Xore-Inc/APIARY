@@ -235,14 +235,14 @@ jobs:
 
           section "Sensor to Elasticsearch to Dashboard"
           # #2096: the Go dashboard's Prometheus /metrics died with it
-          # (#1659) -- frontend-next owns :19090 now and answers 307
-          # there, so this lane had silently reported "metrics
+          # (#1659), so this lane had silently reported "metrics
           # unavailable" on every run since. The same end-to-end evidence
           # comes from backend-service's source-health (total_documents,
           # per-sensor counts, cluster status, dead letters, filebeat,
-          # unattributed) through the BFF, authenticated with the service
-          # token from the dashboard stack's own .env -- the exact seam
-          # verify-stack.py uses. The token is read into a variable and
+          # unattributed), asked of the backend directly with the service
+          # token from the backend stack's own .env -- the exact seam
+          # verify-stack.py uses (#3749: the old /bff passthrough left with
+          # dashboard-next). The token is read into a variable and
           # sent as a header; it is never echoed.
           report 'The backend derives these from its own tail plus a live Elasticsearch query,'
           report 'so a coherent set here is the end-to-end pipeline check Gate 0 asks for.'

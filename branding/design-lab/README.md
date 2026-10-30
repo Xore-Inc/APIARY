@@ -99,34 +99,13 @@ session, a `STATIC_DIR` override and nil write-services so real Elasticsearch
 stayed read-only. It went with the Go dashboard in `cb77cdf8` and is not
 recoverable from here.
 
-`lab.mjs` is the `frontend-next` equivalent (#1828). Run it from the repo
-root:
-
-```
-node branding/design-lab/lab.mjs                      # v5-picks-override.css on 19201
-node branding/design-lab/lab.mjs a.css b.css          # two variants, side by side
-APIARY_BACKEND=http://10.8.0.2:8081 node branding/design-lab/lab.mjs
-```
-
-Variants take 19201-19205 and the elements playground is on 19300, the ports
-this lab has always used. A variant stylesheet is symlinked into the dev
-server's `public/static/lab/`, so saving the file and reloading the page is
-enough — no rebuild, and no change to the shipped vite config.
-
-The read-only guarantee is made at the one seam `frontend-next` has, since
-there is no service handle to pass nil to:
-
-| | in the lab |
-|---|---|
-| `BACKEND_URL` | a gate that forwards `GET`/`HEAD` and refuses everything else with 405 |
-| `BACKEND_MOUNTED_URL` | absent — every request 503s |
-
-That is not decoration. The Rust tier really exposes `generic_delete`,
-`preferences::put`, the honeyfs implant writer and the canarytoken minter, so
-a reviewer clicking around a variant would otherwise delete real documents and
-mint real tokens against live infrastructure. `lab.test.mjs` drives the actual
-harness against a recording stand-in backend and fails if a write reaches it;
-it runs in CI as `Design lab is read-only`.
+`lab.mjs` was the `frontend-next` equivalent (#1828): it served variants
+through the legacy dashboard's dev server behind a read-only backend gate. It
+went with `frontend-next` in #3749, and its CI job (`Design lab is read-only`)
+with it. The production dashboard (Xore-Inc/apiary-dashboard) does not use
+Xore/theme, so there is no UI to serve these variants against. The stylesheets
+and notes here stay as the record of the palette decisions; the vendored
+`theme.css` they layer on is now `branding/vendor/xore-theme/theme.css`.
 
 `OIDC_DISABLED=1` supplies the stubbed session, so there is no login
 round-trip per variant per page.

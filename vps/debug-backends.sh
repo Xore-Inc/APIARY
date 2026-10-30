@@ -67,11 +67,8 @@ sep
 info "HTTP services on home server (10.8.0.2) — always expected up"
 # ============================================================
 
-# Honeypot dashboard (502 in Traefik but port open)
-probe $WG 19090 "Honeypot dashboard"
-
-# Standalone apiary-dashboard (staging port; 19090 is dashboard-next)
-probe $WG 19092 "Standalone apiary-dashboard"
+# The dashboard (Xore-Inc/apiary-dashboard; #3749 retired dashboard-next on 19090)
+probe $WG 19092 "Dashboard (apiary-dashboard)"
 
 # EveBox (was 302 via Traefik — verify direct)
 probe $WG 19636 "EveBox"
@@ -129,7 +126,7 @@ fi
 info "Diagnosing 502s: TCP-open-but-HTTP-broken"
 # ============================================================
 
-for spec in "$WG:19090:dashboard" "$WG:19092:apiary-dashboard"; do
+for spec in "$WG:19092:apiary-dashboard"; do
   IFS=: read -r h p lbl <<< "$spec"
   if tcp_open "$h" "$p"; then
     # Try with explicit HTTP/1.1

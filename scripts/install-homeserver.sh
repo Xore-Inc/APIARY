@@ -1837,18 +1837,19 @@ step_provision_events_poller_secrets() {
     "$KEYCLOAK_PROVISION_DIR/provision-events-poller.sh"
 }
 
-# #1609 follow-up: pin the real deploy-runner GID into honeypot-dashboard's .env.
+# #1609 follow-up: pin the real deploy-runner GID into the .env of every
+# project that joins a container to that group.
 #
-# That stack's compose joins dashboard-next to a group so the unprivileged
-# `node` user can read the OIDC client secret, and a group_add must be a
-# numeric GID because /etc/group does not exist inside the image. It used to be
-# the literal 980. System GIDs are assigned in creation order, so they describe
-# how a host was built rather than being constants: after the 2026-09-03
-# rebuild 980 was github-ci-runner-3 and deploy-runner had become 977. The
-# container joined an unrelated CI group, could not read the secret, and every
-# sign-in failed with EACCES -- surfaced to users as "Sign-in is temporarily
-# unavailable ... the identity provider or session store did not answer", which
-# points at Keycloak for a local file-permission problem.
+# Two consumers, both numeric because /etc/group does not exist inside the
+# images: apiary-dashboard (the dashboard reads its OIDC client secret and
+# actor-assertion key through it) and honeypot-backend-workers (the enrichment
+# worker writes its output through it). It used to be the literal 980. System
+# GIDs are assigned in creation order, so they describe how a host was built
+# rather than being constants: after the 2026-09-03 rebuild 980 was
+# github-ci-runner-3 and deploy-runner had become 977. The legacy dashboard
+# joined an unrelated CI group, could not read the secret, and every sign-in
+# failed with EACCES. (#3749: the legacy dashboard-next is gone; #3575: the
+# workers moved out of honeypot-dashboard.)
 step_pin_deploy_runner_gid() {
   local group="${DASHBOARD_SECRETS_GROUP:-deploy-runner}" gid env_file
   gid="$(getent group "$group" | cut -d: -f3)"
@@ -1864,15 +1865,18 @@ step_pin_deploy_runner_gid() {
   done
   echo "provisioned enrichment output/state dirs group-owned by $group"
 
-  env_file=/var/dockge/stacks/honeypot-dashboard/.env
-  [[ -f "$env_file" ]] || { echo "no $env_file yet"; return 1; }
-  if grep -q '^DEPLOY_RUNNER_GID=' "$env_file"; then
-    sed -i "s/^DEPLOY_RUNNER_GID=.*/DEPLOY_RUNNER_GID=${gid}/" "$env_file"
-  else
-    printf '\n# GID of %s on THIS host, for honeypot-dashboard compose group_add.\n' "$group" >> "$env_file"
-    printf 'DEPLOY_RUNNER_GID=%s\n' "$gid" >> "$env_file"
-  fi
-  echo "pinned DEPLOY_RUNNER_GID=$gid ($group)"
+  local project
+  for project in honeypot-backend-workers apiary-dashboard; do
+    env_file=/var/dockge/stacks/$project/.env
+    [[ -f "$env_file" ]] || { echo "no $env_file yet -- skipping $project"; continue; }
+    if grep -q '^DEPLOY_RUNNER_GID=' "$env_file"; then
+      sed -i "s/^DEPLOY_RUNNER_GID=.*/DEPLOY_RUNNER_GID=${gid}/" "$env_file"
+    else
+      printf '\n# GID of %s on THIS host, for this compose group_add.\n' "$group" >> "$env_file"
+      printf 'DEPLOY_RUNNER_GID=%s\n' "$gid" >> "$env_file"
+    fi
+    echo "pinned DEPLOY_RUNNER_GID=$gid ($group) in $project"
+  done
 
   # Writing the .env is not enough. group_add is a CREATE-time property: an
   # already-running container keeps whatever supplementary GID it was built
@@ -1891,13 +1895,19 @@ step_pin_deploy_runner_gid() {
   # tick forever -- a spin that ships no enrichment while `docker ps` shows
   # nothing wrong. Confirmed live on the 2026-09-04 rebuild: the container
   # carried GID 979 (the compose fallback) while deploy-runner was 977.
-  (cd /var/dockge/stacks/honeypot-dashboard \
-    && docker compose up -d backend-worker-enrichment dashboard-next) \
-    || echo "could not recreate honeypot-dashboard services -- DEPLOY_RUNNER_GID will not take effect until they are"
+  [[ -d /var/dockge/stacks/honeypot-backend-workers ]] && { (cd /var/dockge/stacks/honeypot-backend-workers \
+    && docker compose up -d backend-worker-enrichment) \
+    || echo "could not recreate backend-worker-enrichment -- DEPLOY_RUNNER_GID will not take effect until it is"; }
+  [[ -d /var/dockge/stacks/apiary-dashboard ]] && { (cd /var/dockge/stacks/apiary-dashboard \
+    && docker compose up -d dashboard) \
+    || echo "could not recreate the dashboard -- DEPLOY_RUNNER_GID will not take effect until it is"; }
+  return 0
 }
 
 step_provision_dashboard_oidc_secret() {
-  # honeypot-dashboard is one of the generic STACK_DEFS stacks
+  # #3749: the dashboard is apiary-dashboard (client apiary-dashboard-rewrite,
+  # secret under that project's secrets/); the legacy client's dashboard-next
+  # is gone. apiary-dashboard is one of the generic STACK_DEFS stacks
   # step_start_remaining_stacks already started (and it has no secret yet
   # at that point, so it crash-loops on first boot) -- this step runs
   # after that, once Keycloak is actually up, same as
@@ -1912,6 +1922,8 @@ step_provision_dashboard_oidc_secret() {
   }
   KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
   KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite \
+  DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
     "$KEYCLOAK_PROVISION_DIR/provision-dashboard-oidc-secret.sh"
 }
 
@@ -3196,7 +3208,7 @@ run_step fix-snare-ownership   "Set logs/snare root-owned (snare drops caps)" st
 run_step start-remaining       "Start remaining sensor/dashboard stacks" step_start_remaining_stacks
 
 run_step provision-events-poller-secrets "Grant auth-events-poller view-events + write its secret" step_provision_events_poller_secrets
-run_step pin-deploy-runner-gid  "Pin deploy-runner GID + enrichment dirs for honeypot-dashboard" step_pin_deploy_runner_gid
+run_step pin-deploy-runner-gid  "Pin deploy-runner GID + enrichment dirs for the dashboard and workers" step_pin_deploy_runner_gid
 run_step provision-dashboard-oidc-secret "Write dashboard's OIDC client secret from Keycloak" step_provision_dashboard_oidc_secret
 run_step fix-apiary-backend-permissions "Grant apiary-backend's nobody uid ACL access to dashboard-state/dionaea-lib/services-adapter-socket" step_fix_apiary_backend_permissions
 run_step provision-arcane-oidc-secret "Sync Arcane's real OIDC client secret from Keycloak, re-up" step_provision_arcane_oidc_secret

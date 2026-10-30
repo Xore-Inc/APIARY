@@ -590,7 +590,8 @@ partial set — it takes the named stacks whole, in dependency order.
 | Stack | Containers | Reason |
 | --- | --- | --- |
 | `honeypot-elk` | `hp-elasticsearch`, `hp-filebeat`, `hp-zeek-proxy`, `hp-arkime-capture`, `hp-arkime-viewer`, `hp-kibana`, `hp-evebox`, `hp-pcap-sync`, `hp-extracted-file-importer` | The capture pipeline. Freezing `arkime-capture`/`zeek-proxy`/`pcap-sync` stops packet capture at the point of arrival — silent data loss. Freezing `hp-elasticsearch` stalls every sensor's event write. Not a decoy; it is what makes the decoys worth running. Highest single allocation on the host (~10.6 GiB) and the least safe to interrupt. |
-| `honeypot-dashboard` | `hp-dashboard-next`, `hp-dashboard-oidc-sessions`, `hp-apiary-backend-mounted` | The operator surface. A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `apiary-dashboard` | `hp-apiary-dashboard`, `hp-apiary-dashboard-oidc-sessions` | The operator surface (Xore-Inc/apiary-dashboard). A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `honeypot-dashboard` | `hp-apiary-backend-mounted` | The mounted write API (analyzer submissions, Workbench). Freezing it makes every submission hang instead of failing cleanly. |
 | `honeypot-backend-workers` | `hp-apiary-worker`, `-worker-enrichment`, `-worker-importer`, `-worker-payload-inventory`, `hp-services-adapter` | The ES write consumers and the service-control adapter (#3575). Freezing the workers buffers Elasticsearch bulk queues; a frozen adapter makes every service action hang. |
 | `honeypot-dashboard-backend` | `hp-apiary-backend` | Auth and API surface. A frozen backend fails every dashboard and CLI call with a hang, not a clean error. |
 | `honeypot-keycloak` | `hp-keycloak`, `hp-keycloak-postgres` | Identity tier. Dashboard, Arcane and the OIDC login tests all authenticate through it. |

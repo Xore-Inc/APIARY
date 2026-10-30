@@ -71,33 +71,3 @@ jobs:
           python3 scripts/check-ci-runner-capabilities.py
           python3 branding/scripts/check_theme_sync.py
 
-  frontend-browser:
-    name: Dashboard-next browser suite on 26.04
-    runs-on: ubuntu-26.04
-    continue-on-error: true
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Node major from the image
-        id: node-runtime
-        run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ steps.node-runtime.outputs.node-version }}
-          cache: npm
-          cache-dependency-path: arcane/home/honeypot-dashboard/frontend-next/package-lock.json
-      - run: npm ci
-        working-directory: arcane/home/honeypot-dashboard/frontend-next
-      - run: npm run build
-        working-directory: arcane/home/honeypot-dashboard/frontend-next
-      - run: npx playwright install --with-deps chromium
-        working-directory: arcane/home/honeypot-dashboard/frontend-next
-      - run: command -v redis-server >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y redis-server; }
-      - run: npm run test:browser
-        working-directory: arcane/home/honeypot-dashboard/frontend-next
-        env:
-          CI_ARTIFACTS_DIR: ${{ github.workspace }}/.ci-artifacts

@@ -113,7 +113,8 @@ jobs:
             # into the digest-keyed CycloneDX + Trivy steps below. Absent on
             # the other sixteen rows, so they build exactly as before.
             sbom: true
-            # #3315: the two dashboard images that now report which commit
+            # #3315: the dashboard images (this one only since dashboard-next
+            # left with #3749) that now report which commit
             # they were built from -- one compiled into the binary (where
             # /livez and its /healthz alias answer it as `revision`) or baked
             # into the served /build.json, and both on the image's
@@ -140,11 +141,6 @@ jobs:
             context: arcane/home/honeypot-citrix-honeypot/citrix-honeypot
           - image: conpot
             context: arcane/home/honeypot-conpot/conpot
-          - image: dashboard-next
-            context: arcane/home/honeypot-dashboard/frontend-next
-            sbom: true
-            stamp: true
-            boot_smoke: true
           - image: dicompot
             context: arcane/home/honeypot-dicompot/dicompot
           - image: dionaea
@@ -744,35 +740,9 @@ jobs:
             --expect-json 'backend readiness against the stub ES (/readyz)' /readyz \
               'd["ready"] is True and d["cluster"] == "green"'
 
-      - name: "Boot-smoke dashboard-next (#3316)"
-        if: matrix.boot_smoke == true && matrix.image == 'dashboard-next'
-        env:
-          IMAGE_ID: ${{ steps.bootsmoke.outputs.image_id }}
-        run: |
-          set -euo pipefail
-          token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-          # Nothing else is set on purpose. OIDC_DISABLED stays unset, so /
-          # has to take the auth guard and bounce to /auth/login -- which is
-          # both the contract #3316 asks for and the proof that the #3112
-          # gate did not fire under the image's production defaults.
-          # WEB_CONCURRENCY is left at the image default (min(4, cpus))
-          # because the fork loop in server/cluster.mjs is part of the
-          # entrypoint; a smoke that ran it single-process would skip the
-          # part most likely to break. BACKEND_URL is left at its built-in
-          # loopback default: beforeLoad throws the redirect before the root
-          # loader ever reaches the Rust tier, so this assertion
-          # deliberately needs no backend.
-          scripts/boot-smoke-image.sh \
-            --image-id "$IMAGE_ID" \
-            --name "ci-bootsmoke-dashboard-next-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --container-port 8080 \
-            --health-timeout 120 \
-            --env "SERVICE_TOKEN=$token" \
-            --expect-redirect 'unauthenticated / redirects to /auth/login' / /auth/login \
-            --expect-status 'vendored theme.css is served' /static/theme.css 200
-
       # ---------------------------------------------------------------------
-      # #3321: digest-bound SBOM for the two dashboard images.
+      # #3321: digest-bound SBOM for the dashboard images (backend-service
+      # only since #3749).
       #
       # Only rows with `sbom: true` reach any of this, and only on events
       # that actually push. A pull_request row builds with `push: false` and
