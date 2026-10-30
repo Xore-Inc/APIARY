@@ -558,7 +558,9 @@ const STACK_CONTAINERS: &[(&str, &[&str])] = &[
     ("honeypot-payload-analysis", &["hp-payload-dedupe", "hp-yara-scanner"]),
     ("honeypot-utilities", &["hp-log-maintenance", "hp-docker-socket-proxy", "hp-disk-space-monitor", "hp-autoheal", "hp-docker-hygiene", "hp-reporter"]),
     ("honeypot-keycloak", &["hp-keycloak-postgres", "hp-keycloak"]),
-    ("honeypot-dashboard", &["hp-dashboard-next", "hp-apiary-backend-mounted", "hp-dashboard-oidc-sessions"]),
+    // #3749: dashboard-next and its session valkey are gone; only the
+    // mounted write API is left in the old project.
+    ("honeypot-dashboard", &["hp-apiary-backend-mounted"]),
     // #3575: the sensor-bound workers and the local services adapter, as their
     // own homeserver project (GHCR image by digest).
     ("honeypot-backend-workers", &["hp-apiary-worker", "hp-apiary-worker-importer", "hp-apiary-worker-enrichment", "hp-apiary-worker-payload-inventory", "hp-services-adapter"]),

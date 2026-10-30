@@ -157,7 +157,7 @@ pub async fn detail(
 )]
 /// GET /api/v1/payloads/{hash}/raw — streams the full captured binary,
 /// ported from payloads_data.go's servePayload. Admin-gating happens at
-/// the BFF (frontend-next checks the session role before ever calling
+/// the BFF (apiary-dashboard checks the session role before ever calling
 /// this route) — this tier has no admin check of its own, same posture as
 /// every other write/download action here.
 pub async fn raw(

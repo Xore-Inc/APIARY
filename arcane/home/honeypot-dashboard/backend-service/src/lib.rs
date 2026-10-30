@@ -896,10 +896,11 @@ mod build_stamp_tests {
                    "3dca4457f1b2c0d4e5a69788796a5b4c3d2e1f0ab");
     }
 
-    /// The table is a file rather than a literal list so that the other
-    /// implementation of this rule -- dashboard-next's normalizeRevision, in
-    /// JavaScript, in a different CI lane -- can be driven from exactly the
-    /// same cases. `scripts/tests/test_3315_image_revision.py` runs both.
+    /// The table is a file rather than a literal list so that another
+    /// implementation of this rule can be driven from exactly the same cases.
+    /// The JavaScript one (dashboard-next's normalizeRevision) left with
+    /// frontend-next in #3749; `scripts/tests/test_3315_image_revision.py`
+    /// still checks the file's shape.
     /// Written inline, the two lists would drift the first time either gained
     /// a case, and the failure would be a deploy disagreement that is not one:
     /// two tiers stamping different strings for the same build, which
