@@ -211,6 +211,81 @@ sys.exit(1)
         self.assertEqual(result["error_kind"], "model")
         self.assertIn("turn cap", result["error"])
 
+    # A text-only `length` stop ends the case on that one budget. Claude Code
+    # 2.1.294 answers `max_tokens` with up to three "Output token limit hit.
+    # Resume" requests and then exits 1; this fake does the same.
+    def _resuming_cli(self) -> str:
+        script = self.root / "claude-resume"
+        script.write_text(f"""#!{sys.executable}
+import http.client, json, os, sys
+from urllib.parse import urlparse
+args = sys.argv[1:]
+system = open(args[args.index("--system-prompt-file") + 1]).read()
+prompt = json.loads(sys.stdin.readline())["message"]["content"][0]["text"]
+base = urlparse(os.environ["ANTHROPIC_BASE_URL"])
+messages = [{{"role": "user", "content": prompt}}]
+for attempt in range(4):
+    conn = http.client.HTTPConnection(base.hostname, base.port, timeout=30)
+    conn.request("POST", "/v1/messages", json.dumps({{"model": "sonnet", "stream": False,
+        "system": system, "messages": messages}}), {{"Content-Type": "application/json"}})
+    reply = json.loads(conn.getresponse().read() or b"{{}}")
+    if reply.get("type") == "error":
+        print("API Error: " + reply["error"]["message"], file=sys.stderr)
+        sys.exit(1)
+    if reply.get("stop_reason") != "max_tokens":
+        print(json.dumps({{"type": "result", "subtype": "success", "is_error": False,
+                          "result": reply["content"][0]["text"], "session_id": "fake"}}))
+        sys.exit(0)
+    messages += [{{"role": "assistant", "content": reply["content"]}},
+                 {{"role": "user", "content": "Output token limit hit. Resume directly."}}]
+print("API Error: Claude's response exceeded the 128000 output token maximum.", file=sys.stderr)
+sys.exit(1)
+""")
+        script.chmod(0o755)
+        return str(script)
+
+    def test_text_length_stop_ends_the_case_on_one_budget(self):
+        calls = []
+
+        def backend(_u, body):
+            calls.append(body)
+            return ok_answer("length", content="partial answer")
+        cli = ClaudeCodeCLI("stub", backend, self._resuming_cli(), 60, 16,
+                            self.root / "run" / "transcripts" / "stub", version="fake")
+        cli.workspace = self.workspace
+        cli.set_case("revdeck", "case-1")
+        result = cli("http://backend", benchmark_body())
+        self.assertEqual(len(calls), 1, "a resume request reached the engine")
+        self.assertIsNone(result["error"])
+        self.assertIsNone(result["error_kind"])
+        self.assertEqual(result["done_reason"], "length")
+        self.assertEqual(result["backend_done_reasons"], ["length"])
+        self.assertEqual(result["message"]["content"], "partial answer")
+        self.assertEqual(result["upstream_aborted"], [])
+
+    def test_engine_reported_model_outcomes_are_model_errors(self):
+        for text in ("HTTPError 500: prediction aborted, token repeat limit reached",
+                     "HTTPError 500: XML syntax error on line 3: element <function> "
+                     "closed by </parameter>",
+                     'HTTPError 500: llama-server returned invalid tool call arguments for "x"'):
+            self.assertEqual(claude_code_cli._error_kind(text, "backend"), "model", text)
+        for text in ("HTTPError 500: llama-server process has terminated: exit status 1",
+                     'HTTPError 400: {"error":"Failed to initialize samplers"}'):
+            self.assertEqual(claude_code_cli._error_kind(text, "backend"), "backend", text)
+
+    def test_tool_results_precede_text_in_the_same_user_turn(self):
+        messages = claude_code_cli._to_backend_messages("sys", [
+            {"role": "user", "content": "write it"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1",
+             "name": "mcp__apiary__list_files", "input": {}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "(none)"},
+                {"type": "text", "text": "[Your previous response had no visible output.]"}]},
+        ])
+        self.assertEqual([m["role"] for m in messages],
+                         ["system", "user", "assistant", "tool", "user"])
+        self.assertEqual(messages[3]["tool_call_id"], "t1")
+
     # Cause C: headers at once, keepalive pings while the backend works.
     def test_stream_starts_at_once_and_pings_while_the_backend_works(self):
         def slow(_u, _b):

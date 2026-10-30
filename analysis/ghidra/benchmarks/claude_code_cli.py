@@ -186,6 +186,15 @@ def _without_grammar_conflict(forwarded: dict[str, Any]) -> str | None:
     return None
 
 
+# Backend error texts that describe what the model did, not a failure to get
+# an answer (#3706). Lower case; matched as substrings of the error.
+_MODEL_OUTCOME_ERRORS = (
+    "token repeat limit reached",            # Ollama's degenerate-loop stop
+    "xml syntax error",                      # Ollama's qwen tool-call parser
+    "returned invalid tool call arguments",  # llama-server tool-call parser
+)
+
+
 def _error_kind(error: str | None, source: str) -> str | None:
     """Which kind of non-answer an error is (#3706 cause 0).
 
@@ -197,10 +206,17 @@ def _error_kind(error: str | None, source: str) -> str | None:
     deadline, no final result). `model` is the agent turn cap: the model kept
     calling tools for every allowed turn and never finished -- a real non-stop,
     not a harness fault. None means no error.
+
+    Some backend errors are the engine reporting a model outcome rather than
+    failing to produce one: Ollama aborting a degenerate repetition loop, or
+    rejecting a tool call the model wrote malformed. Those are `model` too.
     """
     if not error:
         return None
     if source == "model":
+        return "model"
+    lowered = error.lower()
+    if any(phrase in lowered for phrase in _MODEL_OUTCOME_ERRORS):
         return "model"
     # Ollama's wording for a template without the feature: "<model> does not
     # support tools" (also "... thinking", "... insert").
@@ -307,13 +323,18 @@ def _to_backend_messages(system: Any, messages: list[dict[str, Any]]) -> list[di
                 tool_results.append({"role": "tool", "tool_call_id": block.get("tool_use_id"),
                                      "tool_name": tool_names.get(str(block.get("tool_use_id")), ""),
                                      "content": str(content)})
+        # A user turn that carries tool results answers the preceding
+        # assistant tool call, so the results come first and any text the CLI
+        # added after them (its "no visible output" nudge) follows. Text first
+        # put a user message between the call and its result, which templates
+        # that enforce role alternation (Mistral) reject with a 500.
+        if role == "user":
+            result.extend(tool_results)
         if text_parts or calls:
             entry: dict[str, Any] = {"role": role, "content": "\n".join(text_parts)}
             if calls:
                 entry["tool_calls"] = calls
             result.append(entry)
-        if role == "user":
-            result.extend(tool_results)
     return result
 
 
@@ -415,9 +436,13 @@ class ClaudeCodeCLI:
         backend_errors: list[str] = []
         backend_done_reasons: list[str | None] = []
         # A backend answer that ended on a model-side reason other than `stop`
-        # or `length` (e.g. a repetition stop). Not an error -- the model
-        # answered and did not finish -- but the CLI cannot do anything useful
-        # with it, so it ends the case exactly as before (#3706 cause 0).
+        # (e.g. a repetition stop). Not an error -- the model answered and did
+        # not finish -- but the CLI cannot do anything useful with it, so it
+        # ends the case exactly as before (#3706 cause 0). A text-only `length`
+        # stop is one too: Claude Code answers `max_tokens` by asking the model
+        # to resume, up to three times, and then exits 1. That gave a model
+        # four output budgets instead of one, cost up to 4x the GPU time, and
+        # reported the budget stop as a CLI error.
         backend_halts: list[str] = []
         # Backend requests in flight, so a harness-side kill of the CLI (its
         # deadline, a backend error) can abort them too instead of leaving a
@@ -522,6 +547,14 @@ class ClaudeCodeCLI:
                 streaming = False
                 headers_sent = False
                 started = time.monotonic()
+                if backend_halts:
+                    # The case already ended on a model-side stop and the CLI
+                    # is being stopped. Its follow-up (a resume request) must
+                    # not reach the engine.
+                    self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                    self._json({"type": "error", "error": {"type": "api_error",
+                               "message": backend_halts[0]}}, 502)
+                    return
                 if backend_errors:
                     # The case already failed and the CLI is being stopped. A
                     # backend error delivered mid-stream makes Claude Code fall
@@ -606,7 +639,7 @@ class ClaudeCodeCLI:
                     calls = message.get("tool_calls") or []
                     reason = answer.get("done_reason")
                     backend_done_reasons.append(reason)
-                    if reason not in ("stop", "length"):
+                    if reason not in ("stop", "length") or (reason == "length" and not calls):
                         backend_halts.append(f"backend done_reason {reason!r}")
                     stop_reason = ("max_tokens" if reason == "length" else
                                    "tool_use" if calls else "end_turn")
@@ -753,6 +786,10 @@ class ClaudeCodeCLI:
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
+                if error is None and backend_halts and not backend_errors:
+                    # The CLI can exit on its own (the refused resume) before
+                    # the poll above sees the halt; the halt is still the cause.
+                    halted = True
                 if error is None and not halted and proc.returncode:
                     stderr_text = (root / "stderr.txt").read_text(encoding="utf-8",
                                                                    errors="replace")
@@ -816,6 +853,11 @@ class ClaudeCodeCLI:
                     "reason": result.get("is_error"),
                     "result": _block_text(result.get("content"))})
         final = result_event.get("result") or ""
+        if halted and answers:
+            # The CLI was stopped on the model's own stop, so its result event
+            # (if any) is not the answer; the halting generation's text is,
+            # as the direct transport would return it.
+            final = str((answers[-1]["response"].get("message") or {}).get("content") or "")
         if result_event.get("subtype") == "error_max_turns" and not backend_errors and \
                 error and error.startswith("Claude Code exited"):
             error = f"agent turn cap reached ({self.steps} turns) without a final answer"
