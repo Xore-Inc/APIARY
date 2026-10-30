@@ -59,5 +59,29 @@ class NonstopVerdictTest(unittest.TestCase):
             {"done_reason": "length"}]}), evaluate_models.NONSTOP_MODEL)
 
 
+    # A model the engine could not load is a skip, not a 0% score.
+    LOAD = ("HTTPError 500: llama-server process has terminated: exit status 1: "
+            "error loading model: check_tensor_dims: tensor 'blk.32.attn_norm.weight' "
+            "not found")
+
+    def test_every_generation_failing_to_load_is_no_serving_engine(self):
+        cases = [case("a", done_reason="error", error=self.LOAD, error_kind="backend"),
+                 case("b", done_reason="error", error=self.LOAD, error_kind="backend")]
+        probe = {"output": {"done_reason": "error", "error": self.LOAD}}
+        reason = evaluate_models.engine_unavailable_reason(cases, probe)
+        self.assertIn("check_tensor_dims", reason)
+
+    def test_one_loaded_answer_keeps_the_slot_a_measurement(self):
+        cases = [case("a", done_reason="error", error=self.LOAD),
+                 case("b", done_reason="stop", error=None)]
+        self.assertIsNone(evaluate_models.engine_unavailable_reason(cases))
+
+    def test_other_errors_are_not_no_serving_engine(self):
+        cases = [case("a", done_reason="error", error="HTTPError 400: Failed to "
+                      "initialize samplers: std::exception")]
+        self.assertIsNone(evaluate_models.engine_unavailable_reason(cases))
+        self.assertIsNone(evaluate_models.engine_unavailable_reason([]))
+
+
 if __name__ == "__main__":
     unittest.main()

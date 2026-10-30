@@ -4283,6 +4283,54 @@ def nonstop_kind(record: Any) -> str | None:
     return None
 
 
+# Engine texts for a model the engine cannot load at all -- a template it
+# cannot parse, a tensor layout it does not know, a runner that dies on load.
+# Lower case; matched as substrings of a generation's error.
+ENGINE_LOAD_FAILURE_PHRASES = (
+    "llama-server process has terminated",
+    "llama-server process no longer running",
+    "error loading model",
+    "failed to load model",
+    "unable to generate parser for this template",
+    "chat template parsing error",
+)
+
+
+def engine_unavailable_reason(cases: list[dict[str, Any]], probe: Any = None) -> str | None:
+    """The engine's load error when no generation in the slot got past loading.
+
+    Every generation (the cases, every round, and the context probe) must have
+    failed with an engine load failure; one answer that loaded means the model
+    is servable and the slot is a measurement. Returns the first error, cut
+    short, or None.
+    """
+    errors: list[str] = []
+    answered = False
+
+    def walk(value: Any) -> None:
+        nonlocal answered
+        if isinstance(value, dict):
+            if "done_reason" in value:
+                error = str(value.get("error") or "")
+                if error and any(p in error.lower() for p in ENGINE_LOAD_FAILURE_PHRASES):
+                    errors.append(error)
+                else:
+                    answered = True
+            for key, child in value.items():
+                if key not in ("cli_messages", "cli_conversation", "message"):
+                    walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(cases)
+    if probe:
+        walk(probe)
+    if answered or not errors:
+        return None
+    return " ".join(errors[0].split())[:300]
+
+
 def describe_nonstops(slot: str, total: int, items: list[dict[str, Any]]) -> list[str]:
     """The slot verdict's wording for capped cases, one clause per cause."""
     groups: dict[str, list[str]] = {NONSTOP_MODEL: [], NONSTOP_HARNESS: [],
@@ -4631,6 +4679,15 @@ def evaluate_slot(
                                         "so it is not a pass",
                 }[probe_kind])
             result["error"] = "; ".join(stopped)
+        unservable = engine_unavailable_reason(cases, probe)
+        if unservable is not None:
+            # Not a 0% model: no answer was ever generated, because the engine
+            # could not load the model at all (#3706). Said as a skip, with the
+            # engine's own words, so the slot is never read as a score.
+            result["skipped"] = True
+            result["skip_reason"] = (
+                f"no serving engine: {session.engine or 'the engine'} could not load "
+                f"the model ({unservable})")
         return result
     except Exception as exc:  # Preserve evidence for other independent slots.
         error = f"{type(exc).__name__}: {exc}"
