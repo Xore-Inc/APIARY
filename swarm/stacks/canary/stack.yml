@@ -49,6 +49,10 @@ services:
 networks:
   canary:
     driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.1.0/24
     driver_opts:
       com.docker.network.driver.overlay.encrypt: "true"
       com.docker.network.driver.mtu: "1310"

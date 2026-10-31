@@ -64,6 +64,10 @@ services:
 networks:
   front:
     driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.3.0/24
     attachable: true
     internal: true
     driver_opts:
@@ -71,6 +75,10 @@ networks:
       com.docker.network.driver.mtu: "1310"
   back:
     driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.2.0/24
     attachable: true
     internal: true
     driver_opts:

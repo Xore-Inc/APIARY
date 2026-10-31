@@ -87,6 +87,8 @@ the immutable config from the exact commit being deployed. Do not use `file:`:
 Arcane prunes the configs it creates after an update, leaving rollback unable
 to start the previous task. Use digest-pinned images from the #3597 manifest.
 
+Every overlay a stack defines pins its subnet (`ipam.config: [{subnet: 10.200.N.0/24}]`), a free /24 inside the fleet pool `10.200.0.0/16` (`10.200.0.0/24` is ingress). The lint checks the range and uniqueness across stacks. Since the 2026-10-19 force-new-cluster the allocator ignores the configured pool and hands out `10.0.x` (#3763). Taken: `.1` canary, `.2`/`.3` galah-broker back/front, `.4` dashboard-sessions, `.5` sensor-dicompot, `.6` edge-unsloth.
+
 Each secret is an external `<base>_vN`, created out of band from stdin. Services
 read it through a `_FILE` variable pointing into `/run/secrets/`; values and
 value files never enter git. Rotate by creating `_v(N+1)`, changing the stack
