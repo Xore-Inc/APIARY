@@ -145,6 +145,21 @@ class LintTest(unittest.TestCase):
                                            "apiary.pause.reason: test\n        apiary.homeserver: 'yes'"),
                          "must be `allow`")
 
+    def test_sensor_ports_host_mode_and_guarded(self):
+        # #3593: a sensor publishes in host mode, and the LAN guard lists the port.
+        body = good_stack().replace("node.labels.sensor == false", "node.labels.sensor == true")
+        ingress = body + "    ports: ['25:25']\n"
+        self.assertFlags(ingress, "mode: host")
+        host = body + "    ports:\n      - {target: 25, published: 25, mode: host, protocol: tcp}\n"
+        self.assertFlags(host, "homeserver-swarm-host-ports.txt")
+        root, path = self.write(host)
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("# c\ntcp 25\n")
+        self.assertEqual(lint.check_file(path, root), [])
+        guard.write_text("udp 25\n")
+        self.assertTrue(any("not in" in e for e in lint.check_file(path, root)))
+
     def test_gpu_reservation_rules(self):
         # #3594: one GPU as a swarm generic resource.
         body = good_stack().replace(

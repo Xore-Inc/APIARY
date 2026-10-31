@@ -115,7 +115,7 @@ Inbound swarm rules are bound to the interfaces in `apiary-swarm` (the fibre, `w
 
 What the swarm-plane firewall does *not* cover:
 - **Docker-published ports.** Do not infer that a firewalld `INPUT` rule protects a Docker-published port: DNAT sends that traffic through `FORWARD`/`DOCKER-USER`. Swarm listeners and kernel VXLAN/ESP use `INPUT`, so `swarm-plane.sh` changes no `DOCKER-USER` rule. Since #3589, the separate [`home-wg-forward`](../ops/firewall/home-wg-forward.sh) policy covers Docker-published ports reached over homeserver `wg0`. Ports published on the LAN are still unprotected (#3604).
-- **Host-mode sensor publication.** #3593 must add peer-scoped `DOCKER-USER` enforcement before it publishes host-mode sensor ports.
+- **Host-mode sensor publication.** A swarm `mode: host` port binds every address. [`home-swarm-host-guard.sh`](../ops/firewall/home-swarm-host-guard.sh) (#3593) drops NEW flows to the listed sensor ports in `DOCKER-USER` unless they arrive from the VPS on `wg0` to `10.8.0.2`; see the [ops/swarm runbook](../ops/swarm/README.md#sensor-and-edge-stacks-what-replaces-per-service-hardening-3593-3595).
 - **Forwarding.** Preserve portbridge forwarding and source attribution in both follow-ups.
 
 The rules are code: [`ops/firewall/swarm-plane.sh`](../ops/firewall/swarm-plane.sh) with one env file per host in [`ops/firewall/hosts/`](../ops/firewall/hosts/). `apply` converges idempotently. Rules the script owns (the shapes it emits) that are no longer in the env file are removed; any other rule in the zone is kept and reported as unmanaged (#3712). `hosts/vps.env` was not applied in phase 0; since phase 1 every host's env is applied, and all three set `SWARM_MANAGER=1`.
