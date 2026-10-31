@@ -1,0 +1,85 @@
+# #3593 (phase 6): the DICOM decoy as the first sensor stack, pinned to the
+# homeserver. Same container as arcane/home/honeypot-dicompot/compose.yml,
+# which stays defined as the rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW flows to 11112 unless
+#   they come from the VPS hub on wg0; the port is listed in
+#   ops/firewall/hosts/homeserver-swarm-host-ports.txt.
+# - `security_opt` is not supported. Gate for moving before the homeserver
+#   gets daemon-wide no-new-privileges (#3593): non-root, cap_drop ALL,
+#   read_only, and no setuid/setgid file in the image (checked 2026-10-31).
+# - The healthcheck is restated (the image's HEALTHCHECK is the same) because
+#   the lint requires it in the stack.
+services:
+  dicompot:
+    image: ghcr.io/xore-inc/honeypot-dicompot@sha256:fe0770ecf1d13b7cd1dfa4abf5b00d12f5ce8220107111468030ed7415a61f85
+    ports:
+      - target: 11112
+        published: 11112
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/dicompot
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      BIND_IP: 0.0.0.0
+      PORT: "11112"
+      AE_TITLE: RADIANT
+      LOG_FILE: /var/log/honeypot/dicompot.json
+      # portbridge prepends a PROXY header on 11112 (":pp"), so events carry
+      # the attacker's address instead of the hub peer 10.8.0.1.
+      PROXY_PROTOCOL: "1"
+      MAX_CLIENTS: "4096"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 11112 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 11112.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone DICOM decoy, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
