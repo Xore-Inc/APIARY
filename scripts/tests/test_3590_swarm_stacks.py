@@ -46,6 +46,8 @@ GOOD_SERVICE = """
     healthcheck:
       test: ["CMD", "true"]
     deploy:
+      placement:
+        constraints: [node.labels.role == manager, node.labels.sensor == false]
       restart_policy: {condition: any}
       update_config: {failure_action: rollback, order: start-first, monitor: 30s}
       rollback_config: {failure_action: pause, order: start-first}
@@ -124,6 +126,24 @@ class LintTest(unittest.TestCase):
         self.assertFlags(body.replace("deploy:\n", "deploy:\n      mode: global\n"), "global service")
         self.assertFlags(body.replace("apiary.pause.reason: test", "apiary.pause.reason: test\n        apiary.probe: udp:53"),
                          "apiary.probe")
+
+    def test_homeserver_placement_is_explicit(self):
+        # #3722: the homeserver is an Active node; placement, not availability,
+        # keeps generic services off it.
+        body = good_stack()
+        no_sensor = body.replace("[node.labels.role == manager, node.labels.sensor == false]",
+                                 "[node.labels.role == manager]")
+        self.assertFlags(no_sensor, "placement must decide the homeserver")
+        for pin in ("node.labels.sensor == true", "node.labels.gpu==true", "node.hostname == supermicro"):
+            self.assertEqual(self.errors(no_sensor.replace("[node.labels.role == manager]",
+                                                           f"[node.labels.role == manager, {pin}]")), [], pin)
+        allowed = no_sensor.replace("apiary.pause.reason: test",
+                                    "apiary.pause.reason: test\n        apiary.homeserver: allow")
+        self.assertFlags(allowed, "apiary.homeserver.reason")
+        self.assertEqual(self.errors(allowed + "        apiary.homeserver.reason: cross-host canary\n"), [])
+        self.assertFlags(no_sensor.replace("apiary.pause.reason: test",
+                                           "apiary.pause.reason: test\n        apiary.homeserver: 'yes'"),
+                         "must be `allow`")
 
     def test_bad_stack_name(self):
         self.assertFlags(good_stack(), "not a valid stack name", name="Bad.Name")

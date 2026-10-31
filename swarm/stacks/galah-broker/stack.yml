@@ -58,6 +58,9 @@ services:
       labels:
         apiary.pause: unit
         apiary.pause.reason: "Galah decoy replies need the broker and Ollama together"
+        # #3722: the homeserver is Active; this service may run there on purpose.
+        apiary.homeserver: allow
+        apiary.homeserver.reason: "stateless and capped at 0.5 CPU/128M; spreads next to Galah and Ollama on the homeserver and to precision for HA (#3591)"
 networks:
   front:
     driver: overlay

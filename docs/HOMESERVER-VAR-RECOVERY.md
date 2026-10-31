@@ -807,7 +807,11 @@ the topology is three managers: precision, the VPS and the homeserver; see
      --label-add sensor=true --label-add gpu=true --label-add storage=true <new-node-id>
    ```
    Labels live in the raft store and are **not** restored by anything else.
-   The other two managers' labels survive in raft.
+   The other two managers' labels survive in raft. **Set it back to `active`
+   before starting Ollama or Galah** (`docker node update --availability
+   active <new-node-id>`): a paused node cannot attach Compose containers to
+   the `galah-broker_*` overlays (#3722). Placement constraints, not the
+   availability, keep generic stacks off it.
 8. **Repair container DNS** (#3621). Joining a node can break Docker's embedded
    DNS on existing Compose bridge networks.
    ```bash

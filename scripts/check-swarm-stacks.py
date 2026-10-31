@@ -33,6 +33,14 @@ Per service:
     must be replicated (a global service cannot be scaled to 0).
   - no plain secret-looking environment value: PASSWORD/TOKEN/SECRET/API_KEY
     variables use the `_FILE` form pointing into /run/secrets/.
+  - an explicit homeserver placement (#3722). The homeserver (labels
+    sensor=true gpu=true) is an `Active` node, because a non-Active node
+    rejects the network-attachment tasks of its Compose containers. So
+    "keep off the sensor/ES host" (#3583) is a constraint, not availability.
+    Each service either excludes it (`node.labels.sensor == false`), pins to
+    it (`node.labels.sensor == true`, `node.labels.gpu == true` or
+    `node.hostname == supermicro`), or opts in with the deploy labels
+    `apiary.homeserver: allow` and `apiary.homeserver.reason`.
 
 Usage:
   python3 scripts/check-swarm-stacks.py [--root DIR] [FILE...]
@@ -69,6 +77,12 @@ SECRETISH_ENV = re.compile(r"(^|_)(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|P
 PAUSE_VERDICTS = {"safe", "unit", "never"}
 RESTART_CONDITIONS = {"any", "on-failure", "none"}
 UPDATE_ORDERS = {"start-first", "stop-first"}
+# Constraints that settle whether a task may run on the homeserver (#3722).
+_WS = r"\s*"
+HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.sensor{_WS}=={_WS}false$")
+HOMESERVER_PIN = re.compile(
+    rf"^(node\.labels\.sensor{_WS}=={_WS}true|node\.labels\.gpu{_WS}=={_WS}true|node\.hostname{_WS}=={_WS}supermicro)$"
+)
 
 
 def stack_files(root: Path) -> list[Path]:
@@ -189,6 +203,17 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
             err(f"{where}: deploy.labels apiary.pause.reason must say why")
         if verdict in {"safe", "unit"} and deploy.get("mode", "replicated") != "replicated":
             err(f"{where}: apiary.pause={verdict} needs mode replicated; a global service cannot be scaled to 0")
+        constraints = [str(c).strip() for c in ((deploy.get("placement") or {}).get("constraints") or [])]
+        decided = any(HOMESERVER_EXCLUDE.match(c) or HOMESERVER_PIN.match(c) for c in constraints)
+        allow = dlabels.get("apiary.homeserver")
+        if allow is not None and allow != "allow":
+            err(f"{where}: deploy.labels apiary.homeserver must be `allow` (or drop it and constrain placement)")
+        elif allow == "allow" and not dlabels.get("apiary.homeserver.reason"):
+            err(f"{where}: deploy.labels apiary.homeserver.reason must say why this service may run on the homeserver")
+        elif not decided and allow != "allow":
+            err(f"{where}: placement must decide the homeserver (#3722): add `node.labels.sensor == false` to keep "
+                "off it, pin with `node.labels.sensor == true`, or set deploy.labels apiary.homeserver: allow + reason")
+
         probe = dlabels.get("apiary.probe")
         if probe and not re.match(r"^(tcp:\d+|http:\d+/\S*)$", probe):
             err(f"{where}: apiary.probe {probe!r} must be tcp:PORT or http:PORT/path")

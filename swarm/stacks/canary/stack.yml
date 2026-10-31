@@ -43,6 +43,9 @@ services:
       labels:
         apiary.pause: safe
         apiary.pause.reason: "internal canary with no dependents"
+        # #3722: the homeserver is Active; this service may run there on purpose.
+        apiary.homeserver: allow
+        apiary.homeserver.reason: "cross-host canary: spread over the homeserver and precision proves overlay, drain and rollback across hosts (#3591)"
 networks:
   canary:
     driver: overlay
