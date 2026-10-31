@@ -146,6 +146,13 @@ class SwarmPlaneOwnershipTest(unittest.TestCase):
         desired = self.h.run("homeserver", "desired_swarm_rules").splitlines()
         self.assertEqual(sorted(rules), sorted(desired + [ARCANE_RULE, foreign]))
 
+    def test_lan_zone_does_not_report_foreign_rules(self) -> None:
+        foreign = 'rule family="ipv4" source address="103.21.244.0/22" port port="443" protocol="tcp" accept'
+        out = self.h.run("vps", 'converge_rules public "$(desired_lan_rules)" owned_lan_rule',
+                         {"public": [foreign]})
+        self.assertIn(foreign, self.h.rules("public"))
+        self.assertNotIn("unmanaged", out)
+
     def test_converged_zone_is_a_no_op(self) -> None:
         desired = self.h.run("vps", "desired_swarm_rules").splitlines()
         self.h.run("vps", 'converge_rules "$SWARM_ZONE" "$(desired_swarm_rules)" owned_swarm_rule',

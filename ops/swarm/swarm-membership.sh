@@ -148,10 +148,12 @@ cmd_join() {
     join "$host" "$kind" "$(addr_of "$m")" "$addr" --data-path-addr "$addr"
     id=$(node_id_by_addr "$m" "$addr")
   fi
-  # homeserver takes no tasks until its stacks are rebuilt (#3583).
+  # homeserver takes no tasks until its stacks are rebuilt (#3583). Set it
+  # active again before Ollama/Galah start: a paused node cannot attach Compose
+  # containers to an overlay (#3722).
   if [ "$host" = homeserver ]; then
     d "$m" node update --availability pause "$id" >/dev/null
-    log "homeserver paused"
+    log "homeserver paused for its rebuild; set it active before Ollama/Galah start (#3722)"
   fi
   dns_rejoin "$host"
   log "next: swarm-membership.sh labels, then status"
