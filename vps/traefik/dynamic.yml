@@ -30,8 +30,6 @@
 # #2381.)
 # socat-hp-http           :8081   →  10.8.0.2:19081 (http-honeypot :8080)
 # socat-hp-snare          :8082   →  10.8.0.2:19082 (snare :8080)
-# socat-hp-dashboard      :8090   →  10.8.0.2:19090 (default; override with
-#                                     DASHBOARD_LEGACY_HOST/PORT)
 # socat-hp-dashboard-next :8092   →  10.8.0.2:19092 (default; override with
 #                                     DASHBOARD_CANDIDATE_HOST/PORT; standalone
 #                                     Xore/apiary-dashboard :3000, the
@@ -354,95 +352,6 @@ http:
         options: modern
       middlewares: [security-headers]
 
-    # Narrow relaxation of the blanket clickjacking protection below, scoped
-    # to exactly the one route the dashboard frames itself (#211): its own
-    # downloadable-report PDF viewer. Everything else on this host still
-    # gets X-Frame-Options: DENY via the honeypot-dashboard router right
-    # below. This exists because serveGeneratedPDF (dashboard/reports_api.go,
-    # served via http.ServeContent) never goes through the Go app's own
-    # secHeaders()/renderPage() path (that's only wired into full-page HTML
-    # template renders), so the PDF response's only framing header was this
-    # edge middleware's own DENY -- blocking the dashboard from framing its
-    # own same-origin PDF, not a third party. A longer, more specific rule
-    # than honeypot-dashboard's bare Host() match, so Traefik prefers it
-    # automatically without an explicit priority (the same rule-specificity
-    # behavior honeypot-web's low-priority catch-all above already depends
-    # on, just the opposite direction: more specific wins here on its own).
-    honeypot-dashboard-pdf:
-      rule: "(Host(`dashboard.honeypot.example`) || Host(`honeypot.honeypot.example`)) && PathRegexp(`^/api/reports/generated/[^/]+/pdf$`)"
-      entryPoints: [websecure]
-      service: honeypot-dashboard
-      tls:
-        options: modern
-      middlewares: [security-headers-dashboard-frame]
-
-    # Same relaxation as honeypot-dashboard-pdf above, for the GitHub-analysis
-    # Report card's own inline PDF viewer (#309). serveGitHubAnalysisPDFProxy
-    # (dashboard/github_analysis.go) has the identical gap serveGeneratedPDF
-    # did: it never goes through secHeaders()/renderPage(), so without this
-    # router the only framing header on that response was the blanket
-    # honeypot-dashboard router's DENY below -- caught live, reported against
-    # this issue right after deploying #311 ("Refused to display
-    # '.../export/github-analysis/.../pdf' in a frame because it set
-    # 'X-Frame-Options' to 'deny'").
-    honeypot-dashboard-github-analysis-pdf:
-      rule: "(Host(`dashboard.honeypot.example`) || Host(`honeypot.honeypot.example`)) && PathRegexp(`^/export/github-analysis/[^/]+/pdf$`)"
-      entryPoints: [websecure]
-      service: honeypot-dashboard
-      tls:
-        options: modern
-      middlewares: [security-headers-dashboard-frame]
-
-    # Same relaxation again, for the Ghidra detail page's own "view report"
-    # iframe (#1237). serveGhidraExport (dashboard/ghidra.go) has the
-    # identical gap serveGeneratedPDF/serveGitHubAnalysisPDFProxy both had
-    # above: it streams the stored report directly (never through
-    # secHeaders()/renderPage()), so without this router the only framing
-    # header on that response was the blanket honeypot-dashboard router's
-    # DENY below -- the iframe showed "refused to connect" with no console
-    # error, since X-Frame-Options blocking doesn't log one. Anchored with
-    # $ right after the hash segment so this deliberately does NOT match
-    # /export/ghidra/{hash}/callgraph.svg (an <img src>, never framed, and
-    # not the resource this issue is about).
-    honeypot-dashboard-ghidra-report:
-      rule: "(Host(`dashboard.honeypot.example`) || Host(`honeypot.honeypot.example`)) && PathRegexp(`^/export/ghidra/[^/]+$`)"
-      entryPoints: [websecure]
-      service: honeypot-dashboard
-      tls:
-        options: modern
-      middlewares: [security-headers-dashboard-frame]
-
-    # #1608 architecture addendum (2026-08-17): the frontend/BFF host split
-    # requires the /bff/* proxy surface (frontend-next's routes/bff.$.ts,
-    # see lib/backend.server.ts's serviceFetch) to always resolve to
-    # whichever host is actually running the BFF role, independent of the
-    # bare Host() match below that sends "everything else" to the
-    # frontend-only tier once split.
-    #
-    # Currently a no-op in practice: the deployment still runs combined
-    # (SERVE_MODE=all, loopback bffInternalURL -- backend.server.ts's own
-    # header documents all-mode as the only mode deployed today), so
-    # /bff/* is served by the same process the bare Host() match already
-    # targets. dashboard-next owns the production binding since #1628's
-    # cutover (compose.yml carries no profile gate any more -- the old
-    # `profiles: ["next"]` was deleted there), so this router already
-    # reaches the right host; the split only becomes observable when the
-    # BFF role moves to its own instance behind its own bridge. At that
-    # point only this router's `service:` target needs to change to point
-    # at that new bridge instead of reusing honeypot-dashboard.
-    #
-    # Longer rule than the bare Host() below, so Traefik's automatic
-    # rule-specificity priority already picks this one first -- same
-    # mechanism honeypot-dashboard-pdf/-github-analysis-pdf/-ghidra-report
-    # above rely on, no explicit `priority:` needed.
-    honeypot-dashboard-bff:
-      rule: "Host(`honeypot.honeypot.example`) && PathPrefix(`/bff`)"
-      entryPoints: [websecure]
-      service: honeypot-dashboard
-      tls:
-        options: modern
-      middlewares: [security-headers]
-
     # dashboard.honeypot.example redirects here rather than sharing this
     # router: the dashboard's own native OIDC runtime (#1026) has
     # OIDC_EXTERNAL_URL hardcoded to a single host (honeypot.honeypot.example)
@@ -480,36 +389,6 @@ http:
       # from any third-party origin, which is the actual clickjacking
       # threat -- the same reasoning #1028 already applied to Keycloak.
       middlewares: [security-headers-dashboard-frame]
-
-    # Staged/beta path for the dashboard modernization port (#1628) --
-    # dashboard-next, side by side with the production honeypot-dashboard
-    # router above, which stays completely untouched. Predates the
-    # completed #1628 cutover (dashboard-next now owns the production
-    # binding); kept as a second, independently-routable validation path
-    # for a genuinely public, browser-driven check of a staged build.
-    #
-    # Needs, before first use: (1) the `ports:` mapping on dashboard-next
-    # and socat-hp-dashboard-next bridge this router's service depends on
-    # (see vps/docker-compose.yml and honeypot-dashboard/compose.yml --
-    # neither exists yet either); (2) a dedicated OIDC_EXTERNAL_URL for
-    # dashboard-next's own OIDC runtime pointed at this host (same single-
-    # hardcoded-redirect-uri constraint the honeypot-dashboard router
-    # comment above documents, just needing its own host here instead of
-    # sharing production's); (3) that host's callback
-    # (https://beta.honeypot.example/auth/callback) registered as an
-    # additional valid redirect URI on the Keycloak apiary-dashboard
-    # client -- a Keycloak-side change outside this repo's tracked config,
-    # see docs/KEYCLOAK-CUTOVER.md's client-config conventions; (4) real
-    # DNS for beta.honeypot.<domain> (Cloudflare, proxied/orange-cloud per
-    # this file's own header note) -- an operator naming/registration
-    # decision, not something to guess here.
-    honeypot-dashboard-beta:
-      rule: "Host(`beta.honeypot.example`)"
-      entryPoints: [websecure]
-      service: honeypot-dashboard-next
-      tls:
-        options: modern
-      middlewares: [security-headers]
 
     honeypot-dashboard-canonical-redirect:
       rule: "Host(`dashboard.honeypot.example`)"
@@ -661,7 +540,6 @@ http:
         servers: [{url: "http://oidc-dashboard:4180"}]
         passHostHeader: true
 
-
     honeypot-hellpot:
       loadBalancer:
         servers:
@@ -741,24 +619,12 @@ http:
           - url: "http://socat-hp-canarytokens:8083"
         passHostHeader: true
 
-    # Single dashboard replica (per Xore, supersedes #266's rolling pair).
-    # The healthCheck stays: Traefik polls /healthz directly (server-to-
-    # server, bypassing the OIDC middleware chain) and serves a clean 502
-    # instead of hanging connections during the brief redeploy recreate.
+    # #3749: the dashboard is Xore-Inc/apiary-dashboard, through the
+    # socat-hp-dashboard-next bridge (historical name; DASHBOARD_CANDIDATE_*).
+    # The legacy dashboard-next and its socat-hp-dashboard bridge are gone.
+    # The healthCheck stays: Traefik polls /healthz directly and serves a
+    # clean 502 instead of hanging connections during a redeploy recreate.
     honeypot-dashboard:
-      loadBalancer:
-        servers:
-          - url: "http://socat-hp-dashboard:8090"
-        healthCheck:
-          path: /healthz
-          interval: "5s"
-          timeout: "3s"
-        passHostHeader: true
-
-    # dashboard-next's own beta-path target -- see honeypot-dashboard-beta
-    # router above for what still needs setting up before this resolves
-    # to anything live.
-    honeypot-dashboard-next:
       loadBalancer:
         servers:
           - url: "http://socat-hp-dashboard-next:8092"

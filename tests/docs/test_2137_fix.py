@@ -28,9 +28,10 @@ import urllib.request
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-FRONTEND_NEXT = REPO_ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next"
-LOCK = FRONTEND_NEXT / "theme.lock"
-VENDORED = FRONTEND_NEXT / "public" / "static" / "theme.css"
+# #3749: the vendored copy moved from frontend-next to branding/vendor.
+VENDOR_DIR = REPO_ROOT / "branding" / "vendor" / "xore-theme"
+LOCK = VENDOR_DIR / "theme.lock"
+VENDORED = VENDOR_DIR / "theme.css"
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check-vendored-theme.sh"
 SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync-theme.sh"
 QUALITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "quality.yml"

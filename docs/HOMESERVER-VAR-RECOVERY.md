@@ -218,9 +218,10 @@ git rev-parse HEAD        # note this SHA, you need it for GIT_SHA in part 7
    chown root:root /var/dockge/stacks/honeypot-keycloak/secrets/*
    chmod 0440 /var/dockge/stacks/honeypot-keycloak/secrets/*
    chmod 0750 /var/dockge/stacks/honeypot-keycloak/secrets
-   # dashboard + apiary-dashboard OIDC client secret: dashboard-next runs as
-   # `node` with group_add for the deploy-runner GID
-   for s in honeypot-dashboard apiary-dashboard; do
+   # apiary-dashboard OIDC client secret and actor key: the dashboard runs
+   # unprivileged with group_add for the deploy-runner GID (#3749 removed
+   # the legacy honeypot-dashboard copy)
+   for s in apiary-dashboard; do
      d=/var/dockge/stacks/$s/secrets
      chown github-deploy-runner:deploy-runner "$d"/oidc-client-secret
      chmod 0440 "$d"/oidc-client-secret
@@ -541,7 +542,7 @@ Verify the image, not the stream:
 docker image inspect apiary-backend:latest \
   --format '{{.Created}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
 docker ps --format '{{.Names}} {{.Status}}' | grep -E 'hp-apiary|hp-dashboard'
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://10.8.0.2:19090/   # 307 to /auth/login
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://10.8.0.2:19092/   # 307 to /auth/login (apiary-dashboard)
 ```
 
 **apiary-dashboard** (the separate, versioned image): in its stack `.env`
@@ -863,7 +864,7 @@ Details in [#3712](https://github.com/Xore-Inc/APIARY/issues/3712).
    honeypot-init one-shots with status 0. Compare to the pre-incident list.
 2. **End-to-end gate.**
    ```bash
-   DASHBOARD_SERVICE_TOKEN=<from the honeypot-dashboard .env> \
+   DASHBOARD_SERVICE_TOKEN=<from the honeypot-dashboard-backend .env> \
      python3 /var/dockge/stacks/apiary/analysis/verify-stack.py
    ```
    Exit 0 with `failures: []` means Elasticsearch is green, ingest and

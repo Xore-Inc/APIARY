@@ -323,22 +323,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "upgrade this repo does not own. It cannot leave the vulnerable Go "
         "stdlib without an upstream rebuild."
     ),
-    "node:26-alpine": (
-        "sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797",
-        "#3720: frontend-next moved to node 26. Re-measured 2026-10-24 at 4 "
-        "fixable HIGH, all npm-bundled packages inside the image (brace-"
-        "expansion 5.0.9 CVE-2026-102276/-102278, undici 6.28.0 "
-        "CVE-2026-109869/-19534), fixed only by a node image rebuild; it is "
-        "the newest 26 tag. Previous measurement, carried over: "
-        "measured 10 fixable CRITICAL/HIGH, all npm dependencies vendored "
-        "into the image (brace-expansion, picomatch, pacote, sigstore, "
-        "ip-address) rather than OS packages. Bumping the major does not "
-        "clear it: node:26.10.0-alpine3.24 measures 3 of the same shape. "
-        "This tag builds AND RUNS the dashboard frontend "
-        "(arcane/home/honeypot-dashboard/frontend-next/Dockerfile names it "
-        "`AS build` and then `FROM` it again for the final image), so it is "
-        "not a build stage -- the vendored deps are in the shipped output."
-    ),
     "ghcr.io/maxmind/geoipupdate:v8.0.0": (
         "sha256:51e70dd6f16cd3e4d845ac02d09940b10772a75b9d741427d235a78570923c1d",
         "measured 12 fixable CRITICAL/HIGH: 8 the Go stdlib inside "

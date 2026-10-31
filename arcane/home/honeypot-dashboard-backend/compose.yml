@@ -9,12 +9,10 @@
 # `docker compose` invocation in the combined honeypot-dashboard stack.
 #
 # Scope, deliberately narrow (per the #1622 task): only `backend-service`
-# moved here. `backend-service-mounted`, `backend-worker`,
-# `backend-worker-importer`, `backend-worker-enrichment`, and `dashboard-next`
-# all stay in arcane/home/honeypot-dashboard/compose.yml for now -- splitting
-# those too is further work, not done in this pass. `backend-service` and
-# `dashboard-next` still resolve each other by bare service-name DNS
-# (BACKEND_URL=http://backend-service:8081 in dashboard-next's environment)
+# moved here. Since then the workers went to honeypot-backend-workers (#3575)
+# and dashboard-next was removed (#3749); honeypot-dashboard keeps only
+# `backend-service-mounted`. The dashboard (apiary-dashboard) reaches this
+# service by bare service-name DNS (BACKEND_URL=http://backend-service:8081)
 # because both stacks attach to the same explicitly-named `honeynet` bridge
 # below -- the exact mechanism honeypot-attacker-identity-worker and every
 # other split-out stack already use to reach the main stack's services, and

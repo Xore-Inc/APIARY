@@ -329,9 +329,9 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    - `honeypot-keycloak` secrets (`postgres-password`,
      `bootstrap-admin-password`): `root:root 0440`, directory `0750`
      (Postgres and Keycloak run as uid 1000).
-   - `oidc-client-secret` for `honeypot-dashboard` and `apiary-dashboard`:
+   - `oidc-client-secret` (and `actor-assertion.key`) for `apiary-dashboard`:
      `github-deploy-runner:deploy-runner 0440`, directory
-     `root:deploy-runner 0750`. dashboard-next runs as `node` and reads it
+     `root:deploy-runner 0750`. The dashboard runs unprivileged and reads them
      through `group_add`; with `0600` every sign-in fails with `EACCES`,
      which the UI reports as the identity provider not answering.
 
@@ -412,8 +412,9 @@ needs (shared resources, enrichment directories, GeoIP profiles, backend ACLs,
 re-registration) are in that runbook, not here.
 
 Verify with `analysis/verify-stack.py` — `DASHBOARD_SERVICE_TOKEN` from the
-stack's `.env`; it judges source-health through dashboard-next's `/bff`
-passthrough and exits nonzero when anything is wrong.
+`honeypot-dashboard-backend` `.env`; it asks the backend's source-health
+directly (`docker exec` into `hp-apiary-backend`, or `--backend-url`) and
+exits nonzero when anything is wrong.
 
 ## The on-host copy
 

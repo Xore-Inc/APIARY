@@ -71,9 +71,13 @@ Suricata, and dead-letter data views plus the **XORE Honeypot — enriched
 investigation** dashboard. Panels cover recent attacks, OT personas,
 commands/credentials, payloads, enriched IDS alerts, and ingest failures.
 
-- **Dashboard** (built in) → `https://honeypot.<domain>`, authenticated via
-  its own native OIDC session against Keycloak directly (no gateway hop,
-  unlike the investigation UIs below -- #1026). Live
+- **Dashboard** → `https://honeypot.<domain>`, served since 2026-10-30 by
+  [Xore-Inc/apiary-dashboard](https://github.com/Xore-Inc/apiary-dashboard)
+  (Arcane project `apiary-dashboard`; the in-repo `frontend-next` was removed
+  in #3749). The feature notes below were written for frontend-next and
+  describe the same backend views. Authenticated via its own native OIDC
+  session against Keycloak directly (no gateway hop, unlike the investigation
+  UIs below -- #1026). Live
   KPIs, feed-freshness states, per-sensor/protocol counts, top IPs/creds/commands,
   payload downloads, attack chains, and 7-day `/24`/`/64` campaign correlation
   scored across sensors, credentials, ports, IDS alerts, and payload hashes.
@@ -134,9 +138,8 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   or tiles fail, the current OpenStreetMap container remains visible with an
   availability message; there is no local basemap fallback.
   #2425: `HONEYPOT_MAP_TILE_URL` / `HONEYPOT_MAP_ATTRIBUTION` are gone --
-  they fed the retired Go dashboard's server-side template; the Leaflet layer
-  hardcodes both values outright (`frontend-next/src/components/
-  OverviewPanels.tsx`), so there is no basemap env surface to set anymore.
+  they fed the retired Go dashboard's server-side template, and the dashboard
+  has no basemap env surface to set anymore.
   The hourly activity chart also exposes exact counts on hover/focus. The 24-hour
   KPI compares activity with the preceding 24 hours and labels large changes;
   source health reports dashboard process uptime and memory (RSS + virtual)
@@ -172,10 +175,8 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   SSE, and events pivot directly to Kibana, EveBox, Arkime, and VirusTotal.
   Event tables support keyboard-accessible sorting, selectable columns, and an
   expandable normalized-row JSON view; live events on investigation pages raise
-  a transient notification. Browser API contracts live in
-  `arcane/home/honeypot-dashboard/frontend-next`
-  as strict TypeScript and compile to the committed, dependency-free production
-  bundle, so Node.js is only a development tool and never part of the container.
+  a transient notification. Browser API contracts live in apiary-dashboard
+  (`src/data/contracts`), pinned against this repo's `openapi.json`.
 - **Operational APIs** — `/metrics` exposes Prometheus text metrics for event,
   sensor, ingestion, Filebeat, runtime, dead-letter, and YARA health.
   `/dead-letters` investigates rejected Elasticsearch documents, and
@@ -590,7 +591,8 @@ partial set — it takes the named stacks whole, in dependency order.
 | Stack | Containers | Reason |
 | --- | --- | --- |
 | `honeypot-elk` | `hp-elasticsearch`, `hp-filebeat`, `hp-zeek-proxy`, `hp-arkime-capture`, `hp-arkime-viewer`, `hp-kibana`, `hp-evebox`, `hp-pcap-sync`, `hp-extracted-file-importer` | The capture pipeline. Freezing `arkime-capture`/`zeek-proxy`/`pcap-sync` stops packet capture at the point of arrival — silent data loss. Freezing `hp-elasticsearch` stalls every sensor's event write. Not a decoy; it is what makes the decoys worth running. Highest single allocation on the host (~10.6 GiB) and the least safe to interrupt. |
-| `honeypot-dashboard` | `hp-dashboard-next`, `hp-dashboard-oidc-sessions`, `hp-apiary-backend-mounted` | The operator surface. A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `apiary-dashboard` | `hp-apiary-dashboard`, `hp-apiary-dashboard-oidc-sessions` | The operator surface (Xore-Inc/apiary-dashboard). A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `honeypot-dashboard` | `hp-apiary-backend-mounted` | The mounted write API (analyzer submissions, Workbench). Freezing it makes every submission hang instead of failing cleanly. |
 | `honeypot-backend-workers` | `hp-apiary-worker`, `-worker-enrichment`, `-worker-importer`, `-worker-payload-inventory`, `hp-services-adapter` | The ES write consumers and the service-control adapter (#3575). Freezing the workers buffers Elasticsearch bulk queues; a frozen adapter makes every service action hang. |
 | `honeypot-dashboard-backend` | `hp-apiary-backend` | Auth and API surface. A frozen backend fails every dashboard and CLI call with a hang, not a clean error. |
 | `honeypot-keycloak` | `hp-keycloak`, `hp-keycloak-postgres` | Identity tier. Dashboard, Arcane and the OIDC login tests all authenticate through it. |
