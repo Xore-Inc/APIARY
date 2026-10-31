@@ -42,7 +42,7 @@
 # socat-hp-evebox         :5636   →  10.8.0.2:19636 (evebox :5636)
 # socat-hp-arkime         :8005   →  10.8.0.2:19080 (arkime viewer :8005)
 # socat-hp-revdeck        :5000   →  10.8.0.2:19500 (revdeck :5000, ghidra stack)
-# socat-hp-unsloth        :8899   →  10.8.0.2:8899  (Unsloth Studio :8000 published
+# socat-hp-unsloth        :8899   →  10.8.0.2:8899  (Unsloth Studio :8000 published [swarm stack edge-unsloth, #3595]
 #                                     on UNSLOTH_BIND, arcane/home/unsloth; #3689)
 # socat-hp-keycloak       :8080   →  10.8.0.2:18080 (Keycloak :8080)
 # socat-hp-arcane         :3552   →  10.8.0.2:3552  (arcane :3552, host infra

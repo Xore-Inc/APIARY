@@ -1,0 +1,62 @@
+# #3595 (phase 8): the first VPS edge service as a stack, the socat in front
+# of Unsloth Studio (oidc-unsloth -> socat-hp-unsloth -> 10.8.0.2:8899, #3689).
+# Lowest-risk edge hop: Studio is not deployed on the homeserver, so the
+# gateway authenticates but has no upstream either way.
+#
+# The Compose gateway oidc-unsloth joins this stack's attachable overlay as an
+# external network and reaches the socat under its old name. The Compose
+# socat stays behind the `legacy` profile as the rollback (README.md).
+# The VPS daemon runs no-new-privileges for every container (#3593), which
+# replaces the per-service security_opt a stack cannot set.
+services:
+  socat:
+    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    command: ["TCP4-LISTEN:8899,fork,reuseaddr", "TCP4:10.8.0.2:8899"]
+    networks:
+      gw:
+        aliases: [socat-hp-unsloth]
+    read_only: true
+    cap_drop: [ALL]
+    healthcheck:
+      # busybox nc in this image has no -z; socat itself probes the listener.
+      test: ["CMD", "socat", "-u", "/dev/null", "TCP4:127.0.0.1:8899,connect-timeout=2"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.edge == true
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 60s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "stateless TCP relay; Unsloth Studio has no upstream deployed (#3689)"
+networks:
+  gw:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
