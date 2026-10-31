@@ -41,6 +41,12 @@ Per service:
     it (`node.labels.sensor == true`, `node.labels.gpu == true` or
     `node.hostname == supermicro`), or opts in with the deploy labels
     `apiary.homeserver: allow` and `apiary.homeserver.reason`.
+  - GPU services (#3594, docs/SWARM-GPU.md): swarm ignores
+    `deploy.resources.reservations.devices`, so a GPU is reserved only as the
+    generic resource `NVIDIA-GPU`. A service reserving it must pin to
+    `node.labels.gpu == true` and use `stop-first` for update and rollback:
+    there is one GPU, so a start-first replacement would wait forever for the
+    unit its predecessor still holds.
 
 Usage:
   python3 scripts/check-swarm-stacks.py [--root DIR] [FILE...]
@@ -77,6 +83,8 @@ SECRETISH_ENV = re.compile(r"(^|_)(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|P
 PAUSE_VERDICTS = {"safe", "unit", "never"}
 RESTART_CONDITIONS = {"any", "on-failure", "none"}
 UPDATE_ORDERS = {"start-first", "stop-first"}
+GPU_KIND = "NVIDIA-GPU"
+GPU_PIN = re.compile(r"^node\.labels\.gpu\s*==\s*true$")
 # Constraints that settle whether a task may run on the homeserver (#3722).
 _WS = r"\s*"
 HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.sensor{_WS}=={_WS}false$")
@@ -213,6 +221,19 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
         elif not decided and allow != "allow":
             err(f"{where}: placement must decide the homeserver (#3722): add `node.labels.sensor == false` to keep "
                 "off it, pin with `node.labels.sensor == true`, or set deploy.labels apiary.homeserver: allow + reason")
+
+        reservations = ((deploy.get("resources") or {}).get("reservations") or {})
+        if reservations.get("devices"):
+            err(f"{where}: deploy.resources.reservations.devices is ignored by swarm; reserve the GPU as "
+                f"generic_resources kind {GPU_KIND} (docs/SWARM-GPU.md)")
+        kinds = [((g or {}).get("discrete_resource_spec") or {}).get("kind")
+                 for g in (reservations.get("generic_resources") or [])]
+        if GPU_KIND in kinds:
+            if not any(GPU_PIN.match(c) for c in constraints):
+                err(f"{where}: a {GPU_KIND} reservation needs the constraint node.labels.gpu == true")
+            if uc.get("order") != "stop-first" or rc.get("order") != "stop-first":
+                err(f"{where}: a {GPU_KIND} reservation needs stop-first update_config and rollback_config "
+                    "(one GPU: a start-first task waits for the unit its predecessor holds)")
 
         probe = dlabels.get("apiary.probe")
         if probe and not re.match(r"^(tcp:\d+|http:\d+/\S*)$", probe):
