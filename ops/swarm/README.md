@@ -30,6 +30,7 @@ Keys, preshared keys, join tokens, the VPS public endpoint and the homeserver LA
 | `hosts/homeserver.env`, `hosts/precision.env` | `/etc/apiary/swarm-peer.env` | homeserver, precision |
 | `../firewall/swarm-plane.sh`, `../firewall/hosts/*.env` | env rendered to `/etc/apiary/swarm-plane.env` (precision: `REPLACE_WITH_HOMESERVER_LAN_IP` filled in); every host has `SWARM_MANAGER=1` | all three |
 | `../firewall/home-wg-forward.{sh,service}`, `../firewall/hosts/homeserver-wg-ports.txt` | `/usr/local/libexec/apiary-home-wg-forward`, `/etc/systemd/system/home-wg-forward.service`, `/etc/apiary/homeserver-wg-ports.txt` | homeserver |
+| `../firewall/home-swarm-host-guard.{sh,service}`, `../firewall/hosts/homeserver-swarm-host-ports.txt` | `/usr/local/libexec/apiary-home-swarm-host-guard`, `/etc/systemd/system/home-swarm-host-guard.service`, `/etc/apiary/homeserver-swarm-host-ports.txt` (#3593) | homeserver |
 | `nm-profiles.sh`, `hosts/homeserver.nm`, `hosts/precision.nm` | NetworkManager profiles (LAN, fibre, MTU 9000, metrics, zones); placeholders from `/etc/apiary/host.env` | homeserver, precision |
 | `hosts/precision-multihome.conf` | `/etc/sysctl.d/90-apiary-multihome.conf` | precision |
 | `hosts/arcane-fibre-tunnel.service` | `~xore/.config/systemd/user/arcane-fibre-tunnel.service` (user unit, linger on) | precision |
@@ -184,6 +185,27 @@ Lesson from #3584: Docker and the runners must never start on empty mountpoints.
 4. Arcane: `systemctl --user is-active arcane-fibre-tunnel`, `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13552/api/health` → 200, and environment `precision` `online` in the manager.
 5. Runners: every unit in `hosts/precision-runners.txt` active and online in GitHub. `ci-registry-mirror.service` active, published on `172.16.0.1:5555` only.
 6. Run a GitOps sync, and confirm homeserver ingest is still rising with public `source.ip`.
+
+## Sensor and edge stacks: what replaces per-service hardening (#3593, #3595)
+
+Two things a Compose file sets per service cannot be expressed in a swarm stack:
+
+- **`security_opt: no-new-privileges`.** `docker service create` has no such option and `docker stack deploy` drops it (checked on Docker 29.9.2, API 1.56). Decision (Xore, 2026-10-31, option A on #3587): `"no-new-privileges": true` daemon-wide in `/etc/docker/daemon.json`. The **VPS** has had it since its installer was written (`docker info` lists `name=no-new-privileges`; all 50 containers run with `NoNewPrivs: 1`). The **homeserver** gets it in the post-benchmark dockerd restart window (`scripts/install-homeserver.sh` `step_docker_daemon_config`, or the same key added surgically to the live file). Exemption: `hp-tanner-docker` sets `no-new-privileges:false` (privileged nested daemon).
+- **Binding a published port to one address.** A `mode: host` port binds every address of the node. On the homeserver, `home-swarm-host-guard.sh` drops NEW flows to every listed sensor port unless they come from the VPS on `wg0` to `10.8.0.2` (then `home-wg-forward` applies its own list). `scripts/check-swarm-stacks.py` fails a sensor stack whose host-mode port is not in `homeserver-swarm-host-ports.txt`, and fails any sensor port not in `mode: host`.
+
+**Audit before the homeserver change (2026-10-31, live, every running container):** 67 of about 80 homeserver containers already run with `no-new-privileges` per service. Among the others (13 to 15, depending on short-lived containers), no process had gained privilege by setuid, setgid or file capabilities (per-process real/effective IDs and `CapEff` from `/proc`), and no repository Dockerfile `RUN` uses a setuid tool. Suricata on the VPS drops to its own user with retained capabilities (libcap-ng), which works under the flag: it already runs that way there, and a test container with the flag reached `Engine started`. Watch after the restart: `hp-tanner-docker` (exempted), the privileged `buildx_buildkit_*` builders (their `RUN` steps inherit the flag; run one CI image build), and `technitium-dns` and the Arkime containers (root, no gain seen).
+
+Guard install (homeserver, inside the `swarm-plane.sh`-style dead-man, before the first sensor stack):
+
+```bash
+sudo install -m 0755 ops/firewall/home-swarm-host-guard.sh /usr/local/libexec/apiary-home-swarm-host-guard
+sudo install -m 0644 ops/firewall/hosts/homeserver-swarm-host-ports.txt /etc/apiary/homeserver-swarm-host-ports.txt
+sudo install -m 0644 ops/firewall/home-swarm-host-guard.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now home-swarm-host-guard.service
+sudo /usr/local/libexec/apiary-home-swarm-host-guard status
+```
+
+Changing the port list: `systemctl stop` (rollback), install the new list, `systemctl start`. Prove each port from the LAN (`nmap` against the LAN address: `filtered`, an `apiary-swarm-host:` kernel log line) and through the VPS (a real request indexed with its public `source.ip`).
 
 ## Runbook: lost quorum
 

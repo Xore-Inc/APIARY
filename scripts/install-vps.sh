@@ -285,7 +285,9 @@ step_docker_daemon_config() {
   # Matches the live VPS's /etc/docker/daemon.json exactly (fetched and
   # diffed against this, not guessed): icc/no-new-privileges/userland-proxy
   # hardening appropriate for a public-facing edge host and bounded log
-  # rotation. live-restore is off: the VPS is a swarm worker (#3589) and
+  # rotation. no-new-privileges also covers the swarm edge stacks, which
+  # cannot set security_opt themselves (#3595). live-restore is off: the
+  # VPS is a swarm manager (#3589, #3712) and
   # dockerd refuses swarm mode with live-restore, so a dockerd restart now
   # restarts the honeypot listeners (restart policies bring them back).
   cat >/etc/docker/daemon.json <<'EOF'

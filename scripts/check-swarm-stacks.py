@@ -41,6 +41,12 @@ Per service:
     it (`node.labels.sensor == true`, `node.labels.gpu == true` or
     `node.hostname == supermicro`), or opts in with the deploy labels
     `apiary.homeserver: allow` and `apiary.homeserver.reason`.
+  - sensor services (`node.labels.sensor == true`, #3593) publish only with
+    `mode: host` (the ingress mesh would replace the attacker's source IP),
+    and every published port is listed in
+    ops/firewall/hosts/homeserver-swarm-host-ports.txt, so
+    home-swarm-host-guard.sh keeps it off the LAN (a host-mode port binds
+    every address of the node).
 
 Usage:
   python3 scripts/check-swarm-stacks.py [--root DIR] [FILE...]
@@ -113,6 +119,34 @@ def _labels(raw) -> dict[str, str]:
     for item in raw:
         key, _, value = str(item).partition("=")
         out[key] = value
+    return out
+
+
+SWARM_HOST_PORTS = "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+SENSOR_PIN = re.compile(r"^node\.labels\.sensor\s*==\s*true$")
+
+
+def _guard_ports(root: Path) -> set[tuple[str, int]]:
+    f = root / SWARM_HOST_PORTS
+    out: set[tuple[str, int]] = set()
+    if f.is_file():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and not parts[0].startswith("#") and parts[1].isdigit():
+                out.add((parts[0], int(parts[1])))
+    return out
+
+
+def _published(ports) -> list[tuple[str, int | None, str]]:
+    """(protocol, published, mode) for long-syntax ports; short syntax -> mode 'ingress'."""
+    out = []
+    for p in ports or []:
+        if isinstance(p, dict):
+            pub = p.get("published")
+            out.append((str(p.get("protocol", "tcp")), int(pub) if pub is not None else None,
+                        str(p.get("mode", "ingress"))))
+        else:
+            out.append(("tcp", None, "ingress"))
     return out
 
 
@@ -213,6 +247,18 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
         elif not decided and allow != "allow":
             err(f"{where}: placement must decide the homeserver (#3722): add `node.labels.sensor == false` to keep "
                 "off it, pin with `node.labels.sensor == true`, or set deploy.labels apiary.homeserver: allow + reason")
+
+        if any(SENSOR_PIN.match(c) for c in constraints):
+            guarded = _guard_ports(root)
+            for proto, pub, mode in _published(svc.get("ports")):
+                if mode != "host":
+                    err(f"{where}: sensor ports must use long syntax with `mode: host`; the ingress mesh "
+                        "hides the attacker's source IP (#3593)")
+                elif pub is None:
+                    err(f"{where}: sensor ports need an explicit `published:` port")
+                elif (proto, pub) not in guarded:
+                    err(f"{where}: published {proto} {pub} is not in {SWARM_HOST_PORTS}; "
+                        "home-swarm-host-guard.sh would leave it open on the LAN")
 
         probe = dlabels.get("apiary.probe")
         if probe and not re.match(r"^(tcp:\d+|http:\d+/\S*)$", probe):

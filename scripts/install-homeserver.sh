@@ -441,8 +441,16 @@ step_docker_daemon_config() {
   # floor here, not a formality: buildkit GC now starts pruning once /var
   # free space drops within about 31GB of that floor, not after the disk is
   # already critical.
+  # no-new-privileges (#3593, Xore's decision on #3587, 2026-10-31): swarm
+  # services cannot set `security_opt`, so the sensor stacks get the
+  # hardening their Compose files set per service only from the daemon. The
+  # VPS has had it daemon-wide since its installer was written. Containers
+  # that need it off say so explicitly (`security_opt:
+  # [no-new-privileges:false]`: hp-tanner-docker's nested daemon). Applying
+  # this needs a dockerd restart, which restarts every container here.
   cat >/etc/docker/daemon.json <<'EOF'
 {
+    "no-new-privileges": true,
     "log-driver": "local",
     "log-opts": {
         "max-file": "3",

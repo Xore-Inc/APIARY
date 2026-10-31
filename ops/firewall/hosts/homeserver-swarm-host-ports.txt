@@ -1,0 +1,5 @@
+# Published (host) ports of swarm sensor services with `mode: host` on the
+# homeserver (#3593). Only the VPS hub path (10.8.0.1 on wg0 to 10.8.0.2)
+# may open them; home-swarm-host-guard.sh drops every other NEW flow.
+# Add a sensor's ports here in the same change that adds its stack;
+# scripts/check-swarm-stacks.py enforces it. Rows: `tcp PORT` / `udp PORT`.

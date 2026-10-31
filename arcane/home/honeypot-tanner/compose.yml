@@ -35,6 +35,12 @@ services:
     container_name: hp-tanner-docker
     restart: unless-stopped
     privileged: true
+    # #3593: the homeserver daemon sets no-new-privileges for every container.
+    # This nested daemon's runc and its sandbox containers inherit it and cannot
+    # clear it, so a sandbox image that needs a setuid helper would break. The
+    # container is privileged anyway, so the flag adds no boundary here.
+    security_opt:
+      - no-new-privileges:false
     environment:
       - DOCKER_TLS_CERTDIR=
     tmpfs:
