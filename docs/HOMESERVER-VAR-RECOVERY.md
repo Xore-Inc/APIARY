@@ -745,7 +745,8 @@ fails loudly on it, which is intended.
 ## 12. Swarm quorum recovery
 
 Docker Swarm manager state lives in `/var/lib/docker/swarm`, so losing `/var`
-removes the homeserver as a manager. With two managers that is a lost quorum:
+removes the homeserver as a manager. With two managers (as on 2026-10-18)
+that is a lost quorum; with three, losing two is:
 the surviving manager reports `The swarm does not have a leader`, and nothing
 can be listed, scheduled or changed. Running tasks keep running. The fix works
 from any surviving manager that still has its raft state. (Since 2026-10-19
@@ -824,11 +825,12 @@ the topology is three managers: precision, the VPS and the homeserver; see
 
 Details in [#3712](https://github.com/Xore-Inc/APIARY/issues/3712).
 
-- `swarm-plane.sh apply` treats **every** rule in the `apiary-swarm` zone as
-  its own and removes rules it does not know. On the homeserver it deleted
-  `rule family=ipv4 source 10.8.0.0/24 port 3552/tcp accept` (Arcane over the
-  hub). Re-add it, runtime and permanent, and confirm Arcane answers
-  (`curl http://10.8.0.2:3552/api/health` from the VPS and precision).
+- Since #3712, `swarm-plane.sh apply` removes only rules of the shapes it
+  emits and keeps any other rule in `apiary-swarm`, listing it as
+  **unmanaged**. Before that it deleted the homeserver's hand-added
+  `10.8.0.0/24 → 3552/tcp` (Arcane) rule. That rule is redundant anyway:
+  Arcane is a Docker-published port, so hub traffic to it is filtered by
+  `home-wg-forward` in `DOCKER-USER`, not by this zone.
 - Always bracket a firewall change with the dead-man timer: `swarm-plane.sh
   backup hosts/<host>.env`, then `arm <backup-dir> 10min`, then `apply`, then
   prove access both ways, then `disarm`. The scripts are
@@ -837,17 +839,16 @@ Details in [#3712](https://github.com/Xore-Inc/APIARY/issues/3712).
   `/var`, and the live `public` zone may have drifted back to old LAN accepts
   for the swarm ports. Re-run `swarm-plane.sh apply` on **every** host after
   the incident, and read the semantic diff against the backup.
-- `ops/firewall/hosts/vps.env` still says `SWARM_MANAGER=0` in the repo while
-  the live VPS is a manager (2377 from the two peers). A re-apply from the
-  repo would drop 2377 and break the VPS's raft membership. Do not apply it
-  there until #3712 lands.
-- `ops/swarm/swarm-membership.sh`, `ops/swarm/README.md` and
-  `docs/SWARM-NETWORK.md` still say "never promote the VPS" and describe two
-  managers; the 2026-10-19 decision supersedes that. The VPS `docker info`
-  showing `Swarm: error` after promotion is cosmetic and clears on the next
-  dockerd restart there (which restarts every VPS container, so not done
-  casually). Arcane's `vps` environment reports "Swarm mode is not enabled"
-  until then.
+- Every host env (`ops/firewall/hosts/*.env`) has `SWARM_MANAGER=1`, so a
+  re-apply keeps TCP 2377 open to the peers on all three managers.
+  `swarm-membership.sh` (`restore-quorum`, `forget`, `join`, `labels`) scripts
+  steps 1 to 8 above from the admin workstation; see the
+  [ops/swarm runbook](../ops/swarm/README.md#runbook-lost-quorum).
+- After a VPS promotion, `docker info` there can show `Swarm: error` (empty
+  message) although the node is a Reachable manager, and Arcane's `vps`
+  environment then answers "Swarm mode is not enabled". It clears on the next
+  dockerd restart on the VPS, which restarts every VPS container (no
+  `live-restore`), so plan it (done 2026-10-24).
 - The trade-off of a manager on the edge host (raft store, secrets and cluster
   CA on the internet-facing machine) is recorded on #3589. Autolock is off.
 

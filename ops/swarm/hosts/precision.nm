@@ -1,19 +1,19 @@
 # NetworkManager profiles on precision. nm-profiles.sh check hosts/precision.nm
 #
-# enp4s0f0: 10 Gb LAN/WAN uplink (DHCP), the only LAN path; jumbo frames.
-enp4s0f0 connection.autoconnect yes
-enp4s0f0 connection.zone
-enp4s0f0 ipv4.method auto
-enp4s0f0 ipv4.route-metric 50
-enp4s0f0 802-3-ethernet.mtu 9000
-# enp4s0f1: direct fibre to homeserver, underlay of wg-fibre; swarm-plane zone only.
-enp4s0f1 connection.autoconnect yes
-enp4s0f1 connection.zone apiary-swarm
-enp4s0f1 ipv4.method manual
-enp4s0f1 ipv4.addresses 10.254.250.2/30
-enp4s0f1 ipv4.never-default yes
-enp4s0f1 ipv6.method disabled
-enp4s0f1 802-3-ethernet.mtu 9000
+# ens1f0: 10 Gb LAN/WAN uplink (DHCP), the only LAN path; jumbo frames.
+ens1f0 connection.autoconnect yes
+ens1f0 connection.zone
+ens1f0 ipv4.method auto
+ens1f0 ipv4.route-metric 50
+ens1f0 802-3-ethernet.mtu 9000
+# ens1f1: direct fibre to homeserver, underlay of wg-fibre; swarm-plane zone only.
+ens1f1 connection.autoconnect yes
+ens1f1 connection.zone apiary-swarm
+ens1f1 ipv4.method manual
+ens1f1 ipv4.addresses 10.254.250.2/30
+ens1f1 ipv4.never-default yes
+ens1f1 ipv6.method disabled
+ens1f1 802-3-ethernet.mtu 9000
 # eno1: disabled 2026-10-10 (#3588); kept as a manual fallback, multihome sysctls cover it.
 eno1 connection.autoconnect no
 eno1 ipv4.route-metric 200
