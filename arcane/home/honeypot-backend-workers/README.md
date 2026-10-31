@@ -3,7 +3,7 @@
 The four sensor-bound Rust workers (`backend-worker`, `-importer`,
 `-enrichment`, `-payload-inventory`) and `services-adapter`, as one
 homeserver project. It does not depend on the old `honeypot-dashboard`
-project (legacy `frontend-next`) or on a local image build.
+project or on a local image build.
 
 - **Placement:** homeserver (.250) only. These services read sensor logs,
   analyzer spools and named volumes that live on that host, and the adapter

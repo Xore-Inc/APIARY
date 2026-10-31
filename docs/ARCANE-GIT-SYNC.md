@@ -356,7 +356,8 @@ gap that re-verification is for.
   arrays, which merely echo what a compose file declared and are omitted
   from a plain project GET. `honeypot-dashboard`'s project record reports
   `serviceCount: 8` — exactly the eight services its
-  `arcane/home/honeypot-dashboard/compose.yml` defines today
+  `arcane/home/honeypot-dashboard/compose.yml` defined at the time (since
+  #3575 and #3749 it defines only `backend-service-mounted`)
   (`oidc-sessions`, `backend-service-mounted`, `backend-worker`,
   `dashboard-next`, `backend-worker-importer`,
   `backend-worker-enrichment`, `backend-worker-payload-inventory`,
@@ -601,8 +602,10 @@ carry the git revision they were built from, in three places, and
   `cargo:rerun-if-env-changed=GIT_SHA`, which is load-bearing: without it
   cargo reuses a cached build and the second build of an identical tree
   keeps the *first* revision, producing the exact failure this fixes.
-- **Frontend** — a static `public/build.json` (`{"revision":…,"built":…,
-  "source":…}`), written by `frontend-next/scripts/write-build-info.mjs`
+- **Frontend** (removed with `frontend-next` in #3749; the production
+  dashboard, apiary-dashboard, is pinned by digest instead) — a static
+  `public/build.json` (`{"revision":…,"built":…, "source":…}`), written by
+  `frontend-next/scripts/write-build-info.mjs`
   into the build stage before `npm run build` so vite copies it into the
   output. Served by Nitro from `public/`, the same mechanism the image
   healthcheck already uses for `/static/theme.css`. It is gitignored: a
@@ -667,7 +670,8 @@ scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
 ```
 
-`--healthz-url http://host:19090/build.json` is the frontend form. Exit
+`--healthz-url URL` reads the same JSON over HTTP when the endpoint is
+reachable. Exit
 codes are the point: **0** the deployed revision matches, **1** a finding
 (missing, unstamped, malformed, or stale past `--behind-days`), **2**
 "could not tell" — deliberately distinct, so an unreadable body or an image

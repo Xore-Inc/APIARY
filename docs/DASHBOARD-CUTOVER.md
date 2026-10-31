@@ -1,5 +1,10 @@
 # Dashboard modernization-port cutover
 
+> **Superseded (2026-10-30, #3749).** The `dashboard-next`/`frontend-next` tier
+> this cutover put in place was itself replaced by Xore-Inc/apiary-dashboard
+> and removed from this repository. This page is the record of the 2026-08
+> cutover from the Go dashboard.
+
 **Status: COMPLETE (2026-08-22, per Xore).** The cutover finished and its
 step 9 was executed in full: the Go `dashboard` and Python
 `es-results-importer` service blocks are deleted from

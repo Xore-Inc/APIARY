@@ -1,3 +1,8 @@
+# honeypot-dashboard -- since #3749 (2026-10-30) this project carries only
+# `backend-service-mounted`; the dashboard UI is Xore-Inc/apiary-dashboard
+# (arcane/home/apiary-dashboard there) and the workers are
+# honeypot-backend-workers. The history below explains the shared names.
+#
 # honeypot-dashboard — #258: dashboard + services-adapter split into their
 # own Dockge-managed stack, deployed as /opt/stacks/honeypot-dashboard.
 #
@@ -60,84 +65,16 @@ x-runtime-defaults: &runtime-defaults
       max-file: "3"
 
 services:
+  # #3749: the legacy frontend (`dashboard-next`, frontend-next) and its
+  # session valkey (`oidc-sessions`) were removed after production moved to
+  # Xore-Inc/apiary-dashboard on 2026-10-30 (#3579 D4). Last legacy image:
+  # sha256:f5116658b71b73b7576aa5fc923ad19676f840411627b2d790d1d5f755f379ce.
+  #
   # #3575: backend-worker, backend-worker-importer, backend-worker-enrichment,
   # backend-worker-payload-inventory and services-adapter moved to
   # arcane/home/honeypot-backend-workers (GHCR image by digest, same container
   # and volume names). Do not add them back here: the fixed names would clash.
-  oidc-sessions:
-    <<: *runtime-defaults
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
-    container_name: hp-dashboard-oidc-sessions
-    restart: unless-stopped
-    command: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
-    networks: [oidc-session]
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    labels:
-      - autoheal=true
-    read_only: true
-    # #1026: quoted -- the unquoted form's comma between size= and mode=
-    # was parsed by YAML as a flow-sequence separator, splitting this into
-    # two invalid tmpfs entries ("/data:size=16m" and "mode=0700") and
-    # making Docker reject "mode=0700" as a non-absolute mount path.
-    tmpfs: ["/data:size=16m,mode=0700"]
-    security_opt: [no-new-privileges:true]
-    # #1026: the official image's entrypoint starts as root, chowns /data to
-    # its own unprivileged user, then execs the server as that user --
-    # cap_drop: [ALL] alone made the chown itself fail ("Operation not
-    # permitted") and the container crash-looped before ever reaching
-    # valkey-server. CHOWN/SETUID/SETGID restore exactly what that one-time
-    # startup dance needs; valkey-server itself never uses them once running.
-    cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
-    deploy:
-      resources:
-        limits: {cpus: "0.5", memory: 320M}
 
-  # ------------------------------------------------------------------
-  # Modernization port (#1608) — cutover complete: this stack IS the
-  # dashboard now, no profile gate, and the retired Go `dashboard`
-  # service is gone from this file entirely (an older git commit is the
-  # only way back, deliberately — no runtime fallback). The staging port
-  # 19092 is no longer bound here: it belongs to the standalone
-  # Xore/apiary-dashboard Arcane project, which runs beside this one
-  # until its cutover's seven-day rollback window closes (that repo's
-  # docs/cutover-plan.md). dashboard-next keeps production 19090.
-  #
-  # Cross-host readiness (per Xore): both tiers are stateless,
-  # env-configured containers — session/OIDC state lives in the
-  # oidc-sessions valkey (network-reachable, no localhost sockets), data
-  # access goes through BACKEND_URL/BFF_INTERNAL_URL, so either tier can
-  # move to another docker host by pointing those URLs across the
-  # WireGuard mesh, and the BFF can scale horizontally (SERVE_MODE
-  # splits frontend/bff; no compose resource limit on the BFF tier).
-  #
-  # That capability is genuinely real now, not just scaffolding: dashboard-
-  # next's SERVE_MODE=frontend actually routes every serviceFetch/
-  # serviceJSON call through the /bff/* proxy (frontend-next's
-  # routes/bff.$.ts) on BFF_INTERNAL_URL instead of hitting BACKEND_URL
-  # directly, and vps/traefik/dynamic.yml has a matching (today inert)
-  # PathPrefix('/bff') router. Still one dashboard-next service pair below
-  # — actually running a split frontend-only/bff-only pair on two docker
-  # hosts, with their own compose services and socat bridges, is #1622's
-  # job, not this one.
-  #
-  # #1622: `backend-service` itself moved out of this file into its own
-  # Arcane-managed stack, arcane/home/honeypot-dashboard-backend/compose.yml
-  # -- the compose-layer counterpart to this section's own "either tier can
-  # move to another docker host" claim above, so it can actually be
-  # restarted/redeployed independently of dashboard-next and everything
-  # else here. `backend-service-mounted`, `backend-worker`,
-  # `backend-worker-importer`, `backend-worker-enrichment`, and
-  # `dashboard-next` below are unaffected -- still bundled in this file,
-  # splitting those is further work, not done in this pass. dashboard-next's
-  # BACKEND_URL=http://backend-service:8081 below still resolves: both
-  # stacks attach to the same explicitly-named `honeynet` bridge, the same
-  # cross-project DNS mechanism this file's own header documents.
-  # ------------------------------------------------------------------
   # #1612 mounted worker role (phase 3a/3b): sandbox/ghidra/github-analysis
   # submission, the Payload Workbench orchestrator, and anything else that
   # needs to WRITE into a host-side request spool. Deliberately a separate
@@ -266,165 +203,7 @@ services:
       resources:
         limits: {cpus: "2.0", memory: 1G}
 
-  dashboard-next:
-    <<: *runtime-defaults
-    build:
-      context: ./frontend-next
-      # #3315: the revision this image is built from, baked into the served
-      # /build.json and the image's org.opencontainers.image.revision label.
-      # Read from this stack's .env, not invented here -- compose cannot run
-      # `git rev-parse`, and this stack's synced directory carries no .git (see
-      # docs/ARCANE-GIT-SYNC.md), so whatever builds the image has to say which
-      # commit it is. Unset is the honest default and produces
-      # {"revision":"unknown"} plus an `unknown` label rather than a build
-      # failure: scripts/verify-deploy.sh reports an unstamped image as its own
-      # finding, which is more use than a red build that gets reverted.
-      args:
-        GIT_SHA: ${GIT_SHA:-}
-    image: apiary-dashboard-next:latest
-    # build: same "never pushed to any registry, Arcane's redeploy pulls
-    # unconditionally" issue as apiary-backend:latest above -- this one has
-    # its own build: right here though, so always build instead of pull.
-    pull_policy: build
-    container_name: hp-dashboard-next
-    restart: unless-stopped
-    depends_on:
-      oidc-sessions:
-        condition: service_healthy
-    environment:
-      - PORT=8080
-      - SERVE_MODE=${DASHBOARD_SERVE_MODE:-all}
-      - BACKEND_URL=http://backend-service:8081
-      # #1612 phase 3a/3b wiring: sandbox/ghidra/github-analysis submission,
-      # sandbox golden-image-status and vnc status, and the whole workbench
-      # orchestrator surface only work against the write-capable mounted
-      # instance below (main.rs's own comment on that route block explains
-      # why: same route table as backend-service, but only this container
-      # has the host-side request-spool mounts). serviceFetch/serviceJSON's
-      # `{ mounted: true }` callers resolve to this URL, not BACKEND_URL.
-      - BACKEND_MOUNTED_URL=http://backend-service-mounted:8082
-      - BFF_INTERNAL_URL=${BFF_INTERNAL_URL:-}
-      # #2183: empty SERVICE_TOKEN refuses to boot with [E-SERVICE-TOKEN];
-      # the override below is the one sanctioned dev escape hatch, the same
-      # env contract backend-service(-mounted) and this container share.
-      - SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}
-      - APIARY_ALLOW_UNAUTH_DEV=${APIARY_ALLOW_UNAUTH_DEV:-}
-      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-https://auth.example.invalid/realms/apiary}
-      # #1682: events.html's "Open in Kibana/EveBox/Arkime" per-event menu
-      # (dashboard/links.go's investigationURL/investigationBase) — unset
-      # by default, same as the Go tier, so no link renders until an
-      # operator who has actually deployed arcane/home/honeypot-elk points
-      # these at it. Per-tool var wins; HONEYPOT_DOMAIN derives
-      # https://{kibana,evebox,arkime}.<domain> as a fallback.
-      - HONEYPOT_DOMAIN=${HONEYPOT_DOMAIN:-}
-      - KIBANA_PUBLIC_URL=${KIBANA_PUBLIC_URL:-}
-      - EVEBOX_PUBLIC_URL=${EVEBOX_PUBLIC_URL:-}
-      - ARKIME_PUBLIC_URL=${ARKIME_PUBLIC_URL:-}
-      # #1628 staged/beta path: a dedicated var, not the shared
-      # OIDC_EXTERNAL_URL production uses, since oidc.server.ts builds its
-      # redirect_uri directly from this and Keycloak only accepts a
-      # registered exact match — dashboard-next needs its own if it's ever
-      # reachable at a different host than production (beta.honeypot.*)
-      # without breaking either flow. Defaults to OIDC_EXTERNAL_URL so
-      # today's behavior (same host as production) is unchanged until an
-      # operator sets DASHBOARD_NEXT_OIDC_EXTERNAL_URL explicitly.
-      - OIDC_EXTERNAL_URL=${DASHBOARD_NEXT_OIDC_EXTERNAL_URL:-${OIDC_EXTERNAL_URL:-https://honeypot.example.invalid}}
-      - OIDC_CLIENT_ID=apiary-dashboard
-      - OIDC_CLIENT_SECRET_FILE=/run/dashboard-secrets/oidc-client-secret
-      - OIDC_SESSION_REDIS_URL=redis://oidc-sessions:6379/0
-      - TZ=Europe/Berlin
-      # #1616 scalability tuning — every var below has a code default
-      # (cluster.mjs / backpressure.server.ts) and is safe to leave unset;
-      # these overrides exist so an operator can retune without a rebuild.
-      - WEB_CONCURRENCY=${DASHBOARD_WEB_CONCURRENCY:-}
-      - BACKEND_MAX_INFLIGHT=${DASHBOARD_BACKEND_MAX_INFLIGHT:-}
-      - BACKEND_MAX_QUEUE=${DASHBOARD_BACKEND_MAX_QUEUE:-}
-      - BACKEND_HTTP_MAX_SOCKETS=${DASHBOARD_BACKEND_HTTP_MAX_SOCKETS:-}
-      # #1972 durable BFF app log: named outcomes only (sign-in
-      # started/failed/completed, and anything else that goes through obs
-      # server's recordNamedEvent), not one line per request -- the Rust tier's
-      # stream carries per-request volume, this one carries the events you
-      # otherwise grep stdout for and lose on redeploy (#1942's invisible auth
-      # failures were exactly that). Username is deliberately never among the
-      # fields. File reopened per write, so rename rotation works without a
-      # signal. Provisioned (mkdir + chown 1000) by honeypot-init's log-init.
-      - DASHBOARD_BFF_LOG_FILE=${DASHBOARD_BFF_LOG_FILE:-/logs/dashboard-bff/app.jsonl}
-    # 19090: the live production binding, moved here permanently by #1628's
-    # cutover (previously a cutover-dashboard.sh-generated override.yml
-    # layer, not checked in -- moved into the real compose.yml once the
-    # cutover held through step 7's live validation, exactly as the
-    # runbook itself anticipated: a live-only override risks a later
-    # Arcane gitops-sync silently reverting it, and in fact did worse than
-    # that live -- with `dashboard`'s now-removed conflicting ports: line
-    # still present, a routine sync failed outright trying to rebind
-    # 19090 out from under this container).
-    ports:
-      - "${HP_BIND:-10.8.0.2}:19090:8080"
-    volumes:
-      - ${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/honeypot-dashboard/secrets}:/run/dashboard-secrets:ro
-      # #1972 read-write: appends DASHBOARD_BFF_LOG_FILE as the node user
-      # (uid 1000 -- chowned by honeypot-init's log-init step, same story as
-      # the group_add above but for a path that must stay writable).
-      - /opt/stacks/apiary/logs/dashboard-bff:/logs/dashboard-bff
-    # The secrets dir's own files are -r--rw---- github-deploy-runner:
-    # deploy-runner (Arcane's own deploy-time provisioning owner). The old
-    # Go dashboard reading the same mount never needed this: it runs as
-    # root (no USER in its Dockerfile), which bypasses file permissions
-    # entirely. dashboard-next correctly runs as the frontend-next
-    # Dockerfile's unprivileged `node` user instead, so it needs actual
-    # group membership -- confirmed live (EACCES reading oidc-client-
-    # secret, #1628) that nothing had granted it that. group_add joins
-    # the container process to deploy-runner's GID without loosening the
-    # file's own permissions for anything else. It has to be a GID rather than
-    # a name: /etc/group exists on the host, not inside this image.
-    #
-    # Interpolated, NOT the literal 980 it used to be. System GIDs are handed
-    # out in creation order, so they are a property of how a host was built
-    # rather than a constant. After the 2026-09-03 rebuild, 980 belonged to
-    # github-ci-runner-3 and deploy-runner had become 977 -- so the container
-    # joined an unrelated CI group, could not read the secret, and every
-    # sign-in failed with EACCES while the UI blamed Keycloak. The installer
-    # writes the host's real GID into this stack's .env; the 980 default only
-    # preserves the historical value for a host that has not been through it.
-    group_add:
-      - "${DEPLOY_RUNNER_GID:-980}"
-    networks:
-      - honeynet
-      - oidc-session
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    # #1983: dashboard-next was the last service in this stack -- and the
-    # only one repo-wide (32 other stacks scanned, YAML anchors and inline
-    # flow-style maps accounted for) -- without any compose resource
-    # ceiling, and it is precisely the component exposed to unauthenticated
-    # internet traffic through the VPS gateway. Its RSS scales with both
-    # request load and concurrent live streams (the BFF proxies/SSE-streams
-    # backend responses), so runaway growth here previously ended at the
-    # kernel OOM-killer picking *some* victim on this shared host --
-    # possibly not this container, starving elasticsearch or postgres
-    # instead. With a ceiling, exhaustion kills THIS container
-    # (restart: unless-stopped recovers it) instead of its neighbours.
-    #
-    # Sizing is operator judgment, not a measured maximum: steady state on
-    # the homeserver is ~80MiB (docker stats, 2026-08-26) at the default
-    # WEB_CONCURRENCY=min(4, cpus) cluster workers, and the backpressure
-    # knobs in the environment block above already bound inflight requests
-    # and queue depth. 512M sits ~6x above today's footprint with room for
-    # per-worker SSR plus live-stream headroom across all four workers;
-    # if real traffic proves it tight, raise it deliberately -- the point
-    # of the number is blast-radius containment, not thrift.
-    #
-    # #2051: HEALTHCHECK is baked into dashboard-next's Dockerfile itself,
-    # invisible to a compose-only grep for healthcheck:.
-    labels:
-      - autoheal=true
-    deploy:
-      resources:
-        limits: {cpus: "2.0", memory: 1G}
-
 networks:
-  oidc-session:
-    internal: true
   # Shared with the main stack -- explicit fixed name, not project-prefixed,
   # non-external. See this file's header.
   honeynet:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Re-vendor frontend-next/public/static/theme.css from a local Xore/theme
-# clone and rewrite frontend-next/theme.lock with the new commit and hash.
+# Re-vendor branding/vendor/xore-theme/theme.css from a local Xore/theme
+# clone and rewrite branding/vendor/xore-theme/theme.lock with the new commit and hash.
 #
 # Usage: scripts/sync-theme.sh [path-to-local-theme-clone] [ref]
 #   path defaults to ../theme, ref defaults to the clone's HEAD.
@@ -9,11 +9,10 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 clone="${1:-$root/../theme}"
 ref="${2:-HEAD}"
-# #1659: repointed at frontend-next after the Go dashboard's retirement --
-# dashboard/frontend/theme.lock and dashboard/static/theme.css no longer
-# exist.
-lock="$root/arcane/home/honeypot-dashboard/frontend-next/theme.lock"
-vendored="$root/arcane/home/honeypot-dashboard/frontend-next/public/static/theme.css"
+# #1659: repointed at frontend-next after the Go dashboard's retirement;
+# #3749: moved to branding/vendor/xore-theme when frontend-next was removed.
+lock="$root/branding/vendor/xore-theme/theme.lock"
+vendored="$root/branding/vendor/xore-theme/theme.css"
 
 if [ ! -d "$clone/.git" ]; then
   echo "not a git clone: $clone" >&2
@@ -31,7 +30,7 @@ sha256="$(sha256sum "$vendored" | cut -d' ' -f1)"
 
 cat >"$lock" <<EOF
 # Vendored Xore/theme pin. Written by scripts/sync-theme.sh, enforced by
-# scripts/check-vendored-theme.sh. frontend-next/public/static/theme.css
+# scripts/check-vendored-theme.sh. branding/vendor/xore-theme/theme.css
 # must stay byte-identical to theme.css at this commit.
 repository=$repository
 commit=$commit
@@ -42,5 +41,5 @@ EOF
 echo "vendored Xore/theme@${commit:0:7} ($date)"
 echo
 echo "Next:"
-echo "  1. npm --prefix arcane/home/honeypot-dashboard/frontend-next run typecheck && npm --prefix arcane/home/honeypot-dashboard/frontend-next run build"
+echo "  1. python3 branding/scripts/check_theme_sync.py (APIARY brand tokens vs the new theme)"
 echo "  2. review the theme changelog for token or component changes"

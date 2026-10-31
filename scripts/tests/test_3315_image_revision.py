@@ -3,19 +3,15 @@
 
 Three things this covers, and why each needs its own harness:
 
-* `frontend-next/scripts/write-build-info.mjs` -- run for real with node, over
-  the corpus of values a `--build-arg GIT_SHA` could plausibly carry. The
-  point is not that it writes JSON (any shell printf does that) but what it
-  does with a value that is not an object name, and that it agrees with
-  backend-service's own normalizer, which is a different language in a
-  different CI lane and can only be kept in step by a shared corpus.
+* The shared revision corpus -- backend-service's normalizer is held to it.
+  (frontend-next's write-build-info.mjs, the JavaScript twin it was the
+  comparison for, left with #3749.)
 
 * The Dockerfile/compose wiring -- asserted as text. Neither cargo nor vitest
   can see that `ARG GIT_SHA` is declared in *both* stages of a multi-stage
-  build, that the label lands on the runtime image rather than the discarded
-  build stage, or that the file the build writes is written before the build
-  that has to copy it. Those are the three ways this feature can exist in the
-  repository and not exist in any image, and all three are silent.
+  build, or that the label lands on the runtime image rather than the discarded
+  build stage. Those are the ways this feature can exist in the repository
+  and not exist in any image, and they are silent.
 
 * `scripts/verify-deploy.sh` -- driven against a real throwaway git repo with
   stub `curl`/`docker` binaries, because the script's whole value is the
@@ -37,12 +33,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "verify-deploy.sh"
-WRITER = ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next" / "scripts" / "write-build-info.mjs"
-FRONTEND_DOCKERFILE = ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next" / "Dockerfile"
+# #3749: frontend-next (its write-build-info.mjs, Dockerfile and compose
+# service) is gone; the backend image is the only stamped one left.
 BACKEND_DOCKERFILE = ROOT / "arcane" / "home" / "honeypot-dashboard" / "backend-service" / "Dockerfile"
-FRONTEND_COMPOSE = ROOT / "arcane" / "home" / "honeypot-dashboard" / "compose.yml"
 BACKEND_COMPOSE = ROOT / "arcane" / "home" / "honeypot-dashboard-backend" / "compose.yml"
-FRONTEND_ENV_EXAMPLE = ROOT / "arcane" / "home" / "honeypot-dashboard" / ".env.example"
 BACKEND_ENV_EXAMPLE = ROOT / "arcane" / "home" / "honeypot-dashboard-backend" / ".env.example"
 BUILD_RS = ROOT / "arcane" / "home" / "honeypot-dashboard" / "backend-service" / "build.rs"
 BACKEND_SRC = ROOT / "arcane" / "home" / "honeypot-dashboard" / "backend-service" / "src"
@@ -70,10 +64,8 @@ def load_corpus() -> tuple[str, list[tuple[str, str]]]:
     """The one table both normalizers are held to, read from the repo.
 
     backend-service's normalize_revision is Rust and lives in a cargo test
-    lane; normalizeRevision is JS run from this file. Nothing at build or
-    review time compares them, so the corpus is the comparison -- a fixture
-    rather than a second literal list, because a second literal list is a
-    second thing that can drift.
+    lane; the corpus is a fixture rather than a literal list so another
+    implementation can be held to the same cases.
     """
     doc = json.loads(CORPUS_JSON.read_text(encoding="utf-8"))
     return doc["unknown"], [tuple(case) for case in doc["cases"]]
@@ -97,84 +89,6 @@ def write_exec(path: Path, body: str) -> Path:
     path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path
-
-
-class WriteBuildInfo(unittest.TestCase):
-    """The generator the frontend image runs, executed for real."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        if shutil.which("node") is None:
-            raise unittest.SkipTest("node is not on PATH; the frontend image's generator needs it")
-
-    def generate(self, tmp: Path, git_sha: str | None = None, **extra: str) -> dict:
-        out = tmp / "build.json"
-        env = dict(extra)
-        if git_sha is not None:
-            env["GIT_SHA"] = git_sha
-        res = run("node", WRITER, "--out", out, env=env)
-        self.assertEqual(res.returncode, 0, res.stderr)
-        return json.loads(out.read_text(encoding="utf-8"))
-
-    def test_a_real_revision_is_carried_through(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            doc = self.generate(Path(raw), FULL)
-        self.assertEqual(doc["revision"], FULL)
-
-    def test_no_build_arg_says_unknown_rather_than_failing_the_build(self) -> None:
-        # A developer running `docker build` by hand must get a working image
-        # that admits it does not know its revision. Refusing to build would
-        # get the Dockerfile reverted.
-        with tempfile.TemporaryDirectory() as raw:
-            doc = self.generate(Path(raw))
-        self.assertEqual(doc["revision"], UNKNOWN)
-
-    def test_every_corpus_case_normalizes_as_the_table_says(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            for raw_value, expected in CORPUS:
-                with self.subTest(git_sha=raw_value):
-                    self.assertEqual(self.generate(tmp, raw_value)["revision"], expected)
-
-    def test_a_multiline_build_arg_cannot_inject_a_second_json_document(self) -> None:
-        # The stamp is served as a static file and read by whatever can reach
-        # the dashboard, so it has to be exactly one JSON document whatever the
-        # build arg contained.
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            doc = self.generate(tmp, 'x"}\n{"revision":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')
-        self.assertEqual(doc["revision"], UNKNOWN)
-        self.assertNotIn("deadbeef", json.dumps(doc))
-
-    def test_the_document_carries_a_utc_build_time_and_the_source(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            doc = self.generate(tmp, FULL)
-            # `built` is the frontend's counterpart to the backend's compile
-            # timestamp; it is a Z-suffixed stamp, so it has to be real UTC --
-            # toISOString() is, and scripts/check-timestamp-utc.py polices
-            # every other emitter of one in this repo.
-            self.assertRegex(doc["built"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
-            self.assertEqual(doc["source"], "https://github.com/Xore/APIARY")
-            overridden = self.generate(tmp, FULL, GIT_SOURCE="  ")
-            self.assertEqual(overridden["source"], "https://github.com/Xore/APIARY")
-
-    def test_the_output_directory_is_created(self) -> None:
-        # The Dockerfile points this at public/, which exists -- but the script
-        # is also the thing a person runs by hand, and mkdir -p is cheaper than
-        # a second failure mode.
-        with tempfile.TemporaryDirectory() as raw:
-            out = Path(raw) / "nested" / "deeper" / "build.json"
-            res = run("node", WRITER, "--out", out, env={"GIT_SHA": FULL})
-            self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertTrue(out.is_file())
-
-    def test_an_unknown_flag_is_refused_rather_than_ignored(self) -> None:
-        # Silently ignoring a typo'd flag would write a stamp the caller did
-        # not ask for and report success.
-        res = run("node", WRITER, "--outt", "/dev/null")
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("unknown argument", res.stderr)
 
 
 class NormalizerParity(unittest.TestCase):
@@ -242,7 +156,7 @@ class DockerfileWiring(unittest.TestCase):
         # Docker scopes an ARG to the stage that declares it. The build stage
         # needs it (build.rs compiles it in); the runtime stage needs it again
         # for the label. Declaring it once is the mistake this pins.
-        for name, path in (("backend", BACKEND_DOCKERFILE), ("frontend", FRONTEND_DOCKERFILE)):
+        for name, path in (("backend", BACKEND_DOCKERFILE),):
             with self.subTest(image=name):
                 parts = self.stages(path.read_text(encoding="utf-8"))
                 self.assertEqual(len(parts), 2, f"{name}: expected a two-stage build")
@@ -254,7 +168,7 @@ class DockerfileWiring(unittest.TestCase):
     def test_both_images_carry_the_oci_revision_label(self) -> None:
         # `Labels: null` on apiary-backend:latest is the state this issue was
         # filed about; the label is what replaces it.
-        for name, path in (("backend", BACKEND_DOCKERFILE), ("frontend", FRONTEND_DOCKERFILE)):
+        for name, path in (("backend", BACKEND_DOCKERFILE),):
             with self.subTest(image=name):
                 text = path.read_text(encoding="utf-8")
                 # On the runtime stage, not the build stage: a label on a stage
@@ -264,36 +178,17 @@ class DockerfileWiring(unittest.TestCase):
                 self.assertIn('org.opencontainers.image.source="${GIT_SOURCE}"', runtime)
                 self.assertIn('org.opencontainers.image.created="${BUILD_DATE:-unknown}"', runtime)
 
-    def test_the_frontend_writes_its_stamp_before_the_build_that_copies_it(self) -> None:
-        # vite copies public/ into .output/public during `npm run build`. A
-        # file written after that is never served, and the image looks fine.
-        text = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
-        write_at = text.index("write-build-info.mjs --out public/build.json")
-        build_at = text.index("RUN npm run build")
-        self.assertLess(write_at, build_at, "build.json is written after the build that serves it")
-        self.assertIn("COPY . .", text[:write_at], "the generator is invoked before the source is copied")
-
-    def test_the_frontend_stamp_is_not_a_tracked_file(self) -> None:
-        # A committed build.json would be a revision claim about nobody's
-        # build, and the one in the tree is the one a local `npm run build`
-        # would serve.
-        gitignore = (FRONTEND_DOCKERFILE.parent / ".gitignore").read_text(encoding="utf-8")
-        self.assertIn("public/build.json", gitignore)
-        res = run("git", "-C", ROOT, "ls-files", "--error-unmatch", "public/build.json",
-                  cwd=FRONTEND_DOCKERFILE.parent)
-        self.assertNotEqual(res.returncode, 0, "public/build.json is tracked but is a build artefact")
-
 
 class ComposeWiring(unittest.TestCase):
     def test_both_stacks_pass_the_arg_to_their_build(self) -> None:
-        for name, path in (("honeypot-dashboard", FRONTEND_COMPOSE), ("honeypot-dashboard-backend", BACKEND_COMPOSE)):
+        for name, path in (("honeypot-dashboard-backend", BACKEND_COMPOSE),):
             with self.subTest(stack=name):
                 self.assertIn("GIT_SHA: ${GIT_SHA:-}", path.read_text(encoding="utf-8"))
 
     def test_both_env_examples_document_the_knob(self) -> None:
         # scripts/check-compose-env-docs.py already gates this; asserting it
         # here too means the gate's own failure explains what the knob is for.
-        for name, path in (("honeypot-dashboard", FRONTEND_ENV_EXAMPLE), ("honeypot-dashboard-backend", BACKEND_ENV_EXAMPLE)):
+        for name, path in (("honeypot-dashboard-backend", BACKEND_ENV_EXAMPLE),):
             with self.subTest(stack=name):
                 self.assertRegex(path.read_text(encoding="utf-8"), r"(?m)^GIT_SHA=")
 
@@ -301,7 +196,6 @@ class ComposeWiring(unittest.TestCase):
         if shutil.which("docker") is None:
             self.skipTest("docker is not available to render compose config")
         for name, path, workdir in (
-            ("honeypot-dashboard", FRONTEND_COMPOSE, FRONTEND_COMPOSE.parent),
             ("honeypot-dashboard-backend", BACKEND_COMPOSE, BACKEND_COMPOSE.parent),
         ):
             with self.subTest(stack=name):
@@ -317,8 +211,8 @@ class ComposeWiring(unittest.TestCase):
         self.assertIn("stamp: true", text)
         self.assertEqual(
             text.count("stamp: true"),
-            2,
-            "exactly the two dashboard Dockerfiles declare ARG GIT_SHA",
+            1,
+            "exactly the backend Dockerfile declares ARG GIT_SHA (#3749: dashboard-next is gone)",
         )
         self.assertIn("format('GIT_SHA={0}', github.sha)", text)
 

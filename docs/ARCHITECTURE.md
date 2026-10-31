@@ -12,7 +12,8 @@ Companion pages carry the detail this page summarizes: data flow in
 dashboard cutover (#1628, completed 2026-08-22) — the Go dashboard is
 deleted from compose, and the TanStack Start + Rust tiers serve traffic.
 There is no runtime fallback and no profile gating left on the dashboard
-serving path (`dashboard-next` runs unconditionally). Other compose
+serving path. Since 2026-10-30 the UI is Xore-Inc/apiary-dashboard (its own
+Arcane project); the in-repo `frontend-next` was removed in #3749. Other compose
 profiles still exist for optional/on-demand jobs and deprecated services
 elsewhere in the repo — `grep -rn 'profiles:' --include='*.yml'` finds
 all of them rather than this sentence trying to enumerate them and
@@ -75,7 +76,7 @@ flowchart TB
     es[("Elasticsearch<br/>see index families + ILM below")]
     ark["Arkime capture + viewer<br/>pcap-sync feeds it"]
     kc["honeypot-keycloak<br/>OIDC issuer"]
-    dw["honeypot-dashboard<br/>frontend-next · backend-service<br/>KEYCLOAK_ISSUER_URL"]
+    dw["apiary-dashboard · honeypot-dashboard(-backend)<br/>dashboard · backend-service<br/>KEYCLOAK_ISSUER_URL"]
   end
 
   subgraph zw["Worker loops · consumes → emits"]
@@ -266,7 +267,7 @@ flowchart LR
     sensors["Sensor stacks ×20<br/>each its own single-member network"]
     tanner["honeypot-tanner<br/>SNARE+TANNER+nested Docker"]
     elk["honeypot-elk<br/>Filebeat · Elasticsearch · Kibana<br/>EveBox · Arkime · zeek-proxy"]
-    dash["honeypot-dashboard (+ -backend)<br/>frontend-next · backend-service ×2<br/>worker loops · services-adapter"]
+    dash["apiary-dashboard + honeypot-dashboard(-backend)<br/>dashboard · backend-service ×2<br/>honeypot-backend-workers"]
     payloads["honeypot-payload-analysis<br/>dedupe · YARA · ML/LLM scoring"]
     utils["honeypot-utilities<br/>autoheal · log rotation · reporter"]
     host["Root-owned host services<br/>Ghidra pipeline · Linux/Windows KVM sandboxes · CAPE"]
@@ -320,7 +321,7 @@ flowchart TB
     fb["Filebeat · 19 processors<br/>2 with ignore_failure<br/>ES default_pipeline: geoip-honeypot"]
     es[("Elasticsearch<br/>honeypot-v2-* · ILM")]
     loops["Worker loops<br/>identity · correlator · agent-intrusion<br/>inventory · alert-notifier · rollups"]
-    dash["honeypot-dashboard<br/>frontend-next · backend-service"]
+    dash["apiary-dashboard<br/>dashboard · backend-service"]
     kc["honeypot-keycloak<br/>OIDC issuer"]
   end
 
@@ -400,13 +401,19 @@ flowchart TB
     t["Traefik — native OIDC pass-through (#1026)"]
   end
 
+  subgraph dash["apiary-dashboard (Xore-Inc/apiary-dashboard)"]
+    fe["dashboard :19092<br/>TanStack Start BFF (bun)<br/>OIDC session · SSE · signs actor assertions"]
+    redis[("oidc-sessions<br/>valkey")]
+  end
+
   subgraph stack["honeypot-dashboard"]
-    fe["frontend-next :19090<br/>TanStack Start (Node cluster)<br/>server functions · SSE hub · BFF cookie"]
     bsm["backend-service-mounted :8082<br/>same route table + host spool mounts<br/>write-capable instance"]
+  end
+
+  subgraph workers["honeypot-backend-workers (#3575)"]
     loops["backend-worker loops<br/>role picked by WORKER_LOOPS:<br/>alert-notifier · attacker-identity ·<br/>agent-intrusion · correlator · dashboard-rollups ·<br/>threat-intel · workbench-reconcile · zeek-proxy-attribution"]
     imp["backend-worker importer<br/>es-results-importer, shard-partitionable"]
     enr["backend-worker-enrichment<br/>network_mode: none — via_port join"]
-    redis[("oidc-sessions<br/>valkey")]
     adapter["services-adapter<br/>unix socket · allowlist · cap_drop ALL"]
     sock[("/var/run/docker.sock")]
   end
@@ -418,24 +425,26 @@ flowchart TB
   es[("Elasticsearch")]
 
   analyst -->|"HTTPS"| t --> fe
-  fe -->|"serviceFetch/serviceJSON<br/>15s TTL cache + Redis share<br/>ConcurrencyLimiter"| bs
+  fe -->|"x-service-token + x-actor-assertion"| bs
   fe -->|"{mounted:true} callers"| bsm
   fe --- redis
   bs & bsm & loops & imp --> es
   enr -->|"logs/enriched/*.json"| fb2["Filebeat"] --> es
-  fe -->|"start/stop/logs requests"| adapter --> sock
+  bs -->|"start/stop/logs requests"| adapter --> sock
 ```
 
 Division of labor:
 
-- **frontend-next** owns sessions: OIDC against home-local Keycloak,
-  `__Host-apiary_bff` cookie, session state in the valkey sidecar. All
-  backend access flows through typed server functions — the browser never
-  speaks to Elasticsearch or sees service tokens. Live updates ride one
-  shared SSE stream whose frames match the Rust emitter's `event` naming.
+- **apiary-dashboard** (Xore-Inc/apiary-dashboard) owns sessions: OIDC
+  against home-local Keycloak (client `apiary-dashboard-rewrite`), session
+  state in its own valkey. All backend access flows through its BFF, which
+  holds the service token and signs each operator's actor assertion
+  (`docs/BACKEND-TRUST-BOUNDARY.md`); the browser never speaks to
+  Elasticsearch or sees service tokens. It replaced the in-repo
+  `frontend-next` on 2026-10-30 (#3749).
 - **backend-service (:8081)** — the unprivileged API tier, and the only
   service in the sibling `honeypot-dashboard-backend` stack (#1622 split it
-  out so Arcane can redeploy the API tier without touching `dashboard-next`).
+  out so Arcane can redeploy the API tier on its own).
   Constant-time service-token middleware, 30s ES timeouts, PIT +
   `search_after` pagination everywhere, CAS writes. It also hosts two
   embedded worker loops of its own (`user-retention-sweep`,
@@ -626,7 +635,7 @@ touch:
 sequenceDiagram
   autonumber
   actor Analyst
-  participant FE as frontend-next
+  participant FE as apiary-dashboard
   participant BSM as backend-service-mounted
   participant Spool as requests/pending
   participant Submit as root submit service

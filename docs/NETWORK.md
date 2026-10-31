@@ -97,7 +97,7 @@ flowchart TB
     es["Elasticsearch"] --- fb["Filebeat"]
     es --- kb["Kibana"] --- ev["EveBox"]
     es --- ark["Arkime"]
-    bs["backend-service :8081"] --- fe["frontend-next :19090"]
+    bs["backend-service :8081"] --- fe["apiary-dashboard :19092"]
     bs2["backend-service-mounted :8082<br/>(write-capable spools)"]
   end
 

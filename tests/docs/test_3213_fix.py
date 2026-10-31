@@ -66,7 +66,8 @@ ARCANE = REPO_ROOT / "arcane/home"
 HTTP = ARCANE / "honeypot-http/http-honeypot"
 ASA = ARCANE / "honeypot-cisco-asa-honeypot/cisco-asa-honeypot"
 BACKEND = ARCANE / "honeypot-dashboard/backend-service/src"
-FRONTEND = ARCANE / "honeypot-dashboard/frontend-next/src/lib"
+# The dashboard half (frontend-next credentialState.ts) left with #3749; its
+# port to apiary-dashboard is Xore-Inc/apiary-dashboard#271.
 
 # The two decoys this issue is about, and the only two the boundary covers.
 SENSORS = {"http-honeypot": HTTP, "cisco-asa-honeypot": ASA}
@@ -418,17 +419,12 @@ def test_the_headline_go_tests_are_still_here():
             assert f"func {name}(" in text, f"{root.name} no longer has {name}"
 
 
-def test_the_boundary_and_frontend_tests_are_still_here():
+def test_the_boundary_tests_are_still_here():
     for path, names in {
         BACKEND / "secrets_boundary.rs": [
             "fn the_axis_fields_survive_their_own_key_list",
             "fn the_envelope_allowlist_is_not_a_bypass",
             "fn the_password_field_is_removed_not_blanked",
-        ],
-        FRONTEND / "credentialState.test.ts": [
-            "keeps unknown apart from absent",
-            "reports present-but-unparsed as neither mapped nor absent",
-            "never infers a real authentication",
         ],
     }.items():
         text = _read(path)
