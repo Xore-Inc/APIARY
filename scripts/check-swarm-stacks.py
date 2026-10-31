@@ -37,7 +37,8 @@ Per service:
     sensor=true gpu=true) is an `Active` node, because a non-Active node
     rejects the network-attachment tasks of its Compose containers. So
     "keep off the sensor/ES host" (#3583) is a constraint, not availability.
-    Each service either excludes it (`node.labels.sensor == false`), pins to
+    Each service either excludes it (`node.labels.sensor == false`, or
+    `node.labels.edge == true` for VPS edge stacks), pins to
     it (`node.labels.sensor == true`, `node.labels.gpu == true` or
     `node.hostname == supermicro`), or opts in with the deploy labels
     `apiary.homeserver: allow` and `apiary.homeserver.reason`.
@@ -93,7 +94,7 @@ GPU_KIND = "NVIDIA-GPU"
 GPU_PIN = re.compile(r"^node\.labels\.gpu\s*==\s*true$")
 # Constraints that settle whether a task may run on the homeserver (#3722).
 _WS = r"\s*"
-HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.sensor{_WS}=={_WS}false$")
+HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.(sensor{_WS}=={_WS}false|edge{_WS}=={_WS}true)$")
 HOMESERVER_PIN = re.compile(
     rf"^(node\.labels\.sensor{_WS}=={_WS}true|node\.labels\.gpu{_WS}=={_WS}true|node\.hostname{_WS}=={_WS}supermicro)$"
 )

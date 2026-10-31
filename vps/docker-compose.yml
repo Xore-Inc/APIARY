@@ -922,6 +922,9 @@ services:
   # unsloth:access. The upstream Studio is not deployed at the time of
   # writing, so every request after login fails upstream until it is.
   socat-hp-unsloth:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-unsloth. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-unsloth
     restart: unless-stopped
@@ -942,7 +945,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-unsloth:8899
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/unsloth:/run/oidc-secrets:ro
-    networks: [oidc-unsloth]
+    # #3595: the socat behind this gateway is the swarm stack edge-unsloth,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-unsloth, edge-unsloth]
     labels:
       - autoheal=true
 
@@ -1301,6 +1308,9 @@ networks:
     driver: bridge
   oidc-unsloth:
     driver: bridge
+  edge-unsloth:
+    external: true
+    name: edge-unsloth_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:
