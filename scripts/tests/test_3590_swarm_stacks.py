@@ -160,6 +160,25 @@ class LintTest(unittest.TestCase):
         guard.write_text("udp 25\n")
         self.assertTrue(any("not in" in e for e in lint.check_file(path, root)))
 
+    def test_gpu_reservation_rules(self):
+        # #3594: one GPU as a swarm generic resource.
+        body = good_stack().replace(
+            "[node.labels.role == manager, node.labels.sensor == false]",
+            "[node.labels.role == manager, node.labels.gpu == true]",
+        ).replace("restart_policy: {condition: any}",
+                  "restart_policy: {condition: any}\n      resources:\n        reservations:\n"
+                  "          generic_resources:\n            - discrete_resource_spec: {kind: NVIDIA-GPU, value: 1}")
+        self.assertFlags(body, "stop-first update_config")
+        stop = body.replace("order: start-first", "order: stop-first")
+        self.assertEqual(self.errors(stop), [])
+        self.assertFlags(stop.replace("node.labels.gpu == true", "node.labels.sensor == true"),
+                         "needs the constraint node.labels.gpu == true")
+        devices = good_stack().replace(
+            "restart_policy: {condition: any}",
+            "restart_policy: {condition: any}\n      resources:\n        reservations:\n"
+            "          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]")
+        self.assertFlags(devices, "ignored by swarm")
+
     def test_bad_stack_name(self):
         self.assertFlags(good_stack(), "not a valid stack name", name="Bad.Name")
 

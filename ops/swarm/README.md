@@ -14,7 +14,7 @@ The leader moves between the three; read it from `swarm-membership.sh status`. R
 
 The `role` label is a placement label, not the raft role. The VPS keeps `role=worker` on purpose: every stack constraint uses `node.labels.role == manager`, so its manager status puts no workload on the edge host. The accepted trade-off (the internet-facing host holds the raft store, the cluster CA and every swarm secret; autolock is still off) is recorded on [#3589](https://github.com/Xore-Inc/APIARY/issues/3589#issuecomment-6256193293).
 
-The decisions, flow matrix, MTU budget and failure modes are in [docs/SWARM-NETWORK.md](../../docs/SWARM-NETWORK.md).
+The decisions, flow matrix, MTU budget and failure modes are in [docs/SWARM-NETWORK.md](../../docs/SWARM-NETWORK.md). GPU scheduling (phase 7, design only) is in [docs/SWARM-GPU.md](../../docs/SWARM-GPU.md).
 
 ## What lives where
 
