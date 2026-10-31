@@ -126,7 +126,10 @@ fi
 info "Diagnosing 502s: TCP-open-but-HTTP-broken"
 # ============================================================
 
-for spec in "$WG:19092:apiary-dashboard"; do
+# One target since #3749 (dashboard-next on 19090 is gone); kept as a list so
+# another listener is one more word.
+specs=("$WG:19092:apiary-dashboard")
+for spec in "${specs[@]}"; do
   IFS=: read -r h p lbl <<< "$spec"
   if tcp_open "$h" "$p"; then
     # Try with explicit HTTP/1.1
