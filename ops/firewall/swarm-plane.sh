@@ -34,7 +34,9 @@
 #   <backup-dir>/rollback.sh                       # restore by hand
 #
 # Every subcommand is idempotent. `apply` converges: rules this script owns
-# that are no longer in the env file are removed.
+# that are no longer in the env file are removed. A rule it does not own
+# (any other port or shape, e.g. a hand-added accept) is never removed; it is
+# reported as "unmanaged" by apply and status, so it can be reviewed (#3712).
 set -euo pipefail
 
 ROLLBACK_UNIT="${ROLLBACK_UNIT:-fw-rollback-3588}"
@@ -143,9 +145,12 @@ converge_rules() {
   current="$(firewall-cmd --permanent --zone="$zone" --list-rich-rules)"
   while IFS= read -r r; do
     [ -n "$r" ] || continue
-    if ! grep -qxF -- "$r" <<<"$desired" && "$owned_fn" "$r"; then
+    grep -qxF -- "$r" <<<"$desired" && continue
+    if "$owned_fn" "$r"; then
       log "$zone: remove $r"
       fw_both --zone="$zone" --remove-rich-rule="$r"
+    else
+      log "$zone: keep unmanaged $r"
     fi
   done <<<"$current"
   while IFS= read -r r; do
@@ -157,7 +162,32 @@ converge_rules() {
   done <<<"$desired"
 }
 
-all_owned() { return 0; }
+# Rules in the swarm zone that this script owns: exactly the shapes
+# desired_swarm_rules can emit, for any source. Everything else in the zone
+# was added by someone else and is kept. Until #3712 this was "every rule",
+# and an apply on the homeserver deleted a hand-added Arcane accept.
+owned_swarm_rule() {
+  local r="$1" p
+  case "$r" in
+    *"prefix=\"$LOG_PREFIX_DENY\""*) return 0 ;;
+    'rule protocol value="icmp" accept' | 'rule protocol value="ipv6-icmp" accept') return 0 ;;
+    'rule family="ipv4" source address="'*'" protocol value="esp" accept') return 0 ;;
+    'rule family="ipv4" source address="'*'" service name="ssh" accept') return 0 ;;
+  esac
+  for p in 2377/tcp 7946/tcp 7946/udp 4789/udp 51821/udp ${SWARM_SSH_PORT:+$SWARM_SSH_PORT/tcp}; do
+    [[ "$r" == 'rule family="ipv4" source address="'*'" port port="'"${p%/*}"'" protocol="'"${p#*/}"'" accept' ]] && return 0
+  done
+  return 1
+}
+
+# Rich rules in a zone that the owner function does not claim.
+unmanaged_rules() {
+  local zone="$1" owned_fn="$2" r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    "$owned_fn" "$r" || echo "$r"
+  done <<<"$(firewall-cmd --permanent --zone="$zone" --list-rich-rules)"
+}
 
 nm_connection_for() {
   # wg-quick devices appear as external NM connections; firewalld owns their zone.
@@ -208,7 +238,7 @@ cmd_apply() {
     log "$SWARM_ZONE: remove service $s"
     fw_both --zone="$SWARM_ZONE" --remove-service="$s"
   done
-  converge_rules "$SWARM_ZONE" "$(desired_swarm_rules)" all_owned
+  converge_rules "$SWARM_ZONE" "$(desired_swarm_rules)" owned_swarm_rule
   local ifc
   for ifc in $SWARM_IFACES; do bind_interface "$ifc"; done
   local z
@@ -221,6 +251,12 @@ cmd_apply() {
 cmd_status_loaded() {
   echo "--- zone $SWARM_ZONE"
   firewall-cmd --zone="$SWARM_ZONE" --list-all
+  local um
+  um="$(unmanaged_rules "$SWARM_ZONE" owned_swarm_rule)"
+  if [ -n "$um" ]; then
+    echo "--- zone $SWARM_ZONE: unmanaged rules (kept by apply, not in the flow matrix)"
+    echo "$um"
+  fi
   local ifc
   for ifc in $SWARM_IFACES; do
     printf '%s -> %s\n' "$ifc" "$(firewall-cmd --get-zone-of-interface="$ifc" 2>/dev/null || echo none)"
