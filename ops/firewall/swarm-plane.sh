@@ -149,7 +149,9 @@ converge_rules() {
     if "$owned_fn" "$r"; then
       log "$zone: remove $r"
       fw_both --zone="$zone" --remove-rich-rule="$r"
-    else
+    elif [ "$owned_fn" = owned_swarm_rule ]; then
+      # Only the swarm zone is ours to report on; LAN zones carry many
+      # unrelated rules (e.g. the VPS public 443 allow-list).
       log "$zone: keep unmanaged $r"
     fi
   done <<<"$current"
