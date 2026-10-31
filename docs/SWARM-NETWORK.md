@@ -26,11 +26,7 @@ All edges carry traffic today (phase 1). The dotted edge is the LAN fallback, us
 flowchart TB
   inet(("Internet"))
   vps["VPS hub, swarm manager<br/>wg0 10.8.0.1<br/>portbridge, Traefik"]
-<<<<<<< HEAD
   subgraph hs["homeserver (supermicro): swarm manager, sensors, Arcane"]
-=======
-  subgraph hs["homeserver (supermicro): swarm manager, availability Pause, sensors, Arcane"]
->>>>>>> origin/main
     hsn["hub wg0 10.8.0.2"]
     hsz["wg-fibre 10.8.1.1 over ens9f1 10.254.250.1<br/>wg-lan 10.8.2.1<br/>zone apiary-swarm"]
   end
@@ -164,11 +160,7 @@ moves to loopback, stays on the LAN or closes is decided in
 | **Fibre down** | The LAN WireGuard tunnel takes over automatically. Overlay traffic continues at the fallback MTU, which is why failover-surviving overlays are sized for 1390. When the fibre recovers, the route switches back. **Tested 2026-10-10:** all fibre traffic dropped for 40 s, 2.7 s gap, no Raft election, Arcane stayed online, no loss on recovery. | The same. |
 | **Fibre and LAN down** | The two managers lose quorum: their hub traffic never routes through the VPS (decision 5). Running tasks continue, but scheduling and updates stop. | homeserver and precision cannot reach each other, but each still reaches the VPS, so a leader plus the VPS is a majority. Overlay traffic between homeserver and precision stops, and the cut-off manager may cause leader churn until the path returns. Not tested. |
 | **homeserver down** | The two-manager quorum is lost (this happened in #3708). Sensors are down. | precision and the VPS keep quorum. Sensors are down. Services pinned to the homeserver cannot move. |
-<<<<<<< HEAD
 | **precision down** | The two-manager quorum is lost. CI runners and the registry mirror are offline. | homeserver and the VPS keep quorum. CI runners and the registry mirror are offline. Services constrained to `node.labels.sensor == false` have nowhere to go (the homeserver is excluded by that label and the VPS by `role=worker`), so they stay pending until precision returns, by design: no generic workload on the sensor or edge host. Services with `apiary.homeserver: allow` (canary, Galah broker) move to the homeserver. |
-=======
-| **precision down** | The two-manager quorum is lost. CI runners and the registry mirror are offline. | homeserver and the VPS keep quorum. CI runners and the registry mirror are offline. Swarm tasks on precision have nowhere to go while the homeserver is `Pause` and the VPS carries `role=worker`, so those services stay pending until precision returns (by design: no workload on the edge host). |
->>>>>>> origin/main
 | **Two managers down** | n/a | Quorum is lost. Running tasks continue; nothing can be listed, scheduled or changed. Recover from the survivor: [HOMESERVER-VAR-RECOVERY.md part 12](HOMESERVER-VAR-RECOVERY.md#12-swarm-quorum-recovery), scripted by `swarm-membership.sh restore-quorum`. |
 | **Rollback timer fires** | The firewall config from before the change is restored. SSH and established flows survive through conntrack. See Rollback. | The same. |
 

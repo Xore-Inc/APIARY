@@ -4,21 +4,14 @@
 
 | Node | Swarm role, address | Availability | Labels | WireGuard | Firewall zone `apiary-swarm` |
 |---|---|---|---|---|---|
-<<<<<<< HEAD
 | homeserver (`supermicro`) | manager, `10.8.0.2` | `Active` since #3722 (`Pause` only while it is rebuilt) | `role=manager edge=false sensor=true gpu=true storage=true` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.1`, `wg-lan` `10.8.2.1` | `ens9f1`, `wg0`, `wg-fibre`, `wg-lan`; `DOCKER-USER` hub policy (`home-wg-forward`) |
-=======
-| homeserver (`supermicro`) | manager, `10.8.0.2` | `Pause` (no tasks until its stacks are rebuilt, #3583) | `role=manager edge=false sensor=true gpu=true storage=true` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.1`, `wg-lan` `10.8.2.1` | `ens9f1`, `wg0`, `wg-fibre`, `wg-lan`; `DOCKER-USER` hub policy (`home-wg-forward`) |
->>>>>>> origin/main
 | precision | manager, `10.8.0.3` | `Active` | `role=manager edge=false sensor=false gpu=false storage=true` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.2`, `wg-lan` `10.8.2.2` | `ens1f1`, `wg0`, `wg-fibre`, `wg-lan` |
 | VPS (hostname `localhost`) | manager, `10.8.0.1` | `Active` | `role=worker edge=true sensor=false gpu=false storage=false` | `wg0` hub (peers homeserver, precision) | `wg0` |
 
 The leader moves between the three; read it from `swarm-membership.sh status`. Raft keeps quorum with any **one** manager down; losing two stops scheduling and updates (running tasks continue) until the [quorum recovery runbook](#runbook-lost-quorum) is run.
 
-<<<<<<< HEAD
 **Placement, not availability, keeps work off the homeserver (#3722).** A `pause` node rejects the network-attachment tasks of its own Compose containers, so Ollama and Galah could not join the `galah-broker_*` overlays while the homeserver was paused, and no stack pinned to it (sensors, GPU, the #3579 gateway) could schedule. Every service therefore states its homeserver placement, and `scripts/check-swarm-stacks.py` enforces it: `node.labels.sensor == false` keeps it off, a `sensor == true`/`gpu == true` constraint pins it there, or the deploy labels `apiary.homeserver: allow` plus a reason let it spread there (the canary and the Galah broker).
 
-=======
->>>>>>> origin/main
 The `role` label is a placement label, not the raft role. The VPS keeps `role=worker` on purpose: every stack constraint uses `node.labels.role == manager`, so its manager status puts no workload on the edge host. The accepted trade-off (the internet-facing host holds the raft store, the cluster CA and every swarm secret; autolock is still off) is recorded on [#3589](https://github.com/Xore-Inc/APIARY/issues/3589#issuecomment-6256193293).
 
 The decisions, flow matrix, MTU budget and failure modes are in [docs/SWARM-NETWORK.md](../../docs/SWARM-NETWORK.md).
@@ -179,11 +172,7 @@ Order used on 2026-10-10:
 2. Wait until no CI job or backfill would be cut off. For precision, also stop the runner units if the work restarts Docker.
 3. `docker node update --availability drain NODE` (from a manager). Draining moves tasks; it does **not** remove a manager's Raft vote.
 4. Do the work. With three managers, one may be down and the other two keep quorum. **Never take two hosts down at once** (that includes rebooting the VPS while precision or the homeserver is down): nothing schedules until quorum returns. A dockerd restart on the VPS also restarts portbridge and the edge containers (no `live-restore`).
-<<<<<<< HEAD
 5. Restore the recorded availability: all three `active` (the homeserver since #3722; it is `pause` only during its own rebuild).
-=======
-5. Restore the recorded availability: precision and VPS `active`; homeserver `pause`, never `active` (#3583).
->>>>>>> origin/main
 6. Verify: `docker node ls` from every manager (all `Ready`, one Leader), `wg show` handshakes on the node's tunnels, `ip route show exact 10.8.0.2/32` (or `10.8.0.3/32`) via `wg-fibre`, `peer-route.service` active, Arcane `precision` online, runners online, ingest rising with public `source.ip`.
 
 ## Runbook: restart after a precision storage migration or reboot
@@ -205,20 +194,12 @@ ops/swarm/swarm-membership.sh status                         # confirm no manage
 ops/swarm/swarm-membership.sh restore-quorum precision --yes # backup to /root on the survivor, then --force-new-cluster on 10.8.0.3
 ops/swarm/swarm-membership.sh forget homeserver --yes        # remove each dead node entry
 # rebuild the dead host, then on it: swarm-plane.sh backup/arm/apply (2377 from its peers), and
-<<<<<<< HEAD
 ops/swarm/swarm-membership.sh join homeserver                # manager via a live manager; paused while it is rebuilt
-=======
-ops/swarm/swarm-membership.sh join homeserver                # manager via a live manager; homeserver is paused at once
->>>>>>> origin/main
 ops/swarm/swarm-membership.sh labels
 ops/swarm/swarm-membership.sh status
 ```
 
-<<<<<<< HEAD
 Set the homeserver `active` again before starting Ollama or Galah (#3722). `restore-quorum` refuses while any manager still answers with quorum, and refuses a survivor without raft WAL. It keeps services, configs, secrets and the survivors' labels; expect the new leader to replace stale tasks (`Failed "No such container"`). `join` runs `container-dns.sh rejoin` on the joined host (#3621). After the rebuild, re-run `swarm-plane.sh apply` on **every** host and read the semantic diff: a lost `/var` also loses `/var/lib/apiary-firewall` and can leave old LAN accepts behind.
-=======
-`restore-quorum` refuses while any manager still answers with quorum, and refuses a survivor without raft WAL. It keeps services, configs, secrets and the survivors' labels; expect the new leader to replace stale tasks (`Failed "No such container"`). `join` runs `container-dns.sh rejoin` on the joined host (#3621). After the rebuild, re-run `swarm-plane.sh apply` on **every** host and read the semantic diff: a lost `/var` also loses `/var/lib/apiary-firewall` and can leave old LAN accepts behind.
->>>>>>> origin/main
 
 The 2026-10-19 recovery used exactly this sequence by hand, from precision, and the VPS reconnected on its own (records on [#3587](https://github.com/Xore-Inc/APIARY/issues/3587)).
 
