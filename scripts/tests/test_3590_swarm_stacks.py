@@ -179,6 +179,24 @@ class LintTest(unittest.TestCase):
             "          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]")
         self.assertFlags(devices, "ignored by swarm")
 
+    def test_overlay_subnet_pinned_in_pool(self):
+        # #3763: overlays pin a /24 inside 10.200.0.0/16.
+        net = "networks:\n  n:\n    driver: overlay\n"
+        self.assertFlags(good_stack(top=net), "pin exactly one")
+        for bad in ("10.0.1.0/24", "10.200.0.0/24", "10.200.8.0/23"):
+            self.assertFlags(good_stack(top=net + f"    ipam: {{config: [{{subnet: {bad}}}]}}\n"), "must be a /24")
+        ok = net + "    ipam: {config: [{subnet: 10.200.9.0/24}]}\n"
+        self.assertEqual(self.errors(good_stack(top=ok)), [])
+        self.assertEqual(self.errors(good_stack(top="networks:\n  x: {external: true, name: y}\n")), [])
+
+    def test_overlay_subnets_unique_across_stacks(self):
+        ok = "networks:\n  n:\n    driver: overlay\n    ipam: {config: [{subnet: 10.200.9.0/24}]}\n"
+        root, _ = self.write(good_stack(top=ok), name="one")
+        d = root / "swarm/stacks/two"
+        d.mkdir(parents=True)
+        (d / "stack.yml").write_text(good_stack(top=ok))
+        self.assertEqual(lint.main(["--root", str(root)]), 1)
+
     def test_bad_stack_name(self):
         self.assertFlags(good_stack(), "not a valid stack name", name="Bad.Name")
 

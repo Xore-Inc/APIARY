@@ -55,6 +55,13 @@ Per service:
     there is one GPU, so a start-first replacement would wait forever for the
     unit its predecessor still holds.
 
+Per network (#3763):
+  - every overlay a stack defines pins one `ipam.config` subnet, a /24
+    inside the fleet pool 10.200.0.0/16 other than 10.200.0.0/24 (ingress),
+    and no two stacks share one. Since the 2026-10-19 force-new-cluster the
+    allocator hands out 10.0.x despite the configured pool, and 10.0.0.0/8
+    runs into the 10.8.x tunnels.
+
 Usage:
   python3 scripts/check-swarm-stacks.py [--root DIR] [FILE...]
 
@@ -63,6 +70,7 @@ Needs PyYAML.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import re
 import sys
 from pathlib import Path
@@ -159,6 +167,34 @@ def _published(ports) -> list[tuple[str, int | None, str]]:
     return out
 
 
+FLEET_POOL = ipaddress.ip_network("10.200.0.0/16")
+INGRESS_SUBNET = ipaddress.ip_network("10.200.0.0/24")
+
+
+def network_subnets(doc: dict) -> tuple[dict[str, str], list[str]]:
+    """(network -> pinned subnet, problems) for the overlays a stack defines."""
+    pinned: dict[str, str] = {}
+    problems: list[str] = []
+    for name, net in (doc.get("networks") or {}).items():
+        net = net or {}
+        if net.get("external") or net.get("driver", "overlay") != "overlay":
+            continue
+        subs = [c.get("subnet") for c in ((net.get("ipam") or {}).get("config") or []) if isinstance(c, dict)]
+        if len(subs) != 1 or not subs[0]:
+            problems.append(f"network {name}: pin exactly one `ipam.config` subnet inside {FLEET_POOL} (#3763)")
+            continue
+        try:
+            sub = ipaddress.ip_network(str(subs[0]))
+        except ValueError:
+            problems.append(f"network {name}: subnet {subs[0]!r} is not a network address")
+            continue
+        if not sub.subnet_of(FLEET_POOL) or sub.prefixlen != 24 or sub == INGRESS_SUBNET:
+            problems.append(f"network {name}: subnet {sub} must be a /24 inside {FLEET_POOL}, not {INGRESS_SUBNET} (ingress)")
+            continue
+        pinned[name] = str(sub)
+    return pinned, problems
+
+
 def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
     rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
     errors: list[str] = []
@@ -174,6 +210,9 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
         return [f"{rel}: unparseable YAML: {exc}"]
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict) or not doc["services"]:
         return [f"{rel}: no services"]
+
+    for problem in network_subnets(doc)[1]:
+        err(problem)
 
     for name, sec in (doc.get("secrets") or {}).items():
         sec = sec or {}
@@ -309,8 +348,21 @@ def main(argv: list[str] | None = None) -> int:
         if tpl.is_file():
             targets.append((tpl, True))
     errors: list[str] = []
+    seen: dict[str, str] = {}
     for path, is_template in targets:
         errors += check_file(path, root, template=is_template)
+        if is_template:
+            continue
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            continue
+        for net, sub in network_subnets(doc)[0].items():
+            where = f"{path.parent.name}/{net}"
+            if sub in seen:
+                errors.append(f"{where}: subnet {sub} is already pinned by {seen[sub]} (#3763)")
+            else:
+                seen[sub] = where
     if errors:
         sys.stderr.write(f"swarm stack conventions (#3590): {len(errors)} problem(s)\n")
         for e in errors:
