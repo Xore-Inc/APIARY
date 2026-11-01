@@ -4,3 +4,4 @@
 # Add a sensor's ports here in the same change that adds its stack;
 # scripts/check-swarm-stacks.py enforces it. Rows: `tcp PORT` / `udp PORT`.
 tcp 11112
+tcp 20000
