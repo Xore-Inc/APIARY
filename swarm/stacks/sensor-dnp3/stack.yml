@@ -1,0 +1,89 @@
+# #3593 (phase 6): the DNP3 decoy as a sensor stack, pinned to the homeserver.
+# Same container as arcane/home/honeypot-dnp3/compose.yml, which stays
+# defined as the rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW flows to 20000 unless
+#   they come from the VPS hub on wg0; the port is listed in
+#   ops/firewall/hosts/homeserver-swarm-host-ports.txt.
+# - `security_opt` is not supported. Gate for moving before the homeserver
+#   gets daemon-wide no-new-privileges (#3593): non-root (65534), cap_drop
+#   ALL, read_only, and no setuid/setgid file in the image (FROM scratch,
+#   checked on this digest 2026-11-01).
+# - The image has no HEALTHCHECK; the stack states the Compose one.
+# - autoheal does not act on swarm tasks; the restart policy and the
+#   healthcheck replace it (an unhealthy task is replaced by swarm).
+services:
+  dnp3:
+    image: ghcr.io/xore-inc/honeypot-dnp3-honeypot@sha256:c8780d53c11eedf18dcfb964cfba9eb8cd298806982f9529522d0d65adac1a68
+    ports:
+      - target: 20000
+        published: 20000
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/dnp3
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      LISTEN_ADDR: ":20000"
+      LOG_PATH: /var/log/honeypot/dnp3.json
+      # portbridge prepends a PROXY header on 20000 (":pp"), so events carry
+      # the attacker's address instead of the hub peer 10.8.0.1.
+      PROXY_PROTOCOL: "1"
+      MAX_CLIENTS: "4096"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "/dnp3-honeypot", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 20000.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone DNP3 decoy, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.7.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
