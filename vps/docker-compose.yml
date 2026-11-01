@@ -891,6 +891,9 @@ services:
   # not part of this stack's home-side compose file, but reachable the same
   # way once its own HP_BIND is set: see that file's revdeck service comment.
   socat-hp-revdeck:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-revdeck. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-revdeck
     restart: unless-stopped
@@ -911,7 +914,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-revdeck:5000
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/revdeck:/run/oidc-secrets:ro
-    networks: [oidc-revdeck]
+    # #3595: the socat behind this gateway is the swarm stack edge-revdeck,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-revdeck, edge-revdeck]
     labels:
       - autoheal=true
 
@@ -1311,6 +1318,9 @@ networks:
   edge-unsloth:
     external: true
     name: edge-unsloth_gw
+  edge-revdeck:
+    external: true
+    name: edge-revdeck_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:
