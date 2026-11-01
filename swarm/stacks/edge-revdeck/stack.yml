@@ -1,0 +1,67 @@
+# #3595 (phase 8): the second VPS edge service as a stack, the socat in front
+# of revdeck (oidc-revdeck -> socat-hp-revdeck -> 10.8.0.2:19500, ghidra
+# stack). Same low-risk shape as edge-unsloth: revdeck is not deployed on the
+# homeserver (nothing listens on 19500), so the gateway authenticates but has
+# no upstream either way.
+#
+# The Compose gateway oidc-revdeck joins this stack's attachable overlay as an
+# external network and reaches the socat under its old name. The Compose
+# socat stays behind the `legacy` profile as the rollback (README.md).
+# The VPS daemon runs no-new-privileges for every container (#3593), which
+# replaces the per-service security_opt a stack cannot set.
+services:
+  socat:
+    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    command: ["TCP4-LISTEN:5000,fork,reuseaddr", "TCP4:10.8.0.2:19500"]
+    networks:
+      gw:
+        aliases: [socat-hp-revdeck]
+    read_only: true
+    cap_drop: [ALL]
+    healthcheck:
+      # busybox nc in this image has no -z; socat itself probes the listener.
+      test: ["CMD", "socat", "-u", "/dev/null", "TCP4:127.0.0.1:5000,connect-timeout=2"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.edge == true
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 60s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "stateless TCP relay; revdeck is not deployed on the homeserver"
+networks:
+  gw:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.8.0/24
+    attachable: true
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
