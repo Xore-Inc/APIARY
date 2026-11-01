@@ -71,6 +71,7 @@ async fn raw(fx: &Fixture, method: reqwest::Method, path: &str, token: Option<&s
 async fn health_is_open_and_everything_else_needs_the_token() {
     let fx = start_default().await;
     assert_eq!(raw(&fx, reqwest::Method::GET, "/healthz", None).await.0, 200);
+    assert_eq!(raw(&fx, reqwest::Method::GET, "/livez", None).await.0, 200, "the image HEALTHCHECK path");
     for token in [None, Some(""), Some("wrong"), Some("gateway-test-toke")] {
         let (status, _) = raw(&fx, reqwest::Method::GET, "/host/v1/fs/GHIDRA_REQUEST_DIR", token).await;
         assert_eq!(status, 401, "token {token:?}");

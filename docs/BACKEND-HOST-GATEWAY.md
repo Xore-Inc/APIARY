@@ -46,7 +46,7 @@ The gateway needs neither Elasticsearch nor `SERVICE_TOKEN`, and runs no worker 
 
 | Route | Does |
 |---|---|
-| `GET /healthz` | `{"ok":true,"mode":"host-gateway","revision":…}`, unauthenticated |
+| `GET /healthz`, `GET /livez` | `{"ok":true,"mode":"host-gateway","revision":…}`, unauthenticated (`/livez` is the image HEALTHCHECK path) |
 | `GET /host/v1/fs/{ROOT}` | root info `{dir, exists, is_dir, writable}`; 404 when the root is not configured |
 | `GET /host/v1/fs/{ROOT}/list?prefix=&suffix=&files_only=&content_cap=` | entries `{name, size, is_dir, modified_ms, content?}`; content (base64) for files up to `content_cap`, 64 MiB per call, 20,000 entries |
 | `GET /host/v1/fs/{ROOT}/stat/{name}` | one entry |

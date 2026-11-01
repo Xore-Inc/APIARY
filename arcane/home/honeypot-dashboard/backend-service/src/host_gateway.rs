@@ -99,7 +99,9 @@ pub fn router(state: GatewayState) -> Router {
         .route("/host/v1/adapter/v1/services/{name}/{action}", post(adapter_action))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(DefaultBodyLimit::max(64 << 10));
-    Router::new().route("/healthz", get(healthz)).merge(host).with_state(state)
+    // /livez is what the image's HEALTHCHECK probes (Dockerfile); /healthz is
+    // the name the rest of the fleet uses. Both are unauthenticated.
+    Router::new().route("/healthz", get(healthz)).route("/livez", get(healthz)).merge(host).with_state(state)
 }
 
 async fn healthz() -> Json<serde_json::Value> {
