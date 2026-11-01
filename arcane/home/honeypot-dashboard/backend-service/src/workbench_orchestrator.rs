@@ -35,11 +35,11 @@
 //! for ghidra/revdeck's trueSHA256 above.
 
 use serde_json::{json, Value};
-use std::path::Path;
 
+use crate::host_fs::{host, ListFilter, Root};
 use crate::payload_kind::{classify_payload, PayloadClassification};
-use crate::payload_paths::{read_payload_head, resolve_payload_path};
-use crate::sandbox_submit::{create_request_marker, sandbox_request_dir};
+use crate::payload_paths::{read_payload_head, resolve_payload};
+use crate::sandbox_submit::{create_request_marker, sandbox_request_root};
 use crate::workbench_domain::{self, WorkbenchChild, WorkbenchRun, WorkbenchSelection};
 use crate::AppState;
 
@@ -71,129 +71,63 @@ async fn fetch_yara_matches(es: &crate::es::Es, hash: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn env_dir(name: &str) -> String {
-    std::env::var(name).unwrap_or_default()
-}
-
-fn ghidra_request_dir() -> String {
-    crate::ghidra_submit::ghidra_request_dir()
-}
-fn revdeck_request_dir() -> String {
-    env_dir("REVDECK_REQUEST_DIR")
-}
-fn revdeck_results_dir() -> String {
-    env_dir("REVDECK_RESULTS_DIR")
-}
-fn ghidra_results_dir() -> String {
-    env_dir("GHIDRA_RESULTS_DIR")
-}
-
-fn marker_dir(analyzer_id: &str) -> String {
+/// The request spool an analyzer's markers live in (#3582: named by root,
+/// so the host gateway can serve it).
+fn marker_root(analyzer_id: &str) -> Option<Root> {
     match analyzer_id {
-        "ghidra" => ghidra_request_dir(),
-        "windows-sandbox" => sandbox_request_dir("windows"),
-        "windows-ghosts" => sandbox_request_dir("ghosts"),
-        "linux-sandbox" => sandbox_request_dir("linux"),
-        "revdeck" => revdeck_request_dir(),
-        _ => String::new(),
+        "ghidra" => Some(Root::GhidraRequests),
+        "windows-sandbox" => Some(sandbox_request_root("windows")),
+        "windows-ghosts" => Some(sandbox_request_root("ghosts")),
+        "linux-sandbox" => Some(sandbox_request_root("linux")),
+        "revdeck" => Some(Root::RevdeckRequests),
+        _ => None,
     }
 }
 
 const MAX_SPOOL_READ_BYTES: u64 = 1024 * 1024;
 
-fn read_json_file(path: &Path) -> Option<Value> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.len() > MAX_SPOOL_READ_BYTES {
-        return None;
-    }
-    let body = std::fs::read(path).ok()?;
-    serde_json::from_slice(&body).ok()
+/// loadGhidraResultsLocal / loadRevdeckResultsLocal: every `{sha256}{suffix}`
+/// file in `root`, parsed, with `sha256` taken from the name. Files over
+/// MAX_SPOOL_READ_BYTES or that do not parse are skipped, as before; one
+/// `list` call carries the content, so a remote root costs one round trip.
+fn local_named_results(root: Root, suffix: &str) -> Vec<Value> {
+    let filter = ListFilter { suffix: suffix.into(), ..Default::default() }.with_content(MAX_SPOOL_READ_BYTES);
+    host()
+        .list(root, &filter)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let sha = entry.name.strip_suffix(suffix)?;
+            if !crate::payload_paths::is_valid_hash(sha) {
+                return None;
+            }
+            let mut value: Value = serde_json::from_slice(entry.content.as_deref()?).ok()?;
+            if let Value::Object(ref mut map) = value {
+                map.insert("sha256".into(), json!(sha));
+            }
+            Some(value)
+        })
+        .collect()
 }
 
-/// loadGhidraResultsLocal: scans GHIDRA_RESULTS_DIR for `{sha256}_ghidra.json`.
 fn local_ghidra_results() -> Vec<Value> {
-    let dir = ghidra_results_dir();
-    if dir.is_empty() {
-        return Vec::new();
-    }
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let sha = name.strip_suffix("_ghidra.json")?;
-            if !crate::payload_paths::is_valid_hash(sha) {
-                return None;
-            }
-            let mut value = read_json_file(&entry.path())?;
-            if let Value::Object(ref mut map) = value {
-                map.insert("sha256".into(), json!(sha));
-            }
-            Some(value)
-        })
-        .collect()
+    local_named_results(Root::GhidraResults, "_ghidra.json")
 }
 
-/// loadRevdeckResultsLocal: `{sha256}_revdeck.json` under REVDECK_RESULTS_DIR.
 fn local_revdeck_results() -> Vec<Value> {
-    let dir = revdeck_results_dir();
-    if dir.is_empty() {
-        return Vec::new();
-    }
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let sha = name.strip_suffix("_revdeck.json")?;
-            if !crate::payload_paths::is_valid_hash(sha) {
-                return None;
-            }
-            let mut value = read_json_file(&entry.path())?;
-            if let Value::Object(ref mut map) = value {
-                map.insert("sha256".into(), json!(sha));
-            }
-            Some(value)
-        })
-        .collect()
+    local_named_results(Root::RevdeckResults, "_revdeck.json")
 }
 
-fn sandbox_results_dirs() -> Vec<String> {
-    let mut dirs = vec![{
-        let d = env_dir("SANDBOX_RESULTS_DIR");
-        if d.is_empty() {
-            "/sandbox-results".to_string()
-        } else {
-            d
-        }
-    }];
-    for extra in [
-        env_dir("WINDOWS_SANDBOX_RESULTS_DIR"),
-        env_dir("GHOSTS_SANDBOX_RESULTS_DIR"),
-    ] {
-        if !extra.is_empty() && !dirs.contains(&extra) {
-            dirs.push(extra);
-        }
-    }
-    dirs
+fn sandbox_results_roots() -> Vec<Root> {
+    host().distinct_configured(&[Root::SandboxResults, Root::WindowsSandboxResults, Root::GhostsSandboxResults])
 }
 
-fn sandbox_request_dirs() -> Vec<String> {
-    let mut dirs = Vec::new();
-    for dir in [
-        sandbox_request_dir("linux"),
-        sandbox_request_dir("windows"),
-        sandbox_request_dir("ghosts"),
-    ] {
-        if !dir.is_empty() && !dirs.contains(&dir) {
-            dirs.push(dir);
-        }
-    }
-    dirs
+fn sandbox_request_roots() -> Vec<Root> {
+    host().distinct_configured(&[
+        sandbox_request_root("linux"),
+        sandbox_request_root("windows"),
+        sandbox_request_root("ghosts"),
+    ])
 }
 
 /// loadSandboxResultsLocal: `linux-*.json`/`windows-*.json` across every
@@ -204,18 +138,16 @@ fn sandbox_request_dirs() -> Vec<String> {
 fn local_sandbox_results() -> Vec<Value> {
     let mut rows = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for dir in sandbox_results_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    let filter = ListFilter { suffix: ".json".into(), ..Default::default() }.with_content(MAX_SPOOL_READ_BYTES);
+    for root in sandbox_results_roots() {
+        let Ok(entries) = host().list(root, &filter) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !(name.starts_with("linux-") || name.starts_with("windows-"))
-                || !name.ends_with(".json")
-            {
+        for entry in entries {
+            if !(entry.name.starts_with("linux-") || entry.name.starts_with("windows-")) {
                 continue;
             }
-            let Some(mut value) = read_json_file(&entry.path()) else {
+            let Some(mut value) = entry.content.as_deref().and_then(|body| serde_json::from_slice::<Value>(body).ok()) else {
                 continue;
             };
             let sha = value["sha256"].as_str().unwrap_or("").to_string();
@@ -264,9 +196,8 @@ fn sandbox_status() -> Value {
     let mut worker_state = String::new();
     let mut counts = SandboxCounts::default();
     let mut jobs = Vec::new();
-    for dir in sandbox_results_dirs() {
-        let path = Path::new(&dir).join("status.json");
-        match read_json_file(&path) {
+    for root in sandbox_results_roots() {
+        match host().read_json(root, "status.json", MAX_SPOOL_READ_BYTES) {
             Some(value) => {
                 let state = value["worker_state"].as_str().unwrap_or("").to_string();
                 counts.queued += value["counts"]["queued"].as_i64().unwrap_or(0);
@@ -286,23 +217,15 @@ fn sandbox_status() -> Value {
     }
     let mut handoff = 0i64;
     let mut handoff_old = false;
-    for dir in sandbox_request_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    let requests = ListFilter { suffix: ".request".into(), ..Default::default() };
+    for root in sandbox_request_roots() {
+        let Ok(entries) = host().list(root, &requests) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".request") {
-                continue;
-            }
+        for entry in entries {
             handoff += 1;
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    if modified.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300)
-                    {
-                        handoff_old = true;
-                    }
-                }
+            if entry.age().is_some_and(|age| age > std::time::Duration::from_secs(300)) {
+                handoff_old = true;
             }
         }
     }
@@ -338,8 +261,8 @@ fn submit_child(
     child.updated_at = now;
     match child.analyzer_id.as_str() {
         "deterministic" => {
-            let path = resolve_payload_path(hash).map_err(|_| "deterministic analysis failed".to_string())?;
-            let (data, real_size) = crate::payload_static_analysis::read_bounded(&path)
+            let payload = resolve_payload(hash).map_err(|_| "deterministic analysis failed".to_string())?;
+            let (data, real_size) = crate::payload_static_analysis::read_bounded(&payload)
                 .map_err(|_| "deterministic analysis failed".to_string())?;
             let result =
                 crate::payload_static_analysis::analyze(&data, real_size, yara_matches.to_vec());
@@ -357,7 +280,7 @@ fn submit_child(
             Ok(())
         }
         "ghidra" => {
-            create_marker(&ghidra_request_dir(), hash)
+            create_marker(Root::GhidraRequests, hash)
                 .map_err(|e| format!("Ghidra request spool unavailable: {e}"))?;
             child.target_hash = hash.to_string();
             child.state = "queued".into();
@@ -369,7 +292,7 @@ fn submit_child(
             if classification.platform == "Windows" || !classification.dynamic {
                 return Err("payload is not compatible with the Linux sandbox".into());
             }
-            create_marker(&sandbox_request_dir("linux"), hash)
+            create_marker(sandbox_request_root("linux"), hash)
                 .map_err(|e| format!("Linux sandbox request spool unavailable: {e}"))?;
             child.state = "queued".into();
             child.reason = "waiting for the Linux sandbox handoff".into();
@@ -380,7 +303,7 @@ fn submit_child(
             if classification.platform != "Windows" || !classification.dynamic {
                 return Err("payload is not compatible with the Windows sandbox".into());
             }
-            create_marker(&sandbox_request_dir("windows"), hash)
+            create_marker(sandbox_request_root("windows"), hash)
                 .map_err(|e| format!("Windows sandbox request spool unavailable: {e}"))?;
             child.state = "queued".into();
             child.reason = "waiting for the Windows sandbox handoff".into();
@@ -391,7 +314,7 @@ fn submit_child(
             if classification.platform != "Windows" || !classification.dynamic {
                 return Err("payload is not compatible with the Windows detonation route".into());
             }
-            create_marker(&sandbox_request_dir("ghosts"), hash)
+            create_marker(sandbox_request_root("ghosts"), hash)
                 .map_err(|e| format!("GHOSTS sandbox request spool unavailable: {e}"))?;
             child.state = "queued".into();
             child.reason = "waiting for the WAN-permitted GHOSTS sandbox handoff".into();
@@ -399,7 +322,7 @@ fn submit_child(
             Ok(())
         }
         "revdeck" => {
-            create_marker(&revdeck_request_dir(), hash)
+            create_marker(Root::RevdeckRequests, hash)
                 .map_err(|e| format!("Rev\u{b7}Deck request spool unavailable: {e}"))?;
             child.target_hash = hash.to_string();
             child.state = "queued".into();
@@ -413,23 +336,18 @@ fn submit_child(
 
 /// createWorkbenchMarker: queue-depth-capped marker creation (no
 /// cross-process flock — see module doc comment).
-fn create_marker(dir: &str, hash: &str) -> Result<(), String> {
-    if dir.is_empty() || !crate::payload_paths::is_valid_hash(hash) {
+fn create_marker(root: Root, hash: &str) -> Result<(), String> {
+    if !host().configured(root) || !crate::payload_paths::is_valid_hash(hash) {
         return Err("backend is not configured".into());
     }
-    let pending = std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| e.file_type().map(|t| !t.is_dir()).unwrap_or(false))
-                .filter(|e| e.file_name().to_string_lossy().ends_with(".request"))
-                .count()
-        })
+    let pending = host()
+        .list(root, &ListFilter::files_with_suffix(".request"))
+        .map(|entries| entries.len())
         .map_err(|e| e.to_string())?;
     if pending >= workbench_domain::MAX_QUEUE_DEPTH {
         return Err("queue capacity reached".into());
     }
-    create_request_marker(dir, hash)
+    create_request_marker(root, hash)
 }
 
 pub struct CreateRunRequest {
@@ -455,8 +373,8 @@ pub async fn create_run(
     if !crate::payload_paths::is_valid_hash(&hash) {
         return Err(CreateRunError::Validation("invalid payload hash".into()));
     }
-    let path = resolve_payload_path(&hash).map_err(|_| CreateRunError::NotFound)?;
-    let head = read_payload_head(&path)
+    let payload = resolve_payload(&hash).map_err(|_| CreateRunError::NotFound)?;
+    let head = read_payload_head(&payload)
         .map_err(|_| CreateRunError::Validation("captured payload is unreadable".into()))?;
     let classification = classify_payload(&head);
 
@@ -635,7 +553,7 @@ pub fn reconcile_run(mut run: WorkbenchRun) -> (WorkbenchRun, bool) {
                     }
                     continue;
                 }
-                if let Some((state, reason)) = marker_state(&ghidra_request_dir(), &target) {
+                if let Some((state, reason)) = marker_state(Root::GhidraRequests, &target) {
                     child.state = state.clone();
                     child.reason = reason;
                     child.cancelable = state == "queued";
@@ -643,10 +561,8 @@ pub fn reconcile_run(mut run: WorkbenchRun) -> (WorkbenchRun, bool) {
                         child.retryable = child.attempts <= child.options.retry_limit;
                     }
                 }
-                child.stale = workbench_domain::spool_status_stale(
-                    &ghidra_results_dir(),
-                    &ghidra_request_dir(),
-                );
+                child.stale =
+                    workbench_domain::spool_status_stale(Root::GhidraResults, Root::GhidraRequests);
             }
             "revdeck" => {
                 let target = if child.target_hash.is_empty() {
@@ -682,7 +598,7 @@ pub fn reconcile_run(mut run: WorkbenchRun) -> (WorkbenchRun, bool) {
                     }
                     continue;
                 }
-                if let Some((state, reason)) = marker_state(&revdeck_request_dir(), &target) {
+                if let Some((state, reason)) = marker_state(Root::RevdeckRequests, &target) {
                     child.state = state.clone();
                     child.reason = reason;
                     child.cancelable = state == "queued";
@@ -755,11 +671,9 @@ pub fn reconcile_run(mut run: WorkbenchRun) -> (WorkbenchRun, bool) {
                     child.cancelable = false;
                 }
                 if child.state == "queued"
-                    && !marker_exists(
-                        &marker_dir(&child.analyzer_id),
-                        &run.payload_sha256,
-                        ".request",
-                    )
+                    && !marker_root(&child.analyzer_id).is_some_and(|root| {
+                        host().configured(root) && marker_exists(root, &run.payload_sha256, ".request")
+                    })
                 {
                     child.state = "claimed".into();
                     child.reason = "accepted by the host-side handoff".into();
@@ -826,19 +740,28 @@ const MARKER_STATES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-fn marker_exists(dir: &str, hash: &str, suffix: &str) -> bool {
-    if dir.is_empty() || !crate::payload_paths::is_valid_hash(hash) {
+fn marker_exists(root: Root, hash: &str, suffix: &str) -> bool {
+    if !crate::payload_paths::is_valid_hash(hash) {
         return false;
     }
-    std::fs::metadata(Path::new(dir).join(format!("{hash}{suffix}")))
-        .map(|m| m.is_file())
-        .unwrap_or(false)
+    host().stat(root, &format!("{hash}{suffix}")).map(|entry| !entry.is_dir).unwrap_or(false)
 }
 
-fn marker_state(dir: &str, hash: &str) -> Option<(String, String)> {
+/// One `list` per call: a remote spool would otherwise cost one round trip
+/// per possible marker suffix.
+fn marker_state(root: Root, hash: &str) -> Option<(String, String)> {
+    if !crate::payload_paths::is_valid_hash(hash) {
+        return None;
+    }
+    let names: std::collections::HashSet<String> = host()
+        .list(root, &ListFilter { prefix: hash.into(), files_only: true, ..Default::default() })
+        .ok()?
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
     MARKER_STATES
         .iter()
-        .find(|(suffix, _, _)| marker_exists(dir, hash, suffix))
+        .find(|(suffix, _, _)| names.contains(&format!("{hash}{suffix}")))
         .map(|(_, state, reason)| (state.to_string(), reason.to_string()))
 }
 
@@ -900,12 +823,10 @@ pub async fn child_action(
                 } else {
                     run.children[index].target_hash.clone()
                 };
-                let dir = marker_dir(analyzer_id);
-                if dir.is_empty() {
+                let Some(root) = marker_root(analyzer_id).filter(|root| host().configured(*root)) else {
                     return Err("analyzer does not support cancellation".to_string());
-                }
-                let marker = Path::new(&dir).join(format!("{target_hash}.request"));
-                match std::fs::remove_file(&marker) {
+                };
+                match host().remove(root, &format!("{target_hash}.request")) {
                     Ok(()) => {}
                     // No marker left. Normally that means a worker claimed the
                     // request and cancelling would race it -- but once the
@@ -934,9 +855,9 @@ pub async fn child_action(
                 if !retryable || !attempts_ok {
                     return Err("retry limit reached or child is not retryable".to_string());
                 }
-                let path = resolve_payload_path(&run.payload_sha256)
+                let payload = resolve_payload(&run.payload_sha256)
                     .map_err(|_| "captured payload not found".to_string())?;
-                let head = read_payload_head(&path).map_err(|e| e.to_string())?;
+                let head = read_payload_head(&payload).map_err(|e| e.to_string())?;
                 let classification = classify_payload(&head);
                 let now = chrono::Utc::now();
                 {

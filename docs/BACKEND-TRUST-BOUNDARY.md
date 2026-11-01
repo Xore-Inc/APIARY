@@ -27,6 +27,7 @@ what a connection may do.
 | `SERVICE_TOKEN` | `x-service-token` | every `/api/v1` route | the BFF (dashboard) only |
 | `EXPORT_TOKEN` | `x-export-token` | `GET /api/v1/ip-block-export` only; 403 everywhere else | the VPS blocklist pull |
 | actor assertion key | `x-actor-assertion` | proves the operator behind a BFF request | private half: the BFF; public half: the backend |
+| `HOST_GATEWAY_TOKEN` | `x-host-gateway-token` | the host gateway's `/host/v1` only, never `/api/v1` (#3582) | the gateway and the two HTTP services, once they run off the sensor host |
 
 - No accepted credential is a 401, as before #3577.
 - The export credential is refused (403) by
@@ -39,6 +40,9 @@ what a connection may do.
 - Every secret can be given as `NAME` or `NAME_FILE` (the swarm secret
   convention from #3590: the variable names a file under `/run/secrets/`).
   Setting both refuses to boot. Values never enter git, issues or PRs.
+- `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN` and
+  `EXPORT_TOKEN`; both the gateway and its clients refuse to boot otherwise.
+  See [BACKEND-HOST-GATEWAY.md](BACKEND-HOST-GATEWAY.md).
 - `HONEYFS_IMPLANT_TOKEN[_FILE]` (#3680) follows the same convention but is
   read when the honeyfs-implant client is used, not at boot: setting both, or
   naming an unreadable or empty file, disables that client and logs

@@ -510,7 +510,7 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
 
 /// Constant-time against each accepted value. Every accepted value is
 /// compared, so the time taken does not say which one matched.
-fn matches_any(credential: &Rotating<String>, presented: &str, now: DateTime<Utc>) -> bool {
+pub(crate) fn matches_any(credential: &Rotating<String>, presented: &str, now: DateTime<Utc>) -> bool {
     !presented.is_empty()
         && credential.live(now).fold(false, |found, expected| found | ct_eq(expected, presented))
 }
@@ -629,7 +629,7 @@ pub fn secret(
 /// `NAME` plus its rotation predecessor `NAME_PREVIOUS`, which needs an
 /// RFC 3339 `NAME_PREVIOUS_UNTIL`: an overlap window without an end is the
 /// thing rotation exists to avoid.
-fn rotating(
+pub(crate) fn rotating(
     env: &dyn Fn(&str) -> Option<String>,
     read: &dyn Fn(&str) -> std::io::Result<String>,
     name: &str,
