@@ -64,6 +64,8 @@ pub mod ghidra_submit;
 pub mod github_analysis_submit;
 pub mod gpu_queue;
 pub mod health;
+pub mod host_fs;
+pub mod host_gateway;
 pub mod isolate;
 pub mod honeyfs_implant;
 pub mod investigate;

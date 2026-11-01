@@ -167,12 +167,23 @@ mod b64_opt {
     }
 }
 
-/// Whether a root's directory exists, and whether it is writable by mode bits
-/// (the check `workbench_domain::directory_usable` has always made).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A configured root: its directory on the serving host, whether that exists
+/// and is a directory, and whether it is writable by mode bits (the check
+/// `workbench_domain::directory_usable` has always made). An unconfigured
+/// root has no `RootInfo` at all.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootInfo {
+    pub dir: String,
+    pub exists: bool,
     pub is_dir: bool,
     pub writable: bool,
+}
+
+impl RootInfo {
+    /// An existing directory, writable too when `writable` is asked for.
+    pub fn usable(&self, writable: bool) -> bool {
+        self.exists && self.is_dir && (!writable || self.writable)
+    }
 }
 
 /// Which entries `list` returns, and whether it carries their content.
@@ -237,27 +248,80 @@ fn modified_ms(meta: &std::fs::Metadata) -> Option<i64> {
     i64::try_from(since.as_millis()).ok()
 }
 
+/// Where each root and the payload directories are on this host. Production
+/// reads the environment per call (`from_env`), as the code always did; the
+/// gateway and the tests build one explicitly, so nothing depends on
+/// process-global state they would race on.
+#[derive(Clone, Debug, Default)]
+pub struct Dirs {
+    roots: std::collections::HashMap<Root, PathBuf>,
+    /// None: `payload_paths::payload_dirs()` (PAYLOAD_DIRS + SCRIPT_PAYLOAD_DIR).
+    payload: Option<Vec<PathBuf>>,
+}
+
+impl Dirs {
+    pub fn from_env() -> Self {
+        let roots = Root::ALL
+            .iter()
+            .filter_map(|root| {
+                let dir = root.local_dir();
+                (!dir.is_empty()).then(|| (*root, PathBuf::from(dir)))
+            })
+            .collect();
+        Self { roots, payload: None }
+    }
+
+    pub fn empty() -> Self {
+        Self { roots: Default::default(), payload: Some(Vec::new()) }
+    }
+
+    pub fn with_root(mut self, root: Root, dir: impl Into<PathBuf>) -> Self {
+        self.roots.insert(root, dir.into());
+        self
+    }
+
+    pub fn with_payload_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.payload.get_or_insert_with(Vec::new).push(dir.into());
+        self
+    }
+
+    pub fn dir(&self, root: Root) -> Option<&Path> {
+        self.roots.get(&root).map(PathBuf::as_path)
+    }
+
+    pub fn payload_dirs(&self) -> Vec<String> {
+        match &self.payload {
+            None => crate::payload_paths::payload_dirs(),
+            Some(dirs) => dirs.iter().filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned()).collect(),
+        }
+    }
+
+    /// The configured roots, for the gateway's startup line.
+    pub fn describe(&self) -> String {
+        let mut names: Vec<&str> = self.roots.keys().map(|root| root.env()).collect();
+        names.sort_unstable();
+        names.join(",")
+    }
+}
+
 /// The `std::fs` implementation. The gateway serves exactly these functions.
 pub mod local {
     use super::*;
     use std::io::Read;
 
-    pub fn dir(root: Root) -> Option<PathBuf> {
-        let dir = root.local_dir();
-        (!dir.is_empty()).then(|| PathBuf::from(dir))
-    }
-
-    fn configured_dir(root: Root) -> io::Result<PathBuf> {
-        dir(root).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{} is not configured", root.env())))
+    fn configured_dir(dirs: &Dirs, root: Root) -> io::Result<PathBuf> {
+        dirs.dir(root)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{} is not configured", root.env())))
     }
 
     /// `dir/name`, refusing a bad name and a symlink that resolves outside
     /// `dir`. A missing file is returned as a path (create_new needs that).
-    pub fn safe_path(root: Root, name: &str) -> io::Result<PathBuf> {
+    pub fn safe_path(dirs: &Dirs, root: Root, name: &str) -> io::Result<PathBuf> {
         if !valid_name(name) {
             return Err(invalid("invalid file name"));
         }
-        let dir = configured_dir(root)?;
+        let dir = configured_dir(dirs, root)?;
         let path = dir.join(name);
         if let Ok(meta) = std::fs::symlink_metadata(&path) {
             if meta.file_type().is_symlink() {
@@ -275,8 +339,12 @@ pub mod local {
         Entry { name, size: meta.len(), is_dir: meta.is_dir(), modified_ms: modified_ms(meta), content: None }
     }
 
-    pub fn root_info(root: Root) -> Option<RootInfo> {
-        let meta = std::fs::metadata(dir(root)?).ok()?;
+    pub fn root_info(dirs: &Dirs, root: Root) -> Option<RootInfo> {
+        let dir = dirs.dir(root)?;
+        let shown = dir.to_string_lossy().into_owned();
+        let Ok(meta) = std::fs::metadata(dir) else {
+            return Some(RootInfo { dir: shown, exists: false, is_dir: false, writable: false });
+        };
         #[cfg(unix)]
         let writable = {
             use std::os::unix::fs::PermissionsExt;
@@ -284,11 +352,11 @@ pub mod local {
         };
         #[cfg(not(unix))]
         let writable = true;
-        Some(RootInfo { is_dir: meta.is_dir(), writable })
+        Some(RootInfo { dir: shown, exists: true, is_dir: meta.is_dir(), writable })
     }
 
-    pub fn list(root: Root, filter: &ListFilter) -> io::Result<Vec<Entry>> {
-        let dir = configured_dir(root)?;
+    pub fn list(dirs: &Dirs, root: Root, filter: &ListFilter) -> io::Result<Vec<Entry>> {
+        let dir = configured_dir(dirs, root)?;
         let mut out = Vec::new();
         let mut content_budget = MAX_LIST_CONTENT_BYTES;
         for entry in std::fs::read_dir(&dir)?.flatten() {
@@ -300,7 +368,7 @@ pub mod local {
                 continue;
             }
             // Follows a symlink only when it stays inside the root.
-            let Ok(path) = safe_path(root, &name) else { continue };
+            let Ok(path) = safe_path(dirs, root, &name) else { continue };
             let Ok(meta) = std::fs::metadata(&path) else { continue };
             if filter.files_only && !meta.is_file() {
                 continue;
@@ -319,8 +387,8 @@ pub mod local {
         Ok(out)
     }
 
-    pub fn stat(root: Root, name: &str) -> io::Result<Entry> {
-        let path = safe_path(root, name)?;
+    pub fn stat(dirs: &Dirs, root: Root, name: &str) -> io::Result<Entry> {
+        let path = safe_path(dirs, root, name)?;
         Ok(entry_from(name.to_string(), &std::fs::metadata(path)?))
     }
 
@@ -328,21 +396,22 @@ pub mod local {
     pub fn read_path(path: &Path, cap: u64) -> io::Result<(Vec<u8>, u64)> {
         let mut file = std::fs::File::open(path)?;
         let size = file.metadata()?.len();
+        let cap = cap.min(MAX_READ_BYTES);
         let mut body = Vec::with_capacity(size.min(cap) as usize);
-        (&mut file).take(cap.min(MAX_READ_BYTES)).read_to_end(&mut body)?;
+        (&mut file).take(cap).read_to_end(&mut body)?;
         Ok((body, size))
     }
 
-    pub fn read(root: Root, name: &str, cap: u64) -> io::Result<(Vec<u8>, u64)> {
-        read_path(&safe_path(root, name)?, cap)
+    pub fn read(dirs: &Dirs, root: Root, name: &str, cap: u64) -> io::Result<(Vec<u8>, u64)> {
+        read_path(&safe_path(dirs, root, name)?, cap)
     }
 
     /// O_CREAT|O_EXCL. `Ok(false)` when the file already existed.
-    pub fn create_new(root: Root, name: &str) -> io::Result<bool> {
+    pub fn create_new(dirs: &Dirs, root: Root, name: &str) -> io::Result<bool> {
         if !root.writable() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "root is read-only"));
         }
-        let path = safe_path(root, name)?;
+        let path = safe_path(dirs, root, name)?;
         match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
@@ -350,15 +419,17 @@ pub mod local {
         }
     }
 
-    pub fn remove(root: Root, name: &str) -> io::Result<()> {
+    pub fn remove(dirs: &Dirs, root: Root, name: &str) -> io::Result<()> {
         if !root.writable() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "root is read-only"));
         }
-        std::fs::remove_file(safe_path(root, name)?)
+        let path = safe_path(dirs, root, name)?;
+        // A symlink inside the root is removed as a link, never its target.
+        std::fs::remove_file(path)
     }
 
-    pub fn resolve_payload(hash: &str) -> Result<PayloadRef, &'static str> {
-        let path = crate::payload_paths::resolve_payload_path(hash)?;
+    pub fn resolve_payload(dirs: &Dirs, hash: &str) -> Result<PayloadRef, &'static str> {
+        let path = crate::payload_paths::resolve_in(&dirs.payload_dirs(), hash)?;
         let size = std::fs::metadata(&path).map_err(|_| "captured payload not found")?.len();
         Ok(PayloadRef { hash: hash.to_string(), size, location: PayloadLocation::Local(path) })
     }
@@ -572,10 +643,34 @@ pub enum HostFs {
 }
 
 static HOST: OnceLock<HostFs> = OnceLock::new();
+static ADAPTER: OnceLock<Option<Remote>> = OnceLock::new();
 
 /// The process-wide seam. Unset means Local (tests, workers, today's hosts).
 pub fn host() -> &'static HostFs {
     HOST.get_or_init(|| HostFs::Local)
+}
+
+/// The host gateway that fronts the services adapter, when
+/// `SERVICES_ADAPTER_URL` is set; otherwise the adapter is the local socket.
+pub fn adapter_gateway() -> Option<&'static Remote> {
+    ADAPTER.get_or_init(|| None).as_ref()
+}
+
+/// What `configure_from_env` decided, for `install`.
+#[derive(Clone, Debug)]
+pub struct HostConfig {
+    pub fs: HostFs,
+    pub adapter: Option<Remote>,
+}
+
+impl HostConfig {
+    pub fn describe(&self) -> String {
+        let adapter = match &self.adapter {
+            Some(remote) => format!("gateway {}", remote.base()),
+            None => "socket".into(),
+        };
+        format!("files={} adapter={adapter}", self.fs.describe())
+    }
 }
 
 /// Client-side configuration: `HOST_GATEWAY_URL` plus `HOST_GATEWAY_TOKEN`
@@ -586,7 +681,7 @@ pub fn configure_from_env(
     env: &dyn Fn(&str) -> Option<String>,
     read: &dyn Fn(&str) -> io::Result<String>,
     other_secrets: &[&str],
-) -> anyhow::Result<HostFs> {
+) -> anyhow::Result<HostConfig> {
     let url = env("HOST_GATEWAY_URL").filter(|v| !v.trim().is_empty());
     let adapter_url = env("SERVICES_ADAPTER_URL").filter(|v| !v.trim().is_empty());
     if adapter_url.is_some() && env("SERVICES_ADAPTER_SOCKET").is_some_and(|v| !v.trim().is_empty()) {
@@ -594,22 +689,24 @@ pub fn configure_from_env(
     }
     let token = crate::trust::secret(env, read, "HOST_GATEWAY_TOKEN")?;
     if url.is_none() && adapter_url.is_none() {
-        return Ok(HostFs::Local);
+        return Ok(HostConfig { fs: HostFs::Local, adapter: None });
     }
     let token = token.ok_or_else(|| anyhow::anyhow!("HOST_GATEWAY_URL/SERVICES_ADAPTER_URL need HOST_GATEWAY_TOKEN (or _FILE)"))?;
-    if other_secrets.iter().any(|other| *other == token) {
+    if other_secrets.contains(&token.as_str()) {
         anyhow::bail!("HOST_GATEWAY_TOKEN equals another credential of this service; it must be its own secret");
     }
-    match url {
-        Some(url) => Ok(HostFs::Remote(Remote::new(&url, &token)?)),
-        None => Ok(HostFs::Local),
-    }
+    let fs = match url {
+        Some(url) => HostFs::Remote(Remote::new(&url, &token)?),
+        None => HostFs::Local,
+    };
+    let adapter = adapter_url.map(|url| Remote::new(&url, &token)).transpose()?;
+    Ok(HostConfig { fs, adapter })
 }
 
 /// Installs the seam. Called once from `main`; a second call is a bug.
-pub fn install(fs: HostFs) {
-    if HOST.set(fs).is_err() {
-        panic!("host_fs::install called twice");
+pub fn install(config: HostConfig) {
+    if HOST.set(config.fs).is_err() || ADAPTER.set(config.adapter).is_err() {
+        panic!("host_fs::install called twice, or after first use");
     }
 }
 
@@ -623,14 +720,13 @@ impl HostFs {
 
     pub fn root_info(&self, root: Root) -> Option<RootInfo> {
         match self {
-            HostFs::Local => local::root_info(root),
+            HostFs::Local => local::root_info(&Dirs::from_env(), root),
             HostFs::Remote(remote) => remote.root_info(root),
         }
     }
 
-    /// The root is configured: its variable is set (or it has a default).
-    /// Locally that is the old `dir.is_empty()` check; remotely the gateway
-    /// is asked whether the directory exists.
+    /// The root is configured: its variable is set (or it has a default) on
+    /// the host that serves it. Locally that is the old `dir.is_empty()` check.
     pub fn configured(&self, root: Root) -> bool {
         match self {
             HostFs::Local => !root.local_dir().is_empty(),
@@ -638,23 +734,41 @@ impl HostFs {
         }
     }
 
+    /// Configured, an existing directory, and writable if asked.
+    pub fn usable(&self, root: Root, writable: bool) -> bool {
+        self.root_info(root).is_some_and(|info| info.usable(writable))
+    }
+
+    /// The configured roots among `roots`, without two that name the same
+    /// directory (the Windows and GHOSTS spools may share the Linux one).
+    pub fn distinct_configured(&self, roots: &[Root]) -> Vec<Root> {
+        let mut seen = std::collections::HashSet::new();
+        roots
+            .iter()
+            .copied()
+            .filter_map(|root| self.root_info(root).map(|info| (root, info.dir)))
+            .filter(|(_, dir)| seen.insert(dir.clone()))
+            .map(|(root, _)| root)
+            .collect()
+    }
+
     pub fn list(&self, root: Root, filter: &ListFilter) -> io::Result<Vec<Entry>> {
         match self {
-            HostFs::Local => local::list(root, filter),
+            HostFs::Local => local::list(&Dirs::from_env(), root, filter),
             HostFs::Remote(remote) => remote.list(root, filter),
         }
     }
 
     pub fn stat(&self, root: Root, name: &str) -> io::Result<Entry> {
         match self {
-            HostFs::Local => local::stat(root, name),
+            HostFs::Local => local::stat(&Dirs::from_env(), root, name),
             HostFs::Remote(remote) => remote.stat(root, name),
         }
     }
 
     pub fn read(&self, root: Root, name: &str, cap: u64) -> io::Result<(Vec<u8>, u64)> {
         match self {
-            HostFs::Local => local::read(root, name, cap),
+            HostFs::Local => local::read(&Dirs::from_env(), root, name, cap),
             HostFs::Remote(remote) => remote.read(root, name, cap),
         }
     }
@@ -670,21 +784,21 @@ impl HostFs {
 
     pub fn create_new(&self, root: Root, name: &str) -> io::Result<bool> {
         match self {
-            HostFs::Local => local::create_new(root, name),
+            HostFs::Local => local::create_new(&Dirs::from_env(), root, name),
             HostFs::Remote(remote) => remote.create_new(root, name),
         }
     }
 
     pub fn remove(&self, root: Root, name: &str) -> io::Result<()> {
         match self {
-            HostFs::Local => local::remove(root, name),
+            HostFs::Local => local::remove(&Dirs::from_env(), root, name),
             HostFs::Remote(remote) => remote.remove(root, name),
         }
     }
 
     pub fn resolve_payload(&self, hash: &str) -> Result<PayloadRef, &'static str> {
         match self {
-            HostFs::Local => local::resolve_payload(hash),
+            HostFs::Local => local::resolve_payload(&Dirs::from_env(), hash),
             HostFs::Remote(remote) => remote.resolve_payload(hash),
         }
     }
@@ -743,7 +857,7 @@ mod tests {
     fn configure_defaults_to_local_and_refuses_ambiguity() {
         let read = |_: &str| -> io::Result<String> { Err(io::Error::other("no files")) };
         let none = |_: &str| None;
-        assert!(matches!(configure_from_env(&none, &read, &[]).unwrap(), HostFs::Local));
+        assert!(matches!(configure_from_env(&none, &read, &[]).unwrap().fs, HostFs::Local));
 
         let no_token = |k: &str| (k == "HOST_GATEWAY_URL").then(|| "http://gw:8083".to_string());
         assert!(configure_from_env(&no_token, &read, &[]).is_err());
@@ -754,7 +868,7 @@ mod tests {
             _ => None,
         };
         assert!(configure_from_env(&same, &read, &["svc"]).is_err(), "must differ from SERVICE_TOKEN");
-        assert!(matches!(configure_from_env(&same, &read, &["other"]).unwrap(), HostFs::Remote(_)));
+        assert!(matches!(configure_from_env(&same, &read, &["other"]).unwrap().fs, HostFs::Remote(_)));
 
         let both_adapters = |k: &str| match k {
             "SERVICES_ADAPTER_URL" => Some("http://gw:8083".to_string()),
