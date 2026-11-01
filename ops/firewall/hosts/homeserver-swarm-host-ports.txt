@@ -5,3 +5,4 @@
 # scripts/check-swarm-stacks.py enforces it. Rows: `tcp PORT` / `udp PORT`.
 tcp 11112
 tcp 20000
+tcp 19024
