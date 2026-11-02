@@ -1,4 +1,4 @@
-FROM python:3.14-slim@sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151
+FROM python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
 
 LABEL maintainer="honeypot-stack"
 LABEL description="ML anomaly detection worker for the honeypot stack"
