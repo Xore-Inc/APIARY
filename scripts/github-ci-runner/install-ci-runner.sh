@@ -587,6 +587,22 @@ cat > "$unit_dropin_dir/fix-work-ownership.conf" <<EOF
 ExecStartPre=+/opt/github-ci-runner-helpers/fix-work-ownership.sh $RUNNER_USER $RUNNER_HOME/_work
 EOF
 
+# Fork-PR admission control that the pull request cannot edit. The
+# workflow-level gate (ci-router.yml and the callers' runs-on expressions) is
+# part of the PR's own revision, so a fork can rewrite it or add a direct
+# self-hosted job. This root-owned job-started hook runs before every job's
+# steps (and therefore before any checkout of PR content) and refuses
+# pull-request-family events whose head repository is not the base
+# repository. It is wired through the root-owned systemd drop-in rather than
+# the runner-user-writable $RUNNER_HOME/.env so that a job cannot unset it.
+install -m 0755 -o root -g root \
+  "$here/github-ci-runner/job-started-hook.sh" \
+  /opt/github-ci-runner-helpers/job-started-hook.sh
+cat > "$unit_dropin_dir/job-started-hook.conf" <<EOF
+[Service]
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/github-ci-runner-helpers/job-started-hook.sh
+EOF
+
 # #3105: /var/buildx-cache is shared across every runner instance's user so
 # a docker/build-push-action cache-to/cache-from can be reused between them,
 # but the default UMask=0022 this unit ships with writes new cache files
