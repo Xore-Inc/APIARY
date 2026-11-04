@@ -285,7 +285,9 @@ step_docker_daemon_config() {
   # Matches the live VPS's /etc/docker/daemon.json exactly (fetched and
   # diffed against this, not guessed): icc/no-new-privileges/userland-proxy
   # hardening appropriate for a public-facing edge host and bounded log
-  # rotation. live-restore is off: the VPS is a swarm worker (#3589) and
+  # rotation. no-new-privileges also covers the swarm edge stacks, which
+  # cannot set security_opt themselves (#3595). live-restore is off: the
+  # VPS is a swarm manager (#3589, #3712) and
   # dockerd refuses swarm mode with live-restore, so a dockerd restart now
   # restarts the honeypot listeners (restart policies bring them back).
   cat >/etc/docker/daemon.json <<'EOF'
@@ -322,8 +324,8 @@ EOF
 # overwrites with home's real public key + PSK.
 #
 # The hub carries every spoke in ops/swarm/hosts/hub-peers.txt (#3619), not
-# only homeserver: precision (10.8.0.3) is the VPS worker's swarm path to the
-# second manager (#3589). This used to write the homeserver peer alone, so
+# only homeserver: precision (10.8.0.3) is the VPS's swarm path to the
+# other managers (#3589, #3712). This used to write the homeserver peer alone, so
 # every rebuild silently dropped precision. Spoke keys come from the host
 # (the spoke's block in the current wg0.conf, else /etc/wireguard/<name>.pub
 # and .psk), never from git; see ops/swarm/vps-hub-peer.sh render.

@@ -21,6 +21,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>14</LangVersion>
     <InternalsVisibleTo>Ghosts.Client.Universal.Tests</InternalsVisibleTo>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>

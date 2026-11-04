@@ -145,7 +145,7 @@ jobs:
             -v "$destination:$destination" \
             -w "$destination" \
             -e GPU_SMOKE_IMAGE=nvidia/cuda:12.4.0-base-ubuntu22.04 \
-            docker:cli sh -euc '
+            docker:cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb sh -euc '
               sh /repo/scripts/render-arcane-compose.sh /repo compose.yml.new auto
               if [ -f compose.yml ] && cmp -s compose.yml.new compose.yml; then
                 rm -f compose.yml.new

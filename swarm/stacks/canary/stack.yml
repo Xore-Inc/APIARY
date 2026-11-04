@@ -43,9 +43,16 @@ services:
       labels:
         apiary.pause: safe
         apiary.pause.reason: "internal canary with no dependents"
+        # #3722: the homeserver is Active; this service may run there on purpose.
+        apiary.homeserver: allow
+        apiary.homeserver.reason: "cross-host canary: spread over the homeserver and precision proves overlay, drain and rollback across hosts (#3591)"
 networks:
   canary:
     driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.1.0/24
     driver_opts:
       com.docker.network.driver.overlay.encrypt: "true"
       com.docker.network.driver.mtu: "1310"

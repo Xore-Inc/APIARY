@@ -1,16 +1,20 @@
 # Swarm phase 1: host state, rollout and runbooks (#3589)
 
-**Status (2026-10-10, applied and verified).** The three nodes form one swarm on the WireGuard hub addresses:
+**Status (2026-10-31).** The three nodes form one swarm on the WireGuard hub addresses, and **all three are managers** (applied 2026-10-10 with two managers; the VPS was promoted on 2026-10-19 and the homeserver rejoined on 2026-10-23 after the #3708 `/var` loss, [#3712](https://github.com/Xore-Inc/APIARY/issues/3712)):
 
-| Node | Swarm role, address | Availability | WireGuard | Firewall zone `apiary-swarm` |
-|---|---|---|---|---|
-| homeserver (`supermicro`) | manager (Leader), `10.8.0.2` | `Pause` (tasks schedule on precision, #3583) | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.1`, `wg-lan` `10.8.2.1` | `ens9f1`, `wg0`, `wg-fibre`, `wg-lan`; `DOCKER-USER` hub policy (`home-wg-forward`) |
-| precision | manager (Reachable), `10.8.0.3` | `Active` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.2`, `wg-lan` `10.8.2.2` | `enp4s0f1`, `wg0`, `wg-fibre`, `wg-lan` |
-| VPS (hostname `localhost`) | worker, `10.8.0.1` | `Active` | `wg0` hub (peers homeserver, precision) | `wg0` |
+| Node | Swarm role, address | Availability | Labels | WireGuard | Firewall zone `apiary-swarm` |
+|---|---|---|---|---|---|
+| homeserver (`supermicro`) | manager, `10.8.0.2` | `Active` since #3722 (`Pause` only while it is rebuilt) | `role=manager edge=false sensor=true gpu=true storage=true` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.1`, `wg-lan` `10.8.2.1` | `ens9f1`, `wg0`, `wg-fibre`, `wg-lan`; `DOCKER-USER` hub policy (`home-wg-forward`) |
+| precision | manager, `10.8.0.3` | `Active` | `role=manager edge=false sensor=false gpu=false storage=true` | `wg0` hub spoke (peer VPS), `wg-fibre` `10.8.1.2`, `wg-lan` `10.8.2.2` | `ens1f1`, `wg0`, `wg-fibre`, `wg-lan` |
+| VPS (hostname `localhost`) | manager, `10.8.0.1` | `Active` | `role=worker edge=true sensor=false gpu=false storage=false` | `wg0` hub (peers homeserver, precision) | `wg0` |
 
-Both managers are needed for quorum: if either fails, running tasks continue but scheduling and updates stop (accepted, #3587 decision 1). Never promote the VPS. Phase 1 creates no stack or service. Compose projects, sensor binds, Arcane, runners and the registry mirror are unchanged.
+The leader moves between the three; read it from `swarm-membership.sh status`. Raft keeps quorum with any **one** manager down; losing two stops scheduling and updates (running tasks continue) until the [quorum recovery runbook](#runbook-lost-quorum) is run.
 
-The decisions, flow matrix, MTU budget and failure modes are in [docs/SWARM-NETWORK.md](../../docs/SWARM-NETWORK.md).
+**Placement, not availability, keeps work off the homeserver (#3722).** A `pause` node rejects the network-attachment tasks of its own Compose containers, so Ollama and Galah could not join the `galah-broker_*` overlays while the homeserver was paused, and no stack pinned to it (sensors, GPU, the #3579 gateway) could schedule. Every service therefore states its homeserver placement, and `scripts/check-swarm-stacks.py` enforces it: `node.labels.sensor == false` keeps it off, a `sensor == true`/`gpu == true` constraint pins it there, or the deploy labels `apiary.homeserver: allow` plus a reason let it spread there (the canary and the Galah broker).
+
+The `role` label is a placement label, not the raft role. The VPS keeps `role=worker` on purpose: every stack constraint uses `node.labels.role == manager`, so its manager status puts no workload on the edge host. The accepted trade-off (the internet-facing host holds the raft store, the cluster CA and every swarm secret; autolock is still off) is recorded on [#3589](https://github.com/Xore-Inc/APIARY/issues/3589#issuecomment-6256193293).
+
+The decisions, flow matrix, MTU budget and failure modes are in [docs/SWARM-NETWORK.md](../../docs/SWARM-NETWORK.md). GPU scheduling (phase 7, design only) is in [docs/SWARM-GPU.md](../../docs/SWARM-GPU.md).
 
 ## What lives where
 
@@ -24,8 +28,9 @@ Keys, preshared keys, join tokens, the VPS public endpoint and the homeserver LA
 | `vps-hub-peer.sh` | `/usr/local/libexec/apiary-vps-hub-peer`; `add` adds a spoke live and to `wg0.conf` (and keeps its keys in `/etc/wireguard/<name>.pub`/`.psk`); `render` prints the `[Peer]` blocks for `install-vps.sh` | VPS |
 | `peer-route.sh`, `peer-route.service` | `/usr/local/libexec/apiary-swarm-peer-route`, `/etc/systemd/system/peer-route.service` (enabled) | homeserver, precision |
 | `hosts/homeserver.env`, `hosts/precision.env` | `/etc/apiary/swarm-peer.env` | homeserver, precision |
-| `../firewall/swarm-plane.sh`, `../firewall/hosts/*.env` | env rendered to `/etc/apiary/swarm-plane.env` (precision: `REPLACE_WITH_HOMESERVER_LAN_IP` filled in) | all three |
+| `../firewall/swarm-plane.sh`, `../firewall/hosts/*.env` | env rendered to `/etc/apiary/swarm-plane.env` (precision: `REPLACE_WITH_HOMESERVER_LAN_IP` filled in); every host has `SWARM_MANAGER=1` | all three |
 | `../firewall/home-wg-forward.{sh,service}`, `../firewall/hosts/homeserver-wg-ports.txt` | `/usr/local/libexec/apiary-home-wg-forward`, `/etc/systemd/system/home-wg-forward.service`, `/etc/apiary/homeserver-wg-ports.txt` | homeserver |
+| `../firewall/home-swarm-host-guard.{sh,service}`, `../firewall/hosts/homeserver-swarm-host-ports.txt` | `/usr/local/libexec/apiary-home-swarm-host-guard`, `/etc/systemd/system/home-swarm-host-guard.service`, `/etc/apiary/homeserver-swarm-host-ports.txt` (#3593) | homeserver |
 | `nm-profiles.sh`, `hosts/homeserver.nm`, `hosts/precision.nm` | NetworkManager profiles (LAN, fibre, MTU 9000, metrics, zones); placeholders from `/etc/apiary/host.env` | homeserver, precision |
 | `hosts/precision-multihome.conf` | `/etc/sysctl.d/90-apiary-multihome.conf` | precision |
 | `hosts/arcane-fibre-tunnel.service` | `~xore/.config/systemd/user/arcane-fibre-tunnel.service` (user unit, linger on) | precision |
@@ -37,7 +42,9 @@ Keys, preshared keys, join tokens, the VPS public endpoint and the homeserver LA
 
 homeserver's strict `rp_filter` on `ens9f0`/`eno1` comes from the distribution default (`/usr/lib/sysctl.d/50-redhat.conf`), not a site file. It is what drops spoofed fibre or hub sources arriving on the LAN. `wg-fibre`/`wg-lan` set loose mode in their `PostUp`, because the peer hub `/32` moves between them on failover and `AllowedIPs` already rejects spoofed sources.
 
-Check for drift at any time: `nm-profiles.sh check hosts/HOST.nm`, `swarm-plane.sh status /etc/apiary/swarm-plane.env`, `swarm-membership.sh status`.
+Check for drift at any time: `nm-profiles.sh check hosts/HOST.nm`, `swarm-plane.sh status /etc/apiary/swarm-plane.env`, `swarm-membership.sh status`. Compare `/etc/apiary/swarm-plane.env` with the repo env on each host (the only expected difference is precision's filled-in `WG_LAN_PEER`).
+
+`swarm-plane.sh apply` only adds and removes rules of the shapes it emits (the swarm ports, ESP, peer SSH, ICMP, its logged drops). Any other rule in `apiary-swarm` is kept and listed by `apply` and `status` as **unmanaged**. Today that is one hand-added rule on the homeserver, `10.8.0.0/24 → 3552/tcp` (Arcane). It is redundant: Arcane is a Docker-published port on `10.8.0.2:3552`, so hub traffic to it is DNATed and allowed by `home-wg-forward` in `DOCKER-USER`, never by this `INPUT` zone. Until #3712 the script treated every rule in the zone as its own and deleted that one on 2026-10-23.
 
 ## Runbook: Compose DNS after swarm membership changes (#3621)
 
@@ -79,6 +86,8 @@ config name (`<base>_vN`) and `x-apiary-file` for each. `stackctl.py` creates
 the immutable config from the exact commit being deployed. Do not use `file:`:
 Arcane prunes the configs it creates after an update, leaving rollback unable
 to start the previous task. Use digest-pinned images from the #3597 manifest.
+
+Every overlay a stack defines pins its subnet (`ipam.config: [{subnet: 10.200.N.0/24}]`), a free /24 inside the fleet pool `10.200.0.0/16` (`10.200.0.0/24` is ingress). The lint checks the range and uniqueness across stacks. Since the 2026-10-19 force-new-cluster the allocator ignores the configured pool and hands out `10.0.x` (#3763). Taken: `.1` canary, `.2`/`.3` galah-broker back/front, `.4` dashboard-sessions, `.5` sensor-dicompot, `.6` edge-unsloth, `.7` sensor-dnp3, `.8` edge-revdeck, `.9` sensor-endlessh, `.10` sensor-http. To move a live stack onto a new subnet: `stackctl remove --yes`, then `ensure` (a deploy never modifies an existing network); disconnect any non-swarm container from an attachable overlay first, or the network survives the removal and keeps its old subnet.
 
 Each secret is an external `<base>_vN`, created out of band from stdin. Services
 read it through a `_FILE` variable pointing into `/run/secrets/`; values and
@@ -132,7 +141,7 @@ One host at a time. Before **every** network, firewall or swarm change, arm a de
 | `network-rollback.sh backup` / `arm DIR 10min` → `swarm-net-rollback-3589` | homeserver, precision | `/etc/wireguard`, `wg-quick@*` and `peer-route` state, routes, the Arcane user unit, the `DOCKER-USER` hub policy |
 | `swarm-plane.sh backup` / `ROLLBACK_UNIT=fw-rollback-3589 swarm-plane.sh arm DIR 10min` | all | `/etc/firewalld` and NM zone bindings |
 | `vps-hub-peer.sh arm PUBKEY 10min` → `vps-hub-peer-rollback-3589` | VPS | removes that one hub peer and restores `wg0.conf`, **without** touching the homeserver peer (no `syncconf` or restart) |
-| `swarm-membership.sh arm 10min` → user unit `swarm-membership-rollback-3589` | workstation | phase-0 membership: homeserver sole manager on `10.254.250.1` (`Pause`), precision worker |
+| `swarm-membership.sh arm 10min` → user unit `swarm-membership-rollback-3589` | workstation | phase-0 membership: homeserver sole manager on `10.254.250.1` (`Pause`), precision worker. **Bootstrap only:** it refuses once the swarm has services, configs or secrets (true since phase 4), because a re-init would destroy them. |
 
 Order used on 2026-10-10:
 1. `wireguard-tools` on precision.
@@ -141,7 +150,7 @@ Order used on 2026-10-10:
 4. VPS: `vps-hub-peer.sh arm`, then `add` the precision peer (`10.8.0.3/32`, PSK). precision: `wg0` up, `peer-route.service`. Prove that homeserver↔precision hub traffic does not touch the VPS: the VPS precision-peer counters stay flat while precision pings `10.8.0.2`.
 5. `swarm-membership.sh managers` (homeserver re-initialised on `10.8.0.2` with the existing `10.200.0.0/16` /24 address pool, `Pause`, ingress MTU 1310; precision joins as manager on `10.8.0.3`).
 6. homeserver `wg0` into `apiary-swarm` plus `home-wg-forward`. Then VPS `wg0` into `apiary-swarm` (`SWARM_SSH_PORT=2222`: VPS port 22 is the cowrie honeypot). `check-home-wg-ports.py LIVE_PORTS` must pass first. Watch the `APIARY-WG-IN` DROP counter: it must not grow with normal traffic.
-7. VPS: `live-restore` off via `systemctl reload docker` (no container restart; swarm refuses live-restore), then `swarm-membership.sh join-vps` and `labels`.
+7. VPS: `live-restore` off via `systemctl reload docker` (no container restart; swarm refuses live-restore), then `swarm-membership.sh join-vps` and `labels`. (On 2026-10-10 `join-vps` joined a worker; since #3712 it joins the VPS as a manager, and the VPS env opens TCP 2377 to the two peers first.)
 8. `arcane-fibre-tunnel` switched to `xore@10.8.0.2`, after pinning `10.8.0.2` in its `known_hosts` only if its key equals the trusted `10.254.250.1` entry, and adding `10.8.0.3` to the `from=` of its `authorized_keys` line.
 
 ### Proofs to repeat after any change
@@ -152,8 +161,8 @@ Order used on 2026-10-10:
   sudo systemd-run --on-active=3min --unit=fibre-cut-rollback-3589 /usr/sbin/nft delete table inet cut3589
   sudo nft -f - <<'EOF'
   table inet cut3589 {
-    chain in  { type filter hook input  priority -300; iifname "enp4s0f1" drop; }
-    chain out { type filter hook output priority -300; oifname "enp4s0f1" drop; }
+    chain in  { type filter hook input  priority -300; iifname "ens1f1" drop; }
+    chain out { type filter hook output priority -300; oifname "ens1f1" drop; }
   }
   EOF
   ```
@@ -165,19 +174,58 @@ Order used on 2026-10-10:
 1. Record state: `docker node ls`, `docker node inspect NODE --format '{{.Spec.Availability}}'`, active CI jobs (`gh api repos/Xore-Inc/APIARY/actions/runners`), any running backfill, and the `honeypot-v2*` count.
 2. Wait until no CI job or backfill would be cut off. For precision, also stop the runner units if the work restarts Docker.
 3. `docker node update --availability drain NODE` (from a manager). Draining moves tasks; it does **not** remove a manager's Raft vote.
-4. Do the work. **Powering off or rebooting a manager loses quorum**: running tasks continue, but nothing schedules until it is back. Keep the window short, and never take both managers down. Losing the VPS worker costs only its tasks.
-5. Restore the recorded availability: precision and VPS `active`; homeserver `pause`, never `active` (#3583).
-6. Verify: `docker node ls` from both managers (all `Ready`, one Leader), `wg show` handshakes on the node's tunnels, `ip route show exact 10.8.0.2/32` (or `10.8.0.3/32`) via `wg-fibre`, `peer-route.service` active, Arcane `precision` online, runners online, ingest rising with public `source.ip`.
+4. Do the work. With three managers, one may be down and the other two keep quorum. **Never take two hosts down at once** (that includes rebooting the VPS while precision or the homeserver is down): nothing schedules until quorum returns. A dockerd restart on the VPS also restarts portbridge and the edge containers (no `live-restore`).
+5. Restore the recorded availability: all three `active` (the homeserver since #3722; it is `pause` only during its own rebuild).
+6. Verify: `docker node ls` from every manager (all `Ready`, one Leader), `wg show` handshakes on the node's tunnels, `ip route show exact 10.8.0.2/32` (or `10.8.0.3/32`) via `wg-fibre`, `peer-route.service` active, Arcane `precision` online, runners online, ingest rising with public `source.ip`.
 
 ## Runbook: restart after a precision storage migration or reboot
 
 Lesson from #3584: Docker and the runners must never start on empty mountpoints.
 1. **Before** starting Docker or runners: compare the storage UUID in `hosts/precision-fstab.fragment` and `/etc/fstab` with `blkid -s UUID -o value /dev/md126p1` (a reinstall can change it). Run `findmnt --mountpoint PATH -o TARGET,SOURCE,FSTYPE` separately for `/var/lib/precision-storage`, `/var/lib/docker`, `/var/lib/github-runners`, and `/var/lib/github-runner-data`. The first must be the XFS volume and the other three binds from `/var/lib/precision-storage/live/*`. If one is missing, **stop**: starting on the root filesystem creates divergent state.
-2. Network: `nm-profiles.sh check hosts/precision.nm`; `wg show` for `wg0`, `wg-fibre` and `wg-lan`; `systemctl is-active peer-route.service`; `ip route show exact 10.8.0.2/32` via `wg-fibre`; `firewall-cmd --get-active-zones` lists `enp4s0f1 wg0 wg-fibre wg-lan` in `apiary-swarm`.
-3. Docker: `docker info` (swarm `active`, NodeAddr `10.8.0.3`, manager), and `docker node ls` from both managers.
+2. Network: `nm-profiles.sh check hosts/precision.nm`; `wg show` for `wg0`, `wg-fibre` and `wg-lan`; `systemctl is-active peer-route.service`; `ip route show exact 10.8.0.2/32` via `wg-fibre`; `firewall-cmd --get-active-zones` lists `ens1f1 wg0 wg-fibre wg-lan` in `apiary-swarm`. udev names precision's NetXen card by slot (`ens1f0` LAN, `ens1f1` fibre); if a hardware change renames it, fix `hosts/precision.nm` and `../firewall/hosts/precision.env` before applying either.
+3. Docker: `docker info` (swarm `active`, NodeAddr `10.8.0.3`, manager), and `docker node ls` from every manager.
 4. Arcane: `systemctl --user is-active arcane-fibre-tunnel`, `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13552/api/health` → 200, and environment `precision` `online` in the manager.
 5. Runners: every unit in `hosts/precision-runners.txt` active and online in GitHub. `ci-registry-mirror.service` active, published on `172.16.0.1:5555` only.
 6. Run a GitOps sync, and confirm homeserver ingest is still rising with public `source.ip`.
+
+## Sensor and edge stacks: what replaces per-service hardening (#3593, #3595)
+
+Two things a Compose file sets per service cannot be expressed in a swarm stack:
+
+- **`security_opt: no-new-privileges`.** `docker service create` has no such option and `docker stack deploy` drops it (checked on Docker 29.9.2, API 1.56). Decision (Xore, 2026-10-31, option A on #3587): `"no-new-privileges": true` daemon-wide in `/etc/docker/daemon.json`. The **VPS** has had it since its installer was written (`docker info` lists `name=no-new-privileges`; all 50 containers run with `NoNewPrivs: 1`). The **homeserver** gets it in the post-benchmark dockerd restart window (`scripts/install-homeserver.sh` `step_docker_daemon_config`, or the same key added surgically to the live file). Exemption: `hp-tanner-docker` sets `no-new-privileges:false` (privileged nested daemon).
+- **Binding a published port to one address.** A `mode: host` port binds every address of the node. On the homeserver, `home-swarm-host-guard.sh` drops NEW flows to every listed sensor port unless they come from the VPS on `wg0` to `10.8.0.2` (then `home-wg-forward` applies its own list). `scripts/check-swarm-stacks.py` fails a sensor stack whose host-mode port is not in `homeserver-swarm-host-ports.txt`, and fails any sensor port not in `mode: host`.
+
+**Audit before the homeserver change (2026-10-31, live, every running container):** 67 of about 80 homeserver containers already run with `no-new-privileges` per service. Among the others (13 to 15, depending on short-lived containers), no process had gained privilege by setuid, setgid or file capabilities (per-process real/effective IDs and `CapEff` from `/proc`), and no repository Dockerfile `RUN` uses a setuid tool. Suricata on the VPS drops to its own user with retained capabilities (libcap-ng), which works under the flag: it already runs that way there, and a test container with the flag reached `Engine started`. Watch after the restart: `hp-tanner-docker` (exempted), the privileged `buildx_buildkit_*` builders (their `RUN` steps inherit the flag; run one CI image build), and `technitium-dns` and the Arkime containers (root, no gain seen).
+
+Guard install (homeserver, inside the `swarm-plane.sh`-style dead-man, before the first sensor stack):
+
+```bash
+sudo install -m 0755 ops/firewall/home-swarm-host-guard.sh /usr/local/libexec/apiary-home-swarm-host-guard
+sudo install -m 0644 ops/firewall/hosts/homeserver-swarm-host-ports.txt /etc/apiary/homeserver-swarm-host-ports.txt
+sudo install -m 0644 ops/firewall/home-swarm-host-guard.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now home-swarm-host-guard.service
+sudo /usr/local/libexec/apiary-home-swarm-host-guard status
+```
+
+Changing the port list: `systemctl stop` (rollback), install the new list, `systemctl start`. Prove each port from the LAN (`nmap` against the LAN address: `filtered`, an `apiary-swarm-host:` kernel log line) and through the VPS (a real request indexed with its public `source.ip`).
+
+## Runbook: lost quorum
+
+Two of three managers gone (or the old two-manager case, #3708): any surviving manager reports `The swarm does not have a leader`; nothing can be listed, scheduled or changed, and running tasks keep running. The full procedure, with the checks and the reasons behind each step, is [docs/HOMESERVER-VAR-RECOVERY.md part 12](../../docs/HOMESERVER-VAR-RECOVERY.md#12-swarm-quorum-recovery). `swarm-membership.sh` scripts the swarm half, from the admin workstation:
+
+```bash
+ops/swarm/swarm-membership.sh status                         # confirm no manager answers
+ops/swarm/swarm-membership.sh restore-quorum precision --yes # backup to /root on the survivor, then --force-new-cluster on 10.8.0.3
+ops/swarm/swarm-membership.sh forget homeserver --yes        # remove each dead node entry
+# rebuild the dead host, then on it: swarm-plane.sh backup/arm/apply (2377 from its peers), and
+ops/swarm/swarm-membership.sh join homeserver                # manager via a live manager; paused while it is rebuilt
+ops/swarm/swarm-membership.sh labels
+ops/swarm/swarm-membership.sh status
+```
+
+Set the homeserver `active` again before starting Ollama or Galah (#3722). `restore-quorum` refuses while any manager still answers with quorum, and refuses a survivor without raft WAL. It keeps services, configs, secrets and the survivors' labels; expect the new leader to replace stale tasks (`Failed "No such container"`). `join` runs `container-dns.sh rejoin` on the joined host (#3621). After the rebuild, re-run `swarm-plane.sh apply` on **every** host and read the semantic diff: a lost `/var` also loses `/var/lib/apiary-firewall` and can leave old LAN accepts behind.
+
+The 2026-10-19 recovery used exactly this sequence by hand, from precision, and the VPS reconnected on its own (records on [#3587](https://github.com/Xore-Inc/APIARY/issues/3587)).
 
 ## Runbook: key rotation
 

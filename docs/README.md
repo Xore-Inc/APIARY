@@ -13,6 +13,7 @@ kind of truth it holds.
 | [PIPELINES.md](PIPELINES.md) | data flow: ingestion → enrichment → indexing → worker loops → dashboard reads; payload lifecycle; full index catalog |
 | [NETWORK.md](NETWORK.md) | network design: CGNAT pattern, ingress paths, source attribution, per-sensor isolation, Docker control surface |
 | [SWARM-NETWORK.md](SWARM-NETWORK.md) | swarm network: WireGuard hub-and-spoke and fibre decisions, addressing and MTU, flow matrix, failure modes, swarm-plane firewall and rollback |
+| [SWARM-GPU.md](SWARM-GPU.md) | swarm phase 7: the homeserver GPU as a generic resource, runtime config, GPU stack lint, which GPU services become stacks, rollout after the benchmark |
 | [STORAGE.md](STORAGE.md) | storage: host tree contract, who-writes/who-reads, Elasticsearch layout, retention and growth bounds |
 
 ## Runbooks — how to operate it

@@ -407,7 +407,13 @@ jobs:
   backend-service:
     name: Dashboard backend-service (Rust)
     needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver == 'true'
+    # Never run pull_request code here. Cargo executes checkout-controlled
+    # build scripts, proc-macros and tests as the runner user, and this job
+    # deliberately keeps the persistent HOME (~/.cargo, rustup) and prepends
+    # $HOME/.cargo/bin to PATH without verification, so a PR could plant
+    # tooling that a later trusted job on this runner would execute.
+    # Pull requests use the ephemeral GitHub-hosted twin below instead.
+    if: needs.ci-target.outputs.homeserver == 'true' && github.event_name != 'pull_request'
     runs-on: [self-hosted, linux, x64, honeypot-ci]
     timeout-minutes: 90
     defaults:
@@ -682,7 +688,7 @@ jobs:
   backend-service-cloud:
     name: Dashboard backend-service (Rust) (GitHub-hosted)
     needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver != 'true'
+    if: needs.ci-target.outputs.homeserver != 'true' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:

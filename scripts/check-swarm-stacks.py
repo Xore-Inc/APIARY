@@ -33,6 +33,34 @@ Per service:
     must be replicated (a global service cannot be scaled to 0).
   - no plain secret-looking environment value: PASSWORD/TOKEN/SECRET/API_KEY
     variables use the `_FILE` form pointing into /run/secrets/.
+  - an explicit homeserver placement (#3722). The homeserver (labels
+    sensor=true gpu=true) is an `Active` node, because a non-Active node
+    rejects the network-attachment tasks of its Compose containers. So
+    "keep off the sensor/ES host" (#3583) is a constraint, not availability.
+    Each service either excludes it (`node.labels.sensor == false`, or
+    `node.labels.edge == true` for VPS edge stacks), pins to
+    it (`node.labels.sensor == true`, `node.labels.gpu == true` or
+    `node.hostname == supermicro`), or opts in with the deploy labels
+    `apiary.homeserver: allow` and `apiary.homeserver.reason`.
+  - sensor services (`node.labels.sensor == true`, #3593) publish only with
+    `mode: host` (the ingress mesh would replace the attacker's source IP),
+    and every published port is listed in
+    ops/firewall/hosts/homeserver-swarm-host-ports.txt, so
+    home-swarm-host-guard.sh keeps it off the LAN (a host-mode port binds
+    every address of the node).
+  - GPU services (#3594, docs/SWARM-GPU.md): swarm ignores
+    `deploy.resources.reservations.devices`, so a GPU is reserved only as the
+    generic resource `NVIDIA-GPU`. A service reserving it must pin to
+    `node.labels.gpu == true` and use `stop-first` for update and rollback:
+    there is one GPU, so a start-first replacement would wait forever for the
+    unit its predecessor still holds.
+
+Per network (#3763):
+  - every overlay a stack defines pins one `ipam.config` subnet, a /24
+    inside the fleet pool 10.200.0.0/16 other than 10.200.0.0/24 (ingress),
+    and no two stacks share one. Since the 2026-10-19 force-new-cluster the
+    allocator hands out 10.0.x despite the configured pool, and 10.0.0.0/8
+    runs into the 10.8.x tunnels.
 
 Usage:
   python3 scripts/check-swarm-stacks.py [--root DIR] [FILE...]
@@ -42,6 +70,7 @@ Needs PyYAML.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import re
 import sys
 from pathlib import Path
@@ -69,6 +98,14 @@ SECRETISH_ENV = re.compile(r"(^|_)(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|P
 PAUSE_VERDICTS = {"safe", "unit", "never"}
 RESTART_CONDITIONS = {"any", "on-failure", "none"}
 UPDATE_ORDERS = {"start-first", "stop-first"}
+GPU_KIND = "NVIDIA-GPU"
+GPU_PIN = re.compile(r"^node\.labels\.gpu\s*==\s*true$")
+# Constraints that settle whether a task may run on the homeserver (#3722).
+_WS = r"\s*"
+HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.(sensor{_WS}=={_WS}false|edge{_WS}=={_WS}true)$")
+HOMESERVER_PIN = re.compile(
+    rf"^(node\.labels\.sensor{_WS}=={_WS}true|node\.labels\.gpu{_WS}=={_WS}true|node\.hostname{_WS}=={_WS}supermicro)$"
+)
 
 
 def stack_files(root: Path) -> list[Path]:
@@ -102,6 +139,62 @@ def _labels(raw) -> dict[str, str]:
     return out
 
 
+SWARM_HOST_PORTS = "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+SENSOR_PIN = re.compile(r"^node\.labels\.sensor\s*==\s*true$")
+
+
+def _guard_ports(root: Path) -> set[tuple[str, int]]:
+    f = root / SWARM_HOST_PORTS
+    out: set[tuple[str, int]] = set()
+    if f.is_file():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and not parts[0].startswith("#") and parts[1].isdigit():
+                out.add((parts[0], int(parts[1])))
+    return out
+
+
+def _published(ports) -> list[tuple[str, int | None, str]]:
+    """(protocol, published, mode) for long-syntax ports; short syntax -> mode 'ingress'."""
+    out = []
+    for p in ports or []:
+        if isinstance(p, dict):
+            pub = p.get("published")
+            out.append((str(p.get("protocol", "tcp")), int(pub) if pub is not None else None,
+                        str(p.get("mode", "ingress"))))
+        else:
+            out.append(("tcp", None, "ingress"))
+    return out
+
+
+FLEET_POOL = ipaddress.ip_network("10.200.0.0/16")
+INGRESS_SUBNET = ipaddress.ip_network("10.200.0.0/24")
+
+
+def network_subnets(doc: dict) -> tuple[dict[str, str], list[str]]:
+    """(network -> pinned subnet, problems) for the overlays a stack defines."""
+    pinned: dict[str, str] = {}
+    problems: list[str] = []
+    for name, net in (doc.get("networks") or {}).items():
+        net = net or {}
+        if net.get("external") or net.get("driver", "overlay") != "overlay":
+            continue
+        subs = [c.get("subnet") for c in ((net.get("ipam") or {}).get("config") or []) if isinstance(c, dict)]
+        if len(subs) != 1 or not subs[0]:
+            problems.append(f"network {name}: pin exactly one `ipam.config` subnet inside {FLEET_POOL} (#3763)")
+            continue
+        try:
+            sub = ipaddress.ip_network(str(subs[0]))
+        except ValueError:
+            problems.append(f"network {name}: subnet {subs[0]!r} is not a network address")
+            continue
+        if not sub.subnet_of(FLEET_POOL) or sub.prefixlen != 24 or sub == INGRESS_SUBNET:
+            problems.append(f"network {name}: subnet {sub} must be a /24 inside {FLEET_POOL}, not {INGRESS_SUBNET} (ingress)")
+            continue
+        pinned[name] = str(sub)
+    return pinned, problems
+
+
 def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
     rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
     errors: list[str] = []
@@ -117,6 +210,9 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
         return [f"{rel}: unparseable YAML: {exc}"]
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict) or not doc["services"]:
         return [f"{rel}: no services"]
+
+    for problem in network_subnets(doc)[1]:
+        err(problem)
 
     for name, sec in (doc.get("secrets") or {}).items():
         sec = sec or {}
@@ -189,6 +285,42 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
             err(f"{where}: deploy.labels apiary.pause.reason must say why")
         if verdict in {"safe", "unit"} and deploy.get("mode", "replicated") != "replicated":
             err(f"{where}: apiary.pause={verdict} needs mode replicated; a global service cannot be scaled to 0")
+        constraints = [str(c).strip() for c in ((deploy.get("placement") or {}).get("constraints") or [])]
+        decided = any(HOMESERVER_EXCLUDE.match(c) or HOMESERVER_PIN.match(c) for c in constraints)
+        allow = dlabels.get("apiary.homeserver")
+        if allow is not None and allow != "allow":
+            err(f"{where}: deploy.labels apiary.homeserver must be `allow` (or drop it and constrain placement)")
+        elif allow == "allow" and not dlabels.get("apiary.homeserver.reason"):
+            err(f"{where}: deploy.labels apiary.homeserver.reason must say why this service may run on the homeserver")
+        elif not decided and allow != "allow":
+            err(f"{where}: placement must decide the homeserver (#3722): add `node.labels.sensor == false` to keep "
+                "off it, pin with `node.labels.sensor == true`, or set deploy.labels apiary.homeserver: allow + reason")
+
+        if any(SENSOR_PIN.match(c) for c in constraints):
+            guarded = _guard_ports(root)
+            for proto, pub, mode in _published(svc.get("ports")):
+                if mode != "host":
+                    err(f"{where}: sensor ports must use long syntax with `mode: host`; the ingress mesh "
+                        "hides the attacker's source IP (#3593)")
+                elif pub is None:
+                    err(f"{where}: sensor ports need an explicit `published:` port")
+                elif (proto, pub) not in guarded:
+                    err(f"{where}: published {proto} {pub} is not in {SWARM_HOST_PORTS}; "
+                        "home-swarm-host-guard.sh would leave it open on the LAN")
+
+        reservations = ((deploy.get("resources") or {}).get("reservations") or {})
+        if reservations.get("devices"):
+            err(f"{where}: deploy.resources.reservations.devices is ignored by swarm; reserve the GPU as "
+                f"generic_resources kind {GPU_KIND} (docs/SWARM-GPU.md)")
+        kinds = [((g or {}).get("discrete_resource_spec") or {}).get("kind")
+                 for g in (reservations.get("generic_resources") or [])]
+        if GPU_KIND in kinds:
+            if not any(GPU_PIN.match(c) for c in constraints):
+                err(f"{where}: a {GPU_KIND} reservation needs the constraint node.labels.gpu == true")
+            if uc.get("order") != "stop-first" or rc.get("order") != "stop-first":
+                err(f"{where}: a {GPU_KIND} reservation needs stop-first update_config and rollback_config "
+                    "(one GPU: a start-first task waits for the unit its predecessor holds)")
+
         probe = dlabels.get("apiary.probe")
         if probe and not re.match(r"^(tcp:\d+|http:\d+/\S*)$", probe):
             err(f"{where}: apiary.probe {probe!r} must be tcp:PORT or http:PORT/path")
@@ -216,8 +348,21 @@ def main(argv: list[str] | None = None) -> int:
         if tpl.is_file():
             targets.append((tpl, True))
     errors: list[str] = []
+    seen: dict[str, str] = {}
     for path, is_template in targets:
         errors += check_file(path, root, template=is_template)
+        if is_template:
+            continue
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            continue
+        for net, sub in network_subnets(doc)[0].items():
+            where = f"{path.parent.name}/{net}"
+            if sub in seen:
+                errors.append(f"{where}: subnet {sub} is already pinned by {seen[sub]} (#3763)")
+            else:
+                seen[sub] = where
     if errors:
         sys.stderr.write(f"swarm stack conventions (#3590): {len(errors)} problem(s)\n")
         for e in errors:
