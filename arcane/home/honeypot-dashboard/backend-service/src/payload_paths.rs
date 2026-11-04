@@ -11,6 +11,8 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+pub use crate::host_fs::PayloadRef;
+
 fn hash_name_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^[0-9a-fA-F]{32,64}$").unwrap())
@@ -84,19 +86,31 @@ fn find_case_insensitive(dir: &Path, name_lower: &str) -> Option<PathBuf> {
 /// doesn't match any filename directly (case-insensitively) is reported
 /// not-found. Follow-up if that gap matters in practice.
 pub fn resolve_payload_path(hash: &str) -> Result<PathBuf, &'static str> {
+    resolve_in(&payload_dirs(), hash)
+}
+
+/// `resolve_payload_path` over an explicit directory list (the host gateway
+/// passes its own, so it never depends on this process's environment).
+pub fn resolve_in(dirs: &[String], hash: &str) -> Result<PathBuf, &'static str> {
     if !is_valid_hash(hash) {
         return Err("invalid payload id");
     }
-    for dir in payload_dirs() {
-        let direct = Path::new(&dir).join(hash);
+    for dir in dirs {
+        let direct = Path::new(dir).join(hash);
         if std::fs::metadata(&direct).map(|meta| meta.is_file()).unwrap_or(false) {
             return Ok(direct);
         }
-        if let Some(found) = find_case_insensitive(Path::new(&dir), hash) {
+        if let Some(found) = find_case_insensitive(Path::new(dir), hash) {
             return Ok(found);
         }
     }
     Err("captured payload not found")
+}
+
+/// Resolves a hash through the host seam (#3582): this host's disk, or the
+/// host gateway when `HOST_GATEWAY_URL` is set. What every request handler uses.
+pub fn resolve_payload(hash: &str) -> Result<PayloadRef, &'static str> {
+    crate::host_fs::host().resolve_payload(hash)
 }
 
 const HEAD_BYTES: usize = 64 << 10;
@@ -104,11 +118,6 @@ const HEAD_BYTES: usize = 64 << 10;
 /// Reads the first 64KiB of a resolved payload path — the same prefix
 /// classify_payload works from, so the button that routes a submission can
 /// never disagree with the row's own displayed classification.
-pub fn read_payload_head(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
-    let mut buf = vec![0u8; HEAD_BYTES];
-    let n = file.read(&mut buf)?;
-    buf.truncate(n);
-    Ok(buf)
+pub fn read_payload_head(payload: &PayloadRef) -> std::io::Result<Vec<u8>> {
+    crate::host_fs::host().read_payload(payload, HEAD_BYTES as u64).map(|(head, _)| head)
 }

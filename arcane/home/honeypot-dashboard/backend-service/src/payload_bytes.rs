@@ -14,7 +14,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::payload_paths::resolve_payload_path;
+use crate::payload_paths::resolve_payload;
 use crate::AppState;
 
 const PAYLOAD_BYTES_INDEX: &str = "dashboard-payload-bytes-v1";
@@ -40,13 +40,17 @@ pub async fn ensure_mirrored(state: &AppState, hash: &str) {
     let _ = state.es.index_doc(PAYLOAD_BYTES_INDEX, hash, doc).await;
 }
 
+/// Reads the capture through the host seam (#3582): local disk, or the host
+/// gateway when this service runs off the sensor host.
 fn mirror_from_disk(hash: &str) -> Option<Value> {
-    let path = resolve_payload_path(hash).ok()?;
-    let meta = std::fs::metadata(&path).ok()?;
-    if meta.len() > RAW_CAP_BYTES {
-        return Some(json!({"hash": hash, "size_bytes": meta.len(), "too_large": true}));
+    let payload = resolve_payload(hash).ok()?;
+    if payload.size > RAW_CAP_BYTES {
+        return Some(json!({"hash": hash, "size_bytes": payload.size, "too_large": true}));
     }
-    let data = std::fs::read(&path).ok()?;
+    let (data, size) = crate::host_fs::host().read_payload(&payload, RAW_CAP_BYTES).ok()?;
+    if size > RAW_CAP_BYTES {
+        return Some(json!({"hash": hash, "size_bytes": size, "too_large": true}));
+    }
     let data_base64 = base64::engine::general_purpose::STANDARD.encode(&data);
     Some(json!({"hash": hash, "size_bytes": data.len(), "data_base64": data_base64}))
 }
