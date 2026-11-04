@@ -480,13 +480,6 @@ def refuse_unhonoured_params(engine: str, payload: dict) -> None:
     discarded = [p for p in ENGINE_DISCARDS if payload.get(p) is not None]
     if discarded and is_zero_temperature(payload.get("temperature")):
         discarded = []
-    """
-    if engine == "ollama":
-        return
-    rejected = [p for p in ENGINE_REJECTS if payload.get(p)]
-    discarded = [p for p in ENGINE_DISCARDS if payload.get(p) is not None]
-    if discarded and is_zero_temperature(payload.get("temperature")):
-        discarded = []
     if discarded or rejected:
         raise SystemExit(
             f"--engine {engine} cannot honour {sorted(discarded + rejected)}; "
@@ -907,9 +900,6 @@ def main() -> int:
     # unseeded colibri cell cannot cost a digest round-trip before saying no.
     # The request's own temperature rides along: without it a temperature-0
     # colibri cell would be refused here even though ask_model accepts it.
-    refuse_unhonoured_params(args.engine, {
-        "seed": request.get("seed"),
-        "temperature": request.get("temperature"),
     refuse_unhonoured_params(args.engine, {
         "seed": request.get("seed"),
         "temperature": request.get("temperature"),

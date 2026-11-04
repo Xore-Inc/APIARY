@@ -31,9 +31,11 @@ Run: python analysis/ghidra/benchmarks/tests/test_request_timeout.py  (CI qualit
 """
 
 import importlib.util
+import io
 import json
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -139,6 +141,37 @@ class RequestTimeoutFollowsTheOutputBudgetTest(unittest.TestCase):
         # budget no slot declares.
         absurd = _timeout_for(_chat_body(10 ** 6))
         self.assertEqual(absurd, evaluate_models.MAX_REQUEST_TIMEOUT_SECONDS)
+
+    def test_installed_model_chat_recovers_from_transient_404(self):
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append((req.full_url, timeout))
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error":"model not found"}'))
+            return _FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch.object(evaluate_models.time, "sleep") as sleep:
+            result = evaluate_models.request_json("http://stub:11434/api/chat", _chat_body(8))
+        self.assertTrue(result["done"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+        sleep.assert_called_once_with(0.25)
+
+    def test_persistent_404_and_non_chat_404_are_reported(self):
+        calls = []
+
+        def missing(req, timeout=None):
+            calls.append(req.full_url)
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error":"model not found"}'))
+
+        with mock.patch("urllib.request.urlopen", side_effect=missing), mock.patch.object(evaluate_models.time, "sleep"):
+            with self.assertRaises(urllib.error.HTTPError):
+                evaluate_models.request_json("http://stub:11434/api/chat", _chat_body(8))
+            self.assertEqual(len(calls), 3)
+            with self.assertRaises(urllib.error.HTTPError):
+                evaluate_models.request_json("http://stub:11434/api/show", {"model": "missing"})
+            self.assertEqual(len(calls), 4)
 
 
 if __name__ == "__main__":

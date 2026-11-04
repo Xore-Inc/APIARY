@@ -618,7 +618,6 @@ class ColibriEngineContractTest(unittest.TestCase):
     discarded seed cannot change the text -- measured byte-stable across three
     identical requests on a real qwen36 checkpoint. Anything else still refuses,
     and `bool` temperatures must not sneak through as an int 0/1."""
-    letting an unseeded run into the matrix as a seeded one."""
 
     REQUEST = {"temperature": 0, "output_tokens": 512, "seed": 144, "thinking": False}
 
@@ -637,7 +636,6 @@ class ColibriEngineContractTest(unittest.TestCase):
     def test_a_seeded_colibri_cell_above_temperature_zero_is_refused(self):
         """The discard only stops mattering at exactly 0; a sampled cell that
         still carries a seed must never enter the matrix as a seeded one."""
-    def test_a_seeded_colibri_cell_is_refused_before_any_request(self):
         sent = []
 
         def fake_urlopen(req, timeout=None):
@@ -645,9 +643,6 @@ class ColibriEngineContractTest(unittest.TestCase):
             return _FakeChatResponse("answer text")
 
         sampled = {**self.REQUEST, "temperature": 0.7}
-        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            with self.assertRaises(SystemExit) as caught:
-                record_baseline.ask_model("http://fake/v1", "model", sampled,
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             with self.assertRaises(SystemExit) as caught:
                 record_baseline.ask_model("http://fake/v1", "model", sampled,

@@ -1909,6 +1909,19 @@ jobs:
               # a dead server still fails fast, and that both ends clamp so no
               # caller can buy an unbounded wait.
               python analysis/ghidra/benchmarks/tests/test_request_timeout.py
+              # Bridge/unit coverage always runs on ordinary GitHub-hosted
+              # workers; neither coding CLI is required.
+              python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
+              # Provisioned runners can exercise the CLIs against local stubs.
+              if [ "${APIARY_OPENCODE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_OPENCODE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              fi
+              if [ "${APIARY_CLAUDE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_CLAUDE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
+              fi
               python analysis/ghidra/benchmarks/tests/test_bench_tools.py
               # full_capabilities.py (#800): inventories env vars straight out of
               # the real pipeline source, so its own test runs against the real

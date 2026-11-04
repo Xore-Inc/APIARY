@@ -71,7 +71,10 @@ from transcripts import (  # noqa: E402
     TranscriptWriter,
 )
 
-LIVE_CODER_RUN = REPO_ROOT / "docs" / "benchmarks" / "runs" / "2026-10-02-20261002T192742Z-052d890b"
+# Committed runs live in the archive tree (a55beeb0, dd3dd62c);
+# docs/benchmarks/runs/ is only where new runs would be written.
+COMMITTED_RUNS_ROOT = REPO_ROOT / "docs" / "benchmarks" / "runs-archive-20261005"
+LIVE_CODER_RUN = COMMITTED_RUNS_ROOT / "2026-10-02-20261002T192742Z-052d890b"
 
 # An IPv4 address is the thing the repository's real-data prohibition is about
 # (docs/benchmarks/runs/README.md, "What must never land here"), so its
@@ -344,7 +347,10 @@ class LiveModelInputIsCheckedTest(unittest.TestCase):
                 runs_root, RunMetadata(benchmark="test", provenance=PROVENANCE_CAPTURED)
             )
         self.assertIn("refusing to write captured-data transcripts", str(caught.exception))
-        self.assertEqual(sorted(p.name for p in runs_root.iterdir()), before)
+        self.assertEqual(
+            sorted(p.name for p in runs_root.iterdir()) if runs_root.is_dir() else [],
+            before,
+        )
 
 
 class StoredProvenanceAgreementTest(unittest.TestCase):
@@ -386,7 +392,7 @@ class StoredProvenanceAgreementTest(unittest.TestCase):
 
     @staticmethod
     def _run_records():
-        runs_root = REPO_ROOT / "docs" / "benchmarks" / "runs"
+        runs_root = COMMITTED_RUNS_ROOT
         for run_dir in sorted(p for p in runs_root.iterdir() if p.is_dir()):
             run_json = run_dir / "run.json"
             if not run_json.is_file():
@@ -435,7 +441,7 @@ class StoredProvenanceAgreementTest(unittest.TestCase):
         # holding the label that disagrees with it. This is what makes the
         # residue under-claiming rather than contradictory.
         run_ids = {
-            json.loads((REPO_ROOT / "docs" / "benchmarks" / "runs" / d / "run.json")
+            json.loads((COMMITTED_RUNS_ROOT / d / "run.json")
                        .read_text(encoding="utf-8"))["run_id"]
             for d, _n, _r, _rv, _i in disagreements
         }
@@ -445,7 +451,7 @@ class StoredProvenanceAgreementTest(unittest.TestCase):
 
         # The transcript itself is byte-identical to what its run.json recorded,
         # which is what forbids resolving this by editing it.
-        run_dir = REPO_ROOT / "docs" / "benchmarks" / "runs" / self.EXPECTED_RESIDUE_DIR
+        run_dir = COMMITTED_RUNS_ROOT / self.EXPECTED_RESIDUE_DIR
         run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(
             run["transcripts_sha256"],
