@@ -86,7 +86,7 @@ KNOWN_SCANNER_PREFIXES = {
 def _shannon_entropy(data: bytes) -> float:
     if not data:
         return 0.0
-    freq = {}
+    freq: dict[int, int] = {}
     for b in data:
         freq[b] = freq.get(b, 0) + 1
     probs = [v / len(data) for v in freq.values()]

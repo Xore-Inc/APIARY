@@ -54,6 +54,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE = ROOT / "arcane" / "home" / "honeypot-utilities" / "analysis" / "log-maintenance.sh"
@@ -134,7 +135,7 @@ LOGS_CONTAINER_ROOT = "/logs"
 # rotation implementation cannot sensibly drop without stopping being one.
 # http-honeypot's single binary serves both http.json and api.json (#120:
 # see its persona_test.go) -- hence two rows sharing one writer.
-ROWS = [
+ROWS: list[dict[str, Any]] = [
     {
         "dir": "/logs/cowrie",
         "globs": ["'cowrie.json.[0-9]*'"],
@@ -390,7 +391,7 @@ ROWS = [
 #   rotate() must name, asserted per-path the way ROWS asserts "globs";
 # - "writer": (subtree, [grep tokens]) proving a self-bounding writer, the
 #   same proof shape ROWS uses for its own writer half.
-EXEMPT = {
+EXEMPT: dict[str, str | dict[str, Any]] = {
     "/logs/cowrie/downloads":
         "attacker payload corpus, not an event sink -- files are content-"
         "addressed by hash and are the evidence the payload workers index; "
@@ -498,7 +499,7 @@ EXEMPT = {
 # 008be5ebb451467ca9c76763717bc75916e3fcac) ignores SIGHUP outright
 # (src/signal_handler.c's signal(SIGHUP, SIG_IGN)) and has no reopen/logrotate
 # knob anywhere, so the collapse-to-SIGHUP shortcut does not apply here.
-KNOWN_UNCOVERED = {}
+KNOWN_UNCOVERED: dict[str, tuple[str, str]] = {}
 
 # #2882: sinks that live in a named Docker volume rather than a
 # /opt/stacks/apiary/logs/<dir> bind mount are architecturally invisible to
@@ -510,7 +511,7 @@ KNOWN_UNCOVERED = {}
 # container -- found while auditing the same disk-pressure incident #2820
 # tracks. Same writer-proof shape ROWS uses (a grep token the rotation
 # implementation cannot sensibly drop without stopping being one).
-VOLUME_SINKS = [
+VOLUME_SINKS: list[dict[str, Any]] = [
     {
         "name": "reporter-data/audit.json",
         "writer": ("arcane/home/honeypot-utilities/reporter",

@@ -195,7 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(body)
         return 0
-    head = MARKER_RE.search(body).group(1)
+    marker = MARKER_RE.search(body)
+    if marker is None:
+        print("main-health-watch: no existing marker in the report body", file=sys.stderr)
+        return 1
+    head = marker.group(1)
     subprocess.run(
         ["gh", "label", "create", LABEL, "-R", repo, "-d", "main's own Quality/Containers gates are red (scripts/main-health-watch.py)", "--color", "B60205"],
         capture_output=True, text=True,

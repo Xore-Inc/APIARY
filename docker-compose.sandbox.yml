@@ -124,7 +124,7 @@ services:
   # ALL capabilities dropped.
   zeek:
     <<: *gateway-defaults
-    image: zeek/zeek:latest@sha256:703f0b22af150d9418739b2a012fbfb5d01ee004aded3bd43b0175010db05928
+    image: zeek/zeek:latest@sha256:70733f4e540ba1608e37e00c6a93d009f79734262c9ec2ba09d90aa9abc16de5
     container_name: sbx-zeek
     network_mode: host
     cap_drop:
@@ -146,7 +146,7 @@ services:
   # identically to everything else in this repository.
   suricata:
     <<: *gateway-defaults
-    image: jasonish/suricata:latest@sha256:51a59543dcb6e5f9d586c06053c6b71d462cea919b45719090443f4af1428780
+    image: jasonish/suricata:latest@sha256:7ca2546f7f2735f621b981b6a5ec84fb962984636f7629a1a2fa6a324d4b6840
     container_name: sbx-suricata
     network_mode: host
     cap_drop:

@@ -3404,6 +3404,130 @@
         ]
       }
     },
+    "/api/v1/entities/{id}/related": {
+      "get": {
+        "operationId": "get_api_v1_entities__id__related",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such entity."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Entities related to one entity.",
+        "tags": [
+          "other"
+        ]
+      }
+    },
+    "/api/v1/entities/{id}/timeline": {
+      "get": {
+        "operationId": "get_api_v1_entities__id__timeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such entity."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Timeline for one entity.",
+        "tags": [
+          "other"
+        ]
+      }
+    },
     "/api/v1/event/{id}": {
       "get": {
         "operationId": "get_api_v1_event__id_",
@@ -5528,6 +5652,177 @@
         ]
       }
     },
+    "/api/v1/investigate/asn/{id}": {
+      "get": {
+        "operationId": "get_api_v1_investigate_asn__id_",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One ASN record.",
+        "tags": [
+          "investigate"
+        ]
+      }
+    },
+    "/api/v1/investigate/blocked-ips": {
+      "get": {
+        "operationId": "get_api_v1_investigate_blocked_ips",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Blocked IP records.",
+        "tags": [
+          "investigate"
+        ]
+      }
+    },
+    "/api/v1/investigate/campaign/{id}": {
+      "get": {
+        "operationId": "get_api_v1_investigate_campaign__id_",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One campaign.",
+        "tags": [
+          "investigate"
+        ]
+      }
+    },
     "/api/v1/investigate/cidr/{cidr}": {
       "get": {
         "operationId": "get_api_v1_investigate_cidr__cidr_",
@@ -5683,6 +5978,69 @@
         ]
       }
     },
+    "/api/v1/investigate/identity/{id}": {
+      "get": {
+        "operationId": "get_api_v1_investigate_identity__id_",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One attacker identity.",
+        "tags": [
+          "investigate"
+        ]
+      }
+    },
     "/api/v1/investigate/ip/{ip}": {
       "get": {
         "operationId": "get_api_v1_investigate_ip__ip_",
@@ -5755,6 +6113,184 @@
         "summary": "Everything one source address did, across sensors.",
         "tags": [
           "investigate"
+        ]
+      }
+    },
+    "/api/v1/investigate/session/{id}/summary": {
+      "get": {
+        "operationId": "get_api_v1_investigate_session__id__summary",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One session summary.",
+        "tags": [
+          "investigate"
+        ]
+      }
+    },
+    "/api/v1/ioc/catalog": {
+      "get": {
+        "operationId": "get_api_v1_ioc_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "IOC catalog.",
+        "tags": [
+          "other"
+        ]
+      }
+    },
+    "/api/v1/ioc/{kind}/{value}": {
+      "get": {
+        "operationId": "get_api_v1_ioc__kind___value_",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "value",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such IOC."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One IOC.",
+        "tags": [
+          "other"
         ]
       }
     },
@@ -6972,6 +7508,69 @@
         ]
       }
     },
+    "/api/v1/payloads/{id}/delivery": {
+      "get": {
+        "operationId": "get_api_v1_payloads__id__delivery",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One payload delivery record.",
+        "tags": [
+          "stores"
+        ]
+      }
+    },
     "/api/v1/preferences": {
       "get": {
         "operationId": "get_api_v1_preferences",
@@ -7775,6 +8374,69 @@
         "summary": "One TTY recording as raw bytes.",
         "tags": [
           "stores"
+        ]
+      }
+    },
+    "/api/v1/replay/{id}": {
+      "get": {
+        "operationId": "get_api_v1_replay__id_",
+        "parameters": [
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One replay record.",
+        "tags": [
+          "other"
         ]
       }
     },
@@ -9549,6 +10211,346 @@
         ]
       }
     },
+    "/api/v1/sources/{ip}/events": {
+      "get": {
+        "operationId": "get_api_v1_sources__ip__events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ip",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid range."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Events from one source.",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/sources/{ip}/identities": {
+      "get": {
+        "operationId": "get_api_v1_sources__ip__identities",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ip",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such source."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Attacker identity for one source.",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/sources/{ip}/network": {
+      "get": {
+        "operationId": "get_api_v1_sources__ip__network",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ip",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such source."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Network information for one source.",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/sources/{ip}/sessions": {
+      "get": {
+        "operationId": "get_api_v1_sources__ip__sessions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ip",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid range."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Sessions from one source.",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/sources/{ip}/timeline": {
+      "get": {
+        "operationId": "get_api_v1_sources__ip__timeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ip",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid range."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "Timeline for one source.",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/store/{name}": {
       "delete": {
         "operationId": "delete_api_v1_store__name_",
@@ -9790,6 +10792,78 @@
           }
         ],
         "summary": "One allowlisted store, through the generic passthrough.",
+        "tags": [
+          "stores"
+        ]
+      }
+    },
+    "/api/v1/store/{name}/{id}": {
+      "get": {
+        "operationId": "get_api_v1_store__name___id_",
+        "parameters": [
+          {
+            "description": "ml-anomalies, llm-analysis, or agent-campaigns.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Document id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success."
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "No valid service token (or, on the Workbench, no actor identity)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No such document or store."
+          },
+          "502": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Elasticsearch failed."
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ],
+        "summary": "One allowlisted store document.",
         "tags": [
           "stores"
         ]

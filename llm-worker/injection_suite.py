@@ -79,7 +79,10 @@ class InjectionCase:
     attacker_fields: tuple[str, ...]
 
 
-def _require(condition: bool, message: str) -> None:
+def _require(condition: object, message: str) -> None:
+    # object, not bool: call sites deliberately pass a match object or a
+    # list from a truthiness test (`isinstance(x, str) and _RE.match(x)`)
+    # and only whether it is falsy is ever consulted.
     if not condition:
         raise ValueError(f"injection corpus: {message}")
 

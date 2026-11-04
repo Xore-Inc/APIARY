@@ -80,6 +80,10 @@ class ClassificationTest(unittest.TestCase):
                      "Connection reset by peer", "model is not loaded"):
             self.assertFalse(serving.is_malformed_tool_call(text), text)
 
+    def test_the_live_json_parser_error_is_a_malformed_tool_call(self):
+        self.assertTrue(serving.is_malformed_tool_call(
+            "invalid character ']' after object key:value pair"))
+
 
 class ErrorBodyShapeTest(unittest.TestCase):
     """Both engines nest the cause differently, and reading only one of them
@@ -118,18 +122,28 @@ class ErrorBodyShapeTest(unittest.TestCase):
 
 
 class ChatAbsorbsTheRejectionTest(unittest.TestCase):
-    def test_chat_returns_a_result_instead_of_raising(self):
+    def test_chat_retries_without_structured_tools(self):
+        bodies = []
+
+        def reject_tools(url, body=None, timeout=None):
+            bodies.append(body)
+            if body.get("tools"):
+                raise _peg_error()
+            return {
+                "message": {"content": '<file path="main.rs">fn main() {}</file>'},
+                "done_reason": "stop",
+            }
+
         result = em.chat(
             "http://stub:11434", "test-model:latest", em.CODER_TOOL_SYSTEM,
             "write main.rs", 8192, False, num_predict=512,
             tools=list(__import__("bench_tools").FILE_TOOLS),
-            transport=_raise_peg_error,
+            transport=reject_tools,
         )
-        self.assertEqual(result["done_reason"], "malformed_tool_call")
-        self.assertIn("peg-native", result["malformed_tool_call"])
-        # No tokens, because the generation was rejected, not shortened. A
-        # reader that saw tokens here would read a truncated answer.
-        self.assertIsNone(result["output_tokens"])
+        self.assertEqual(result["done_reason"], "stop")
+        self.assertIn("peg-native", result["tool_fallback_reason"])
+        self.assertIn("tools", bodies[0])
+        self.assertNotIn("tools", bodies[1])
 
     def test_a_transport_failure_still_raises(self):
         """The fix is narrow on purpose: a timeout is a real transport failure

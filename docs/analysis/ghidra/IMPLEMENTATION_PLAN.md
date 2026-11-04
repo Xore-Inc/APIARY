@@ -500,7 +500,7 @@ trusted, so the burden of proof was on inclusion, not exclusion.
 | `binwalk` | Firmware/packed binary unpacking | Ghidra's own loaders plus `lief` already cover the formats this pipeline is in scope for; no sample so far has needed firmware unpacking. |
 | `radare2` | Cross-check disassembly, scripting | Duplicates the disassembler this whole pipeline is built on. A second disassembler to pin and trust, with no capability Ghidra lacks. |
 | `exiftool` | File metadata extraction | Ghidra and `lief` already surface what matters for triage; standalone metadata extraction earns its keep on document-format malware, which is not this pipeline's samples today. |
-| `strings2` | Advanced string extraction | Superseded by `floss` (see above); listing both was the original table conflating an old tool with the one that replaced it. |
+| `strings2` | Deeper string extraction | Superseded by `floss` (see above); listing both was the original table conflating an old tool with the one that replaced it. |
 
 Earlier revisions of this file ended with "See `analysis/ghidra/scripts/` for
 implementations integrating these." There are none. That directory now holds

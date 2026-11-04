@@ -32,6 +32,15 @@
 > wiring) — checked against real repo state before starting phase 1
 > (synthetic replay corpus) work, not assumed from this doc's original text.
 
+> **Extended (#3499):** §10–§14 added — authentication events, payload
+> handling, model access, sandbox escape, and secrets — as part of #3496's
+> acceptance criterion 3. Sections 1–9 and §1a are unchanged; each new
+> section extends the area it touches (§10 → §5, §11 → §2, §12 → §6, §13 →
+> §1, §14 → §3 and §5) rather than restating it. Every mitigation cited below
+> was re-verified against this tree on 2026-10-04 rather than carried over
+> from the sections above, and five new rows are in the [Applicability
+> matrix](#applicability-matrix).
+
 ## Method
 
 For each of the nine areas #154 asked to cover, this maps to APIARY's
@@ -166,15 +175,21 @@ bounding discipline.
 
 ## 3. Environment and `/proc/*/environ` secret exposure
 
-**Partially mitigated already; inconsistent across services.**
+**Not mitigated. Every secret-shaped env var in this tree is plain-env.**
 
-- `dashboard/authorization.go`'s `secretFromEnvironment()` (retired with the
-  Go dashboard; the file-based secret delivery pattern it described carried
-  into the Rust cutover) already supported
-  a `<NAME>_FILE` indirection (read the secret from a file path named by
-  `<NAME>_FILE`, falling back to the plain env var) for
-  `AUTH_INTROSPECTION_TOKEN` — the file-based delivery pattern #154's
-  acceptance criteria asks to extend already exists in exactly one place.
+- There is currently **no live `<NAME>_FILE` secret indirection anywhere in
+  this tree.** A `<NAME>_FILE` convention was described once, for
+  `AUTH_INTROSPECTION_TOKEN`, by `dashboard/authorization.go`'s
+  `secretFromEnvironment()` — but that file is gone (the Go dashboard was
+  retired), and `AUTH_INTROSPECTION_TOKEN` survives only as a comment in
+  `docs/KEYCLOAK-CUTOVER.md:125`. Nothing implements that convention now.
+- The nearest **live** precedent for file-path-delivered configuration is
+  `arcane/home/honeypot-dashboard/backend-service/src/threat_intel.rs:135` —
+  `std::env::var("THREAT_CIDRS_FILE")`, which reads a path from the
+  environment and loads its contents from disk. It is the same shape a
+  `<NAME>_FILE` secret indirection would take, but it delivers **CIDR
+  threat-intel data, not a secret**, so nothing in the tree currently
+  reduces a secret's `/proc/*/environ` exposure.
 - Every other secret-shaped environment variable in this tree
   (`ARKIME_ADMIN_PASSWORD`, `ARKIME_PASSWORD_SECRET`, `GH_PAT` per
   `analysis/github/github.env.example`, VPS SSH keys in `deploy.yml`'s
@@ -187,11 +202,12 @@ bounding discipline.
   `env:` on specific steps, GitHub's own masking prevents them appearing in
   logs, but they still exist as process environment for the step's lifetime.
 
-**Verdict:** the file-based pattern exists but is applied to exactly one
-secret. Extending `secretFromEnvironment`'s `<NAME>_FILE` convention to the
-other secret-shaped env vars (or at minimum documenting which ones are
-plain-env by conscious choice vs. oversight) is a concrete, scoped
-follow-up — see [Follow-up scope](#follow-up-scope).
+**Verdict:** no `<NAME>_FILE` secret indirection is live anywhere in this
+tree, so every secret-shaped env var here is plain-env. *Introducing* that
+convention (modelled on `threat_intel.rs`'s `THREAT_CIDRS_FILE` path-from-env
+pattern) for the other secret-shaped env vars — or at minimum documenting
+which ones are plain-env by conscious choice vs. oversight — is a concrete,
+scoped follow-up — see [Follow-up scope](#follow-up-scope).
 
 ---
 
@@ -429,19 +445,612 @@ squarely phase 3's scope, not something to build inside this research pass.
 
 ---
 
+## 10. Authentication events: Keycloak tokens through the BFF into the Rust tiers
+
+**Extends §5.** §5 covers workload identity for service-to-service calls;
+this section covers the *human* identity tier — the Keycloak-issued token and
+the session derived from it, as it moves through
+`honeypot-dashboard-backend`'s BFF into the Rust request tier. Entries 10.1–
+10.4. Verified 2026-10-04 against the tree, not inferred from
+`docs/KEYCLOAK-CUTOVER.md`'s contract text.
+
+- **10.1 — Asset:** the Keycloak ID token and the BFF session it becomes.
+  **Attacker:** anyone holding a browser session that has been revoked,
+  expired, or forcibly logged out at the IdP while the local session is
+  still live. **Path:** login exchanges the authorization code and stores
+  `idToken` in the redis session document
+  (`arcane/home/honeypot-dashboard/frontend-next/src/lib/oidc.server.ts`,
+  `completeLogin`, which returns `idToken: tokens.id_token`);
+  `session.server.ts` writes it into the `bff:session:*` record
+  alongside `sub`/`username`/`role`. The id token is not validated again on
+  any later request — `session.server.ts`'s `getSession` reads the stored
+  document and returns it verbatim, and `sessionGate.server.ts`'s
+  `resolveFunctionUser` builds the operator identity from that stored
+  document alone. **Mitigation:** the session cookie is an opaque
+  `__Host-apiary_bff` sid, not the token itself
+  (`session.server.ts`'s `SESSION_COOKIE`, `HttpOnly; Secure; SameSite=Lax`),
+  so the raw token never reaches browser script or a network hop;
+  `SESSION_TTL_SECONDS` is 12 hours and redis `EX` enforces it server-side.
+  **Residual risk:** there is no back-channel logout. Nothing polls Keycloak
+  for session revocation, and no token-introspection call revalidates the
+  stored id token on any request (grepped across the frontend tier: the only
+  Keycloak calls are discovery, the code exchange, and
+  `buildEndSessionUrl` on logout). A revoked, disabled, or forcibly-logged-out
+  operator therefore keeps a fully working dashboard session — including the
+  `admin` role derived at login — until the 12-hour `EX` expires or the user
+  signs out locally. The realm's own `accessTokenLifespan` of 300s
+  (`arcane/home/honeypot-keycloak/keycloak/realm/apiary-realm.json`) bounds
+  the *IDP-side* token, but nothing re-reads it. This is the single largest
+  gap in this section.
+
+- **10.2 — Asset:** the shared `SERVICE_TOKEN` that authenticates the
+  BFF→Rust hop. **Attacker:** anything that can reach `backend-service` on
+  `honeynet` and read that one secret. **Path:** `serviceFetch` sets
+  `x-service-token` on every outbound call
+  (`arcane/home/honeypot-dashboard/frontend-next/src/lib/backend.server.ts`),
+  and `require_service_token` in
+  `arcane/home/honeypot-dashboard/backend-service/src/lib.rs` compares it in
+  constant time and 401s the whole `/api/v1` router layer.
+  **Mitigation:** fail-closed boot gate — `resolve_service_token` refuses to
+  start with `[E-SERVICE-TOKEN]` when `SERVICE_TOKEN` is unset and
+  `APIARY_ALLOW_UNAUTH_DEV` is not exactly `"1"`
+  (`arcane/home/honeypot-dashboard/backend-service/src/lib.rs`,
+  `arcane/home/honeypot-dashboard-backend/compose.yml`'s
+  `SERVICE_TOKEN=${DASHBOARD_SERVICE_TOKEN:-}`); the same refusal is mirrored
+  on the BFF's proxy path (`backend.server.ts`, `SERVICE_TOKEN_GATE_CODE`) and
+  on `/metrics`, which is internet-facing through Traefik and would otherwise
+  leak request volumes. `scripts/check-api-auth-tier.py` probes the *running*
+  service with no token and fails if any operation the OpenAPI contract
+  publishes as secured answers 200 instead of 401/403.
+  **Residual risk:** the token is a single shared bearer secret, so it is an
+  all-or-nothing credential for the entire `/api/v1` surface rather than a
+  per-caller identity. It is also carried as a plain environment variable in
+  both tiers' compose files, so it is `/proc/<pid>/environ`-readable
+  (§3's shape) rather than file-delivered — the `_FILE` indirection used by
+  Keycloak/OIDC (§14) is not applied here. Anything else joining
+  `honeynet` with the token is fully authorized.
+
+- **10.3 — Asset:** per-operator identity for the Workbench's owner-scoped
+  authorization. **Attacker:** a caller holding the shared service token who
+  is not the operator they claim to be. **Path:** the BFF forwards
+  `x-actor-username`/`x-actor-role` from its own verified session
+  (`backend.server.ts`), and `require_actor` in
+  `arcane/home/honeypot-dashboard/backend-service/src/workbench_api.rs`
+  rejects a missing or blank value. **Mitigation:** identity is taken from
+  the header only — the wire-level `owner` field is deliberately *not*
+  deserialized anywhere in that module, so no handler can make an
+  authorization decision out of request data, and there is no "act as another
+  operator" override (the module doc explains that such an override would
+  hand the whole decision back to anyone holding the shared token).
+  **Residual risk:** the forwarded role claim is not read at all in that
+  module, so all Workbench mutations are admin-gated at the BFF and the
+  header is trusted purely because only the BFF can present the shared
+  token. That is a sound chain today, but it means the header is
+  unforgeable *only* to the degree that `SERVICE_TOKEN` is — the same
+  single-secret exposure as 10.2, not an independent control.
+
+- **10.4 — Asset:** Keycloak authentication-failure telemetry (the
+  `/auth-events` dashboard page). **Attacker:** anyone who can write to the
+  Elasticsearch index the worker writes, or who can present the worker's own
+  service-account credentials. **Path:** `auth-events-worker` exchanges a
+  client-credentials grant for an admin token each poll and writes
+  `LOGIN_ERROR` docs to `auth-failure-events`
+  (`auth-events-worker/worker.py`). **Mitigation:** the worker's own client
+  secret is read from a mounted file, not an env var
+  (`KEYCLOAK_CLIENT_SECRET_FILE` → `/run/secrets/client-secret`,
+  `auth-events-worker/docker-compose.yml`), and — the substantive control —
+  only an explicit six-field allowlist is persisted from Keycloak's
+  `details` object (`DETAILS_ALLOWLIST` in `auth-events-worker/worker.py`:
+  `auth_method`, `auth_type`, `redirect_uri`, `code_id`, `username`,
+  `selected_credential_id`). The module docstring records why the allowlist is
+  explicit rather than "store whatever Keycloak sends": a future Keycloak
+  release adding a more sensitive detail key would otherwise start leaking
+  it silently. `username` *is* persisted by design — it is an attacker-
+  supplied string on a login-failure path, and it reaches Elasticsearch as a
+  document field. **Residual risk:** that username is attacker-controlled
+  text flowing through the same index the dashboard renders; it is safe
+  today only because of §11's renderer posture. The worker's admin token is
+  held in memory for the cycle's duration with no explicit expiry handling
+  in-tree.
+
+---
+
+## 11. Payload handling: captured bytes to YARA, detonation, and the renderer
+
+**Extends §2.** §2 covers untrusted structured-data processing generally;
+this section follows one specific object — a captured payload — through the
+three surfaces named in the request (YARA, the sandbox detonation path, and a
+rendered dashboard cell) and settles the question §2 left open: what
+currently enforces the escaping.
+
+- **11.1 — Asset:** the dashboard renderer's escaping of attacker-controlled
+  payload strings. **Attacker:** an attacker who can get a string into a
+  captured payload, session field, or model output that a dashboard page
+  renders. **Path:** payload bytes reach the frontend as JSON from the Rust
+  tier and are rendered by React components —
+  `arcane/home/honeypot-dashboard/frontend-next/src/routes/payload-analysis.$hash.tsx`
+  and `payload-workbench.results.tsx` (the workbench result preview renders
+  the whole row as `<pre>{JSON.stringify(row, null, 2)}</pre>`), and the
+  model-derived text in `ghidra.$sha.tsx` and `llm-analysis.tsx`.
+  **Mitigation — and this is the direct answer to the question §2 left
+  open:** the escaping is **structural, not conventional, but the
+  *audit* of it is conventional.** React escapes every interpolated child
+  node; there is no `marked`/`DOMPurify`/`react-markdown` in this tier's
+  `package.json` and no markdown-to-HTML path at all — `ghidra.$sha.tsx`
+  deliberately renders the Rev·Deck answer as literal text with a comment
+  recording that the retired `ghidra.html` used `marked.js`+`DOMPurify` and
+  this port dropped it. The "AI-generated" label the request asks about is a
+  real, present, per-row structural badge in `llm-analysis.tsx`, not prose in
+  a subtitle. Behind the escaping there is a second, enforced control: a
+  per-request CSP nonce pinning `script-src 'self' 'nonce-…'` plus
+  `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'`
+  (`arcane/home/honeypot-dashboard/frontend-next/src/lib/cspNonce.server.ts`).
+  **Finding, stated plainly:** the check that pins the raw-HTML sink is
+  *narrower than the codebase*. `csp.test.ts` asserts
+  `dangerouslySetInnerHTML` appears only in an audited allowlist — but it
+  scans exactly three files (`src/components/Sidebar.tsx`,
+  `src/routes/__root.tsx`, `src/components/AppShell.tsx`). Grepping the whole
+  `src/` tree today finds the sink in only `Sidebar.tsx` (an icon `path`
+  attribute), so the audit's answer is currently correct — but a
+  `dangerouslySetInnerHTML` added to any *other* component or route would not
+  be caught by that test, because the test enumerates files rather than
+  scanning the tree. That is convention enforced against a fixed list, not
+  convention enforced by construction. **Residual risk:** the single-raw-HTML
+  sink and the three-file allowlist should become a tree-wide scan; until
+  then, the CSP nonce is the backstop that would stop a missed sink from
+  executing injected script (it would not stop an HTML-injection that
+  rewrites visible content).
+
+- **11.2 — Asset:** the YARA scanner's handling of rule files and sample
+  bytes. **Attacker:** an attacker who can influence either side — the rule
+  set or the corpus. **Path:** rules are loaded from
+  `arcane/home/honeypot-payload-analysis/analysis/yara/`; CI runs the whole
+  corpus through the scanner's own image on every change
+  (`scripts/check-yara-corpus.sh`, wired in `.github/workflows/quality.yml`).
+  **Mitigation:** that CI gate is the control, and it exists because a single
+  malformed rule prevents `yara(1)` from starting rather than being skipped
+  — the repo's own recorded failure mode. **Residual risk:** the gate proves
+  the corpus *parses*; it says nothing about a rule that parses and matches
+  destructively, and rule provenance (who may add to that directory) is not
+  constrained by anything in-tree. §2's boundary discipline for a future
+  archive/container parser is unchanged and still applies.
+
+- **11.3 — Asset:** the detonation submission path — the point where
+  attacker-controlled bytes are handed to the sandbox. **Attacker:** anyone
+  who can cause a payload to be submitted. **Path:** the payload is picked
+  up by the inventory worker from the read-only capture mounts
+  (`arcane/home/honeypot-dashboard-backend/compose.yml`'s
+  `PAYLOAD_DIRS=/dionaea-lib/binaries,/cowrie-downloads`, both mounted `:ro`)
+  and detonation is driven by
+  `sandbox/windows/orchestrate/run_sample.py`, which destroys and re-clones
+  the domain rather than using snapshot-revert (its own module comments
+  record why snapshot-revert is unusable on this path). **Mitigation:** the
+  capture mounts are read-only into the serving tier, and the detonation
+  guest is a per-sample throwaway clone, not the golden image. **Residual
+  risk:** the orchestrator is the trust boundary and nothing verifies its
+  input beyond path handling; §13 covers what containment actually holds
+  behind it.
+
+- **11.4 — Asset:** model-generated text rendered as if it were an analyst
+  finding — a second untrusted-text layer on top of the payload (§2's
+  explicit second-layer case). **Attacker:** anyone who can influence a
+  captured sample's *strings*, since those reach the model verbatim (§12).
+  **Path:** `llm-analysis.tsx` and `ghidra.$sha.tsx` render model summaries,
+  intents, and behaviors. **Mitigation:** React escaping (11.1), the
+  per-row `AI-generated` badge, the "severity (AI-guessed)" column header,
+  and the page-level note that every row is attacker-influenced text. **The
+  labeling requirement is enforced by the UI's structure, and the escaping by
+  React; neither is a separate CI gate on this specific page.** **Residual
+  risk:** the labels are the *only* thing separating model output from
+  analyst output for a reader — an export or a screenshot loses the badge
+  context. Nothing in-tree measures how often operators act on these without
+  verification.
+
+---
+
+## 12. Model access: the shared Ollama instance and the broker guard
+
+**Applies directly, and this is the largest genuine gap in this document —
+not because there is no control, but because the controls are a *network*
+control plus a *log* control, and neither one constrains what the model is
+asked to do.** §6 names the shared model only in passing as an outbound HTTP
+destination; this section covers who reaches it, what stands in front of the
+attacker-reachable consumer, and what a crafted conversation can and cannot
+do. Entries 12.1–12.5.
+
+- **12.1 — Asset:** the shared Ollama inference server and the model weights
+  behind it. **Attacker:** anything on `honeypot-llm` — including a
+  compromised container on it. **Path:** Ollama is published
+  `127.0.0.1:11434` on the host and joined to exactly one network,
+  `llm_clients` / `honeypot-llm`, declared `internal: true`
+  (`analysis/ghidra/docker-compose.ghidra.yml`). **Mitigation:** three
+  independent facts, all verified in the compose file rather than assumed.
+  First, `internal: true` on that network means no route out — nothing on it
+  can reach the internet. Second, the host port bind is loopback-only, with
+  the file's own comment stating the reason: "the prompts carry strings,
+  imports and function names lifted straight out of captured samples; this
+  port must not be a way to read them from elsewhere on the LAN." Third,
+  and the load-bearing one, **Ollama does not join `honeynet`**, so no
+  sensor container — the only attacker-reachable containers in this stack —
+  can resolve or reach it at all; the file states this as an invariant
+  ("sensors must never be able to submit prompts or observe model traffic").
+  Membership is a short, enumerable list: the Ghidra analysis stack,
+  `hp-galah-llm-broker` (`arcane/home/honeypot-galah/compose.yml`),
+  `llm-worker` under its captured-data overlay
+  (`llm-worker/docker-compose.captured-data.yml`), `vault-worker`, and
+  `backend-service` (for `/api/v1/llm-search`'s embedding call only —
+  `arcane/home/honeypot-dashboard-backend/compose.yml`). `backend-service`
+  additionally re-validates its own `OLLAMA_URL` at runtime, accepting only
+  plain `http`, no credentials, no query, empty path, and a host that is the
+  literal `ollama`/`localhost` or a loopback/private/link-local address
+  (`arcane/home/honeypot-dashboard/backend-service/src/llm_search.rs`,
+  `ollama_url()`), so a misconfigured URL cannot turn the embedding call
+  into a general-purpose outbound request. **Residual risk:** this is a
+  *network-membership* control, not an authentication control. There is no
+  credential on the Ollama API itself; any container that joins `honeypot-llm`
+  gets full inference, and adding a container to that network is a
+  one-line change with no gate that asks whether it should be there. That is
+  the same "enforced only by the code not containing a general client" shape
+  §6 already flags for egress, one hop closer to the asset. The 20 GiB-class
+  GPU slot is also shared, so a single abusive consumer is a denial-of-service
+  against the other three legitimate consumers.
+
+- **12.2 — Asset:** the model itself, used as an oracle by an attacker who
+  controls the prompt. **Attacker:** anyone who can send text to the
+  attacker-facing LLM-powered honeypot — `hp-galah`, reachable on
+  `tcp:8888`. **Path:** galah's own `llm.CreateMessageContent` formats the
+  attacker's raw HTTP request into the user message verbatim via
+  `fmt.Sprintf(cfg.UserPrompt, strings.TrimSpace(httputil.DumpRequest(r, true)))`
+  — no sanitising step between attacker and model, as both the broker's and
+  `injection.go`'s own module comments state in full. **Mitigation:** the
+  broker caps the body at 65 536 bytes
+  (`MAX_BODY_BYTES`, `arcane/home/honeypot-galah/compose.yml`), bounds the
+  upstream call with an 8→90s timeout (raised from 8s after a measured cold
+  load, #1513), and forwards the body byte-for-byte unmodified. The prompt
+  injection is **detected and logged, not blocked** —
+  `arcane/home/honeypot-galah/galah-llm-broker/injection.go` runs five
+  precedence-ordered shapes over the attacker-controlled fields only, gated
+  structurally on `role == "user"` (the decoy's own system prompt is out of
+  scope by construction rather than by pattern luck), and `main.go`'s handler
+  states the property outright: "body is forwarded as the exact bytes galah
+  sent, and neither the status nor the body this handler relays is influenced
+  by what the classifier found." **This is a deliberate, documented design
+  choice, not an oversight** — `logPromptInjection`'s comment says
+  signalling an attacker that a detector exists is worse than the detection.
+  **Residual risk — the honest answer to "can a crafted conversation drive the
+  model as an oracle or a jailbreak":** **yes, and by design, and nothing in
+  this tree prevents it.** The attacker reads the model's answer. The
+  contained part is the *asset*, not the *behaviour*: the model is a local
+  14B-class chat model with no tool access on this path, reachable only
+  through the broker, whose only authority is the loopback-bound, non-`honeynet`
+  Ollama. So the blast radius of a successful injection is a confident wrong
+  answer inside a honeypot decoy, not data exfiltration. The detection side
+  is weaker than the design deserves, for two concrete reasons worth
+  recording: the five shapes are regexes, and `injection.go` states outright
+  that they are "NOT … a calibration against live traffic, because there is
+  none to calibrate against" with "the volume this detector will see on this
+  sensor … UNMEASURED"; and the log line carries `prompt_sha256` only, never
+  the matched text — a deliberate choice (`galah` persists only
+  `body_sha256`, so the text is otherwise unrecoverable) that means a
+  post-hoc analyst cannot read *what* was attempted, only that a matching
+  shape fired. `volume=unmeasured` is in the line on purpose so nothing
+  downstream reads a hit as a calibrated rate.
+
+- **12.3 — Asset:** the non-attacker-facing consumers' prompts. **Attacker:**
+  anyone who can get bytes into a captured sample's strings, imports, or
+  function names. **Path:** `llm-worker` in captured-data mode reads cowrie
+  download directories and dashboard-retained script payloads read-only
+  (`llm-worker/docker-compose.captured-data.yml`) and embeds/summarises them.
+  **Mitigation:** the safe-by-default split is unusually well made — the base
+  `llm-worker/docker-compose.yml` has `ES_HOST: ''` forced empty so
+  `compose_route_preflight()` refuses to start, mounts nothing, and joins an
+  `internal: true` `synthetic-only` network; captured-data reach is a
+  *separate* overlay file that the deployment entrypoint includes
+  (`llm-worker/docker-compose.captured-data-deploy.yml`, which exists precisely
+  because that authorization once lived only as a hand-applied overlay and an
+  Arcane redeploy silently reverted it, #1751). Text-only scanning is
+  enforced in the worker, nothing from those mounts is executed, the mounts
+  are `:ro`, and every gate defaults to the safe direction
+  (`LLM_ALLOW_CAPTURED_DATA: false`, `LLM_DRY_RUN: true`). **Residual risk:**
+  this is a *deployment-shape* control with no runtime enforcement that the
+  live deployment is actually on the overlay — the same class of gap #1751
+  described, now fixed by a file rather than by a check. The worker reads
+  captured attacker text into prompts by design; that is the product.
+
+- **12.4 — Asset:** model and runtime provenance — what the shared slot is
+  actually serving. **Attacker:** anyone who can alter a model tag, the
+  runtime image, or the governance manifest. **Path:** all three slots
+  (ghidra, sessions, revdeck) share one model under
+  `OLLAMA_MAX_LOADED_MODELS: 1`; `LLM_EXPECTED_MODEL_DIGEST` and
+  `LLM_EMBEDDING_EXPECTED_DIGEST` gate the worker's acceptance of what comes
+  back. **Mitigation:** this is the most rigorously governed surface in the
+  document and deserves saying so — the Ollama image is pinned by digest
+  (`ollama/ollama:0.34.4@sha256:8262851b…`), the approved model and its
+  artifact digest are recorded in
+  `analysis/ghidra/models/approved-models.json` with per-slot approval
+  records and report hashes, `model-governance.py check-runtime` compares the
+  live container against four runtime fields and reports drift, and the file's
+  `bump_policy` states that a version bump is a re-qualification event
+  requiring a fresh benchmark run and a promotion, not a tag edit (#2062 —
+  the record of a bump that shipped with only one line changed and left ten
+  days of hosts running unrecorded against the old version).
+  **Residual risk:** governance is by process and file, not by CI gate on
+  this path; the enforcement depends on a maintainer following the recorded
+  procedure. Also note the reproducibility caveat the compose file records
+  for itself (#2646): a resident slot returns different text for an identical
+  prompt at temperature 0, so two triage assessments are never directly
+  comparable — the worker records which resident instance answered
+  (`ai_triage.slot_generation`) for exactly that reason.
+
+- **12.5 — Asset:** resource exhaustion of the shared GPU slot by an
+  attacker-reachable consumer. **Attacker:** anyone who can send requests to
+  `hp-galah`. **Path:** each request occupies the single
+  `OLLAMA_NUM_PARALLEL: 1` slot for up to 90 seconds. **Mitigation:** the
+  broker's body cap, timeout, and `cpus: "0.5"` / `memory: 128M` limits
+  (`arcane/home/honeypot-galah/compose.yml`), and Ollama's own serialisation
+  settings. **Residual risk:** there is no per-source rate limit or
+  concurrency control at the broker, and `injection.go` explains why a rate
+  gate was deliberately *not* added — but that reasoning is about the
+  injection *detector*, not about resource control, and does not transfer.
+  One attacker can therefore queue sustained 90-second generations against
+  a slot three legitimate consumers depend on. `scripts/honeypot-pause.sh`
+  records the operational hazard in the other direction: pausing
+  `hp-galah-llm-broker` alone "makes galah's own decoy paths fail in a way
+  that looks like a broken decoy rather than a stand-down," and
+  `ghidra-ollama-1` is under an explicit hard prohibition while a benchmark
+  holds the GPU.
+
+---
+
+## 13. Sandbox escape: the analysis-host → sandbox boundary
+
+**Extends §1.** §1 established that the detonation sandbox is this repo's
+closest analogue to an eval harness and that the reachable-answer-artifact
+shape does *not* apply. This section answers the narrower question §1 left
+open — what containment actually holds at the analysis-host → sandbox
+boundary, and what is one misconfiguration away from not holding. Entries
+13.1–13.5.
+
+- **13.1 — Asset:** the analysis host itself, from a compromised detonation
+  guest. **Attacker:** malware executing inside the guest. **Path:** the
+  guest sits on a libvirt bridge (`sandbox/windows/setup/sandbox-network.xml`
+  for the Windows detonation route; `sandbox/network.xml` for the Linux
+  runner; `sandbox/ghosts/network.xml` for GHOSTS). **Mitigation — and the
+  header is unusually explicit that it is the whole point:** "Isolation,
+  restated because it is the whole point: the macvlan below is `internal`,
+  the libvirt network has no `<forward>`, and Phase 0 adds an iptables DROP
+  pair across virbr-sandbox. Three independent barriers. Removing any one of
+  them because 'the container needs to pull something' puts live malware on
+  the internet" (`docker-compose.sandbox.yml`). The absence of `<forward>`
+  is the structural one — the file records that adding `<forward mode='nat'/>`
+  would give live malware a route out. **Residual risk:** these are
+  configuration properties, and §1's own verdict already records that no
+  automated check in this tree confirms they still hold after a config
+  change (#88). `scripts/isolation-audit.sh` is the closest thing that exists
+  — it asserts the FORWARD-chain invariants and treats an explicit ACCEPT
+  referencing the bridge as fatal — but it requires a live host with a
+  sudoers grant, reports *unmeasured* rather than passing when it cannot read
+  the chain, and does not run in `quality.yml`. Its own verdict line is
+  explicit that an unmeasured check "is an unanswered question, not a pass."
+
+- **13.2 — Asset:** the three `network_mode: host` capture containers in
+  `docker-compose.sandbox.yml`. **Attacker:** anything that can execute in or
+  reach those containers, and — the part worth stating plainly — **the
+  containers themselves are not network-namespaced away from the host.**
+  `network_mode: host` means Zeek, Suricata, and tcpdump share the host's
+  network namespace: they can reach anything the host can reach, and
+  anything that can reach the host's interfaces can reach them. **Mitigation:**
+  the grant is deliberate and narrow in every other axis — all three carry
+  `cap_drop: [ALL]` plus only the capabilities packet capture genuinely
+  requires (`NET_ADMIN`, `NET_RAW`, and for Suricata the five its own
+  entrypoint's `capng_change_id` requires), all carry
+  `no-new-privileges:true`, none is `privileged: true`, and none is joined to
+  `honeynet`. INetSim and mitmproxy, the two services on the same bridge that
+  do not sniff the device, run with `cap_drop: [ALL]` and no additions —
+  the file's own comment states the sniffers' privilege grant "is why only the
+  two sniffers get it." The image set is digest-pinned, and
+  `scripts/isolation-audit.sh` allow-lists exactly these three container
+  names (plus `hp-zeek-proxy`) for `NET_ADMIN`/`NET_RAW` and flags any other
+  holder as a fault — a check that fails closed on an unexpected grant.
+  **Residual risk:** the host-namespace grant is permanent for the
+  container's lifetime while the actual isolation between the *capture
+  containers* and the *host's* networks rests on Docker's own daemon
+  configuration and the host firewall, not on anything this compose file
+  controls. §1 already records the adjacent lifecycle gap: these containers
+  are not reliably started and stopped per detonation (#510), so a
+  host-networked container with packet-capture capabilities can be up when no
+  detonation is running. `docker-compose.sandbox.yml`'s `restart: "no"` is the
+  mitigation for the orphan case and it does hold for an exited container —
+  what it does not cover is a container left *running* across a crash of the
+  orchestrator that would have stopped it.
+
+- **13.3 — Asset:** the GHOSTS detonation host, which is deliberately *not*
+  isolated the same way. **Attacker:** malware in the GHOSTS guest, which by
+  design has real WAN egress. **Path:** `sandbox/ghosts/network.xml` — the
+  one detonation network in this repo that *does* carry a `<forward>`, and
+  the file's header is emphatic that this is intentional and must not be
+  "fixed": "Do not 'fix' this network by removing the `<forward>` — that
+  would break GHOSTS entirely … the containment for this network is the
+  iptables policy in network-filter.sh, not the absence of a route out."
+  **Mitigation:** the containment that replaces the missing route is
+  `sandbox/ghosts/network-filter.sh` — a `GHOSTS-FWD` chain jumped to first
+  in `FORWARD` for the bridge that admits only the enrolled client's traffic
+  to the GHOSTS API backend and then DROPs every RFC1918 destination, plus
+  `198.18.0.0/24` (IANA benchmarking space, which the RFC1918 rules alone
+  miss), plus a `GHOSTS-IN` chain on `INPUT` for the bridge that DROPs
+  everything — the latter because host-local traffic addressed to the host
+  itself never traverses `FORWARD` and would otherwise be reachable. The
+  filter is fail-closed on ordering: it DROPs any attempt to reach the API
+  backend directly, bypassing the bridge's own gateway address, ahead of the
+  `10.0.0.0/8` DROP. The script's `verify` mode asserts its own rule
+  ordering, including that the enrolled-client ACCEPT precedes the
+  fail-closed backend DROP. **This is stronger than §13.1's posture, not
+  weaker — and it is worth saying so, because the request's framing might
+  suggest otherwise.** `sandbox/ghosts/verify-network-isolation.sh` goes
+  further still: it boots a throwaway guest on the network and proves the
+  policy from *inside* the guest, "not just by reading the firewall rules."
+  **Residual risk — the one misconfiguration away from not holding:** the
+  entire network's containment is a shell script applied by
+  `sandbox/ghosts/install-network.sh` and re-applied by hand. There is no
+  CI gate in this tree asserting that `network-filter.sh` was run, and
+  libvirt's own `net-setup` will happily (re)create the bridge with
+  forwarding and no filter at all. The file says so in its own header — "Re-apply
+  it after every `net-setup`" — which means the invariant is a documented
+  human procedure, not an enforced property. That is the single highest-value
+  finding in this section: unlike the Windows route's three barriers, this
+  one is one `install-network.sh` invocation away from not holding.
+
+- **13.4 — Asset:** the CAPE detonation path. **Attacker:** malware in the
+  CAPE guest; anything reaching CAPE's database. **Path:** `sandbox/cape/`
+  — MongoDB only, in Docker, deliberately isolated from this repo's own
+  stacks; the CAPE application itself runs on the host, "same as
+  sandbox/windows's own orchestrator," because it talks to libvirt directly.
+  **Mitigation:** `sandbox/cape/network.xml` also has no `<forward>`
+  (verified in the file's own header), `cape-mongo` is published
+  `127.0.0.1:27017` only, and the compose file's rationale for keeping
+  PostgreSQL out is explicit that the default SQLite task DB is sufficient.
+  **Residual risk:** as §13.1, the network property is asserted by a file
+  comment rather than a check. The compose file also records its own
+  provenance gap honestly — the image digest was observed from the registry
+  API, "NOT inspected off a live deployment, because no reachable host has
+  ever stood this stack up," and Dependabot covers nothing under `/sandbox`,
+  so mongo 7.0 patch releases will not arrive automatically.
+
+- **13.5 — Asset:** the analysis result spools — the data a compromised
+  guest might want to forge or read. **Attacker:** malware in the guest.
+  **Path:** the Ghidra/sandbox/GitHub-analysis result directories, mounted
+  into the dashboard. **Mitigation:** read-only mounts (§1's finding, and
+  this is the same conclusion reached from the other direction — the guest
+  cannot write into the directory the dashboard reads, so it cannot forge a
+  result, and per §1a it cannot read a prior run's results either because
+  nothing mounts them into the guest and its isolated network has no route to
+  the host paths). **Residual risk:** low, and largely already closed by §1
+  and §1a. The remaining item is that "the spools are written after the
+  guest is torn down" is a property of the orchestrator's sequencing, not of
+  any mount-level control.
+
+---
+
+## 14. Secrets: real, decoy, and the mechanism that keeps them apart
+
+**Extends §3 and §5.** §3 covers secret *delivery* (env var vs. `_FILE`) and
+§5 covers credential *lifetime*; neither names the decoy-credential surface.
+This section draws the line between the two — which paths hold real secrets,
+which hold bait, and what mechanically prevents the bait paths from being
+treated as leaks or the real paths from being treated as bait. Entries
+14.1–14.4. **This is the security property that most requires the explicit
+exemption lists to be read as an allowlist and not a backlog**, so it is
+stated first.
+
+- **14.1 — Asset:** the decoy-credential surface — the fake files
+  attackers are meant to find. **Attacker:** nobody internal; the "attacker"
+  here is the CI gate, which must distinguish bait from a leak without being
+  told the difference each time. **Path:** `arcane/home/honeypot-cowrie/cowrie/honeyfs/**`
+  ships 54 tracked files that are *supposed* to look like a
+  credential-bearing filesystem — `etc/shadow` with sha512crypt hashes,
+  `etc/passwd`, `home/*/.ssh/authorized_keys`, NTFS policy scripts under
+  `mnt/ad/SysVol/`. Cowrie serves these to whoever logs in; that is the
+  product. **Mitigation:** `scripts/check-public-leaks.py`'s
+  `ALLOWED_DOTENV` set carries exactly one honeyfs entry
+  (`arcane/home/honeypot-cowrie/cowrie/honeyfs/opt/nexusai-inference/.env`),
+  with a comment stating why it is there — it "is still a decoy honeyfs file
+  for attackers to find, not a real credential." Everything else in that tree
+  is caught by the generic rules without exemption, because the gate's
+  literal-credential-assignment pattern exempts `DECOY_ONLY` as a value
+  alongside `change-me` variants. Separately,
+  `scripts/check-cowrie-honeyfs-realism.py` guards the *quality* of the bait
+  in the opposite direction — it fails if a tracked SSH key does not parse,
+  if a `$6$` shadow hash is not exactly 86 characters, if a passwd primary
+  GID has no matching group entry, if an account has no shadow row, or if
+  `userdb.txt` is not pure ASCII (cowrie reads it with `encoding="ascii"`,
+  where one non-ASCII byte fails every login attempt). **Residual risk:** the
+  exemption surface is a hardcoded path list, so it fails closed on rename
+  (a moved file resurfaces the failure on the next run) but grows by hand —
+  each new decoy file needing an exemption is a review decision someone has
+  to notice. Note also that this repository has **no credential scanner over
+  git history**; `check-public-leaks.py` is a repo-policy checker with an
+  explicit allowlist and scans the working tree, not history, so a secret
+  committed and later removed is outside its reach. That is #3496's own
+  separate CI-gates item, recorded here because this section is where the
+  allowlist shape it should reuse already lives.
+
+- **14.2 — Asset:** real deployment secrets. **Attacker:** anything with
+  procfs or `docker inspect` access to the container holding them, or anyone
+  who commits one. **Path:** file-delivered where the pattern is applied —
+  `OIDC_CLIENT_SECRET_FILE=/run/dashboard-secrets/oidc-client-secret` plus a
+  `:ro` mount of a host directory (`arcane/home/honeypot-dashboard/compose.yml`);
+  `POSTGRES_PASSWORD_FILE` and a `KC_DB_PASSWORD` export read from a mounted
+  file rather than an env var (`arcane/home/honeypot-keycloak/compose.yml`);
+  `KEYCLOAK_CLIENT_SECRET_FILE` → `/run/secrets/client-secret`
+  (`auth-events-worker/docker-compose.yml`), where the compose comment records
+  why the secrets directory is a *sibling* of the stack directory rather than
+  nested inside it: anything written "into" that path would land inside the
+  git checkout itself, "exactly where a secret must never live." Plain-env
+  where it is not: `SERVICE_TOKEN` (§10.2), `ARKIME_PASSWORD_SECRET`, `GH_PAT`
+  (§3). **Mitigation:** the file-delivered-secret pattern (§14 lists the
+  three live uses) does not cover these three. `.env` files are refused
+  outright by the gate: any tracked file named `.env` that is not in
+  `ALLOWED_DOTENV` fails, and the pattern list separately flags private keys,
+  GitHub/AWS/Slack token shapes, literal credential assignments, and
+  credentials embedded in URLs. **Residual risk:** §3's finding is unchanged
+  for the remaining plain-env cases, and it applies with full force to
+  `SERVICE_TOKEN` specifically — the one credential an attacker would most
+  want, delivered as plain env in both the BFF and Rust tiers. File-delivery
+  narrows `docker inspect` and `docker inspect`-adjacent exposure; it does not
+  narrow `/proc/<pid>/environ`, since the value is exported into the process
+  either way — the same conclusion §3's follow-up already reached for
+  `ARKIME_PASSWORD_SECRET`.
+
+- **14.3 — Asset:** the deployed secrets directories themselves. **Attacker:**
+  anything that can read the host path backing a `/run/*-secrets` bind
+  mount. **Path:** `/var/dockge/stacks/honeypot-dashboard/secrets`,
+  `/var/dockge/stacks/honeypot-keycloak/secrets`,
+  `/var/dockge/stacks/auth-events-worker-secrets` — host directories outside
+  the git checkout, mounted `:ro` into their containers. **Mitigation:**
+  outside the checkout (so `git pull` cannot clobber them and `git status`
+  cannot surface them), read-only into the container, and — for Keycloak —
+  the compose file's own record that a *relative* path silently resolved to
+  an empty auto-created directory on a fresh install, which is the exact
+  failure mode that would leave a mount present and empty. **Residual risk:**
+  host-side permissions are outside anything this repository can assert;
+  nothing in-tree checks that these directories are not world-readable, and
+  the `check-public-leaks.py` gate covers committed files only, not host
+  filesystem state.
+
+- **14.4 — Asset:** attacker-supplied strings that resemble credentials and
+  get persisted. **Attacker:** anyone submitting a login to a honeypot or
+  uploading a payload. **Path:** `auth-events-worker` stores `username` from
+  Keycloak's `LOGIN_ERROR` details into Elasticsearch (§10.4); cowrie stores
+  attacker credentials in its own logs and honeyfs. **Mitigation:** the
+  worker's six-field explicit allowlist (§10.4) is the boundary — an
+  attacker-supplied `username` is stored by design, and everything else in
+  the event is dropped. **Residual risk:** these strings are attacker-
+  controlled free text flowing into a store the dashboard renders, so they
+  inherit §11's renderer posture; a credential an attacker submitted to a
+  decoy SSH or HTTP sensor can end up verbatim in the operator's dashboard,
+  which is correct behaviour for a honeypot and exactly the content an
+  escaping regression would turn into script execution.
+
+---
+
 ## Applicability matrix
 
 | # | Area | Applies to this repo? | Existing mitigation | Concrete gap found |
 |---|---|---|---|---|
 | 1 | Sandbox escape / reference artifacts | Partial (detonation sandbox, not eval harness) | Read-only result mounts; isolation zone design (docs) | #88 (untested invariants), #510 (capture container lifecycle) |
 | 2 | Untrusted structured-data processing | Yes, broadly | `html/template` auto-escaping; CI YARA corpus gate | No archive/container-format parsing exists yet — must inherit this discipline when added |
-| 3 | Env/`/proc/*/environ` secret exposure | Yes | `secretFromEnvironment`'s `_FILE` pattern (one use) | Pattern not applied to `ARKIME_*`, `GH_PAT`, VPS SSH key |
+| 3 | Env/`/proc/*/environ` secret exposure | Yes | No live `<NAME>_FILE` secret indirection exists anywhere in the tree; the nearest precedent is `backend-service/src/threat_intel.rs`'s `THREAT_CIDRS_FILE` file-path delivery (CIDR data, not a secret) | Every secret-shaped env var is plain-env: `ARKIME_*`, `GH_PAT`, VPS SSH key |
 | 4 | Metadata-service / RFC 1918 reachability | No cloud metadata surface exists | Per-sensor private Docker networks | Outbound-to-internet egress policy (tracked in #538) |
 | 5 | Credential lifetime / workload identity | Yes | dashboard/services-adapter split (strong pattern, since carried into the backend-service/worker split); autoheal moved onto the same narrow-proxy shape by #592 | Proxy's `CONTAINERS=1` is still daemon-wide, not label-filtered |
 | 6 | Encoded/chunked C2 | Yes, as honeypot capture surface | Raw payload capture (tanner/Suricata); narrow fixed-destination outbound HTTP clients | No network-layer egress enforcement (folds into #538) |
 | 7 | Repeated recon / low-signal escalation | Yes — core motivating gap | ml-worker anomaly scoring; dashboard campaign clustering | No behavioral-phase correlation or combination-based severity escalation |
 | 8 | Source-control/CI write paths | Yes | `analysis/github/` publish gate (CI-tested); vendored-dep hash pinning | No image digest pinning for this repo's own built images |
 | 9 | Cross-source alert correlation | Yes — core motivating gap | Multiple independent alert sources feed one sink, `llm-analysis` severity included | No trust-boundary-crossing correlation engine |
+| 10 | Authentication events | Yes | Fail-closed `SERVICE_TOKEN` boot gate + `scripts/check-api-auth-tier.py`; header-only per-operator identity | No back-channel logout or token revalidation — revoked sessions live up to 12h |
+| 11 | Payload handling | Yes | React structural escaping; per-request CSP nonce; CI YARA corpus gate | Raw-HTML sink audit enumerates 3 files instead of scanning the tree |
+| 12 | Model access | Yes — largest genuine gap | Ollama off `honeynet`, loopback-only, `internal: true` network; broker path allowlist + body cap; injection detection (log-only) | A crafted conversation *can* drive the model as an oracle — by design; no rate limit on the shared GPU slot |
+| 13 | Sandbox escape | Yes | Three independent barriers on the Windows route; fail-closed iptables policy + in-guest verification on GHOSTS | GHOSTS's `network-filter.sh` is a documented manual procedure, not an enforced property |
+| 14 | Secrets (real vs. decoy) | Yes | `check-public-leaks.py` `ALLOWED_DOTENV` + `check-cowrie-honeyfs-realism.py`; file-delivered secrets outside the checkout | No credential scanner over git history; `SERVICE_TOKEN` still plain-env |
 
 ---
 
@@ -468,8 +1077,10 @@ route to:
     then-`dashboard/llm_analysis.go`'s `llmAnalysisAlerts`, retired with the
     Go dashboard; the equivalent alert-refresh wiring lives in the Rust
     cutover's worker loop today.
-  - ~~Extend `secretFromEnvironment`'s file-based delivery pattern to the
-    other plain-env secrets (item 3).~~ **Assessed, closed as acceptable
+  - ~~Introduce a `<NAME>_FILE` secret indirection (the convention #154
+    asks for, modelled on `threat_intel.rs`'s `THREAT_CIDRS_FILE`
+    path-from-env pattern) for the plain-env secrets (item 3).~~
+    **Assessed, closed as acceptable
     residual risk — no code change.** `ARKIME_PASSWORD_SECRET` (the one
     genuinely reachable case; see below) is consumed directly by Arkime's
     own third-party `docker.sh` entrypoint via its `ARKIME__*`
@@ -513,6 +1124,26 @@ route to:
     cover the ~13 directories it was missing, so Dependabot's own
     tag-bump PRs going forward show a real digest diff to review instead
     of just a version-string change.
+- **New follow-ups named by items 10-13** (added 2026-10-04 for #3499).
+  Same posture as the list above: identified here, not fanned out as issues
+  in this pass.
+  - **Back-channel logout or per-request token revalidation (item 10.1).**
+    The largest gap the new sections found: a revoked or disabled Keycloak
+    session keeps a working 12-hour local dashboard session, `admin` role
+    included. Named, not filed.
+  - **Tree-wide raw-HTML sink audit (item 11.1).** Today's escaping is
+    structural (React), and the CSP nonce is an enforced backstop — but
+    `csp.test.ts`'s `dangerouslySetInnerHTML` check enumerates three files
+    rather than scanning `src/`. Converting it to a directory walk is a
+    small, self-contained change.
+  - **Per-source rate limiting on `galah-llm-broker` (item 12.5).** Distinct
+    from the injection detector's deliberate no-rate-gate decision: that
+    reasoning governs detection sensitivity, not resource control.
+  - **`network-filter.sh` applied-state check (item 13.3).** GHOSTS's
+    containment is an iptables policy applied by hand after every
+    `net-setup`, with no gate asserting it is still in force. The Windows
+    route's three barriers have the same class of gap (#88) but at least two
+    independent properties; this one is a single script invocation.
 - **Phases 2-5 of #154 itself** (synthetic replay corpus, decode/correlate
   pipeline, deterministic criticality rules, operator evidence UI) remain
   open, larger implementation work — items 2, 7, and 9's "no correlation/

@@ -170,6 +170,7 @@ def is_vram_oom(text: str | None) -> bool:
 MALFORMED_TOOL_CALL_PHRASES = (
     "does not match the expected peg-native format",  # exact from this server
     "peg-native",
+    "after object key:value pair",
 )
 # Lowered text, same rule as VRAM_OOM_PHRASES above: a marker carrying its own
 # capitals can never match lowered text.
@@ -1255,6 +1256,26 @@ def ollama_transport(base_url: str, request_json) -> Any:
     return post
 
 
+def colibri_transport(base_url: str, request_json) -> Any:
+    """Transport for the colibri engine: OpenAI-compatible /v1/chat/completions.
+
+    Colibri speaks the OpenAI API, same as llama.cpp's server, so the same
+    to_wire/from_wire translation applies.
+    """
+    endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
+
+    def post(url: str, body: dict[str, Any] | None = None,
+             timeout: int | None = None) -> dict[str, Any]:
+        data = json.dumps(to_wire(body or {})).encode()
+        request = urllib.request.Request(
+            endpoint, data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return from_wire(json.loads(response.read()))
+    return post
+
+
 class WrongEndpoint(RuntimeError):
     """The URL answers, but it is not an Ollama.
 
@@ -1339,6 +1360,7 @@ class ModelSession:
         request_timeout,
         remote: Remote | None = None,
         log=None,
+        colibri_base_url: str | None = None,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -1353,16 +1375,17 @@ class ModelSession:
         self.fallback_engine: str | None = None
         self._provenance: dict[str, Any] = {}
         self._remote = remote
+        self.colibri_base_url = colibri_base_url
 
     # -- selection ---------------------------------------------------------
     def open(self) -> Any:
-        """Serve this model, on llama.cpp if at all possible, else Ollama.
+        """Serve this model, on llama.cpp if at all possible, else colibri, else Ollama.
 
         Returns the transport to use. Raises nothing for a model the *engine*
         cannot serve: an unresolvable GGUF or a model llama.cpp cannot load
-        falls back to Ollama, and a model neither can serve fails later on the
-        Ollama call itself -- which is a failure of that model, not of the run,
-        and is reported by the slot that hit it.
+        falls back to colibri (if configured) then Ollama, and a model neither
+        can serve fails later on the Ollama call itself -- which is a failure
+        of that model, not of the run, and is reported by the slot that hit it.
 
         `UnresolvableModel` is the one exception that escapes rather than
         falling back: the caller named something that is not a model at all,
@@ -1381,14 +1404,12 @@ class ModelSession:
             # verbatim in the record, because "fell back" without the cause is
             # not reproducible.
             self.fallback_reason = f"{type(exc).__name__}: {exc}"
-            self.fallback_engine = "ollama"
-            self.engine = "ollama"
             self.log(f"{self.model}: llama.cpp unavailable ({self.fallback_reason}); "
-                     f"falling back to Ollama")
+                     f"falling back")
             # Tear down here rather than leaving it to close(). A start that
             # raises *after* `docker run -d` leaves a live container holding
             # whatever VRAM it allocated, and this function is about to return a
-            # working Ollama transport -- the caller has no reason to know a
+            # working transport -- the caller has no reason to know a
             # container exists, and the next model's load OOMs against it. That
             # is the "stale model held 7974 MiB for minutes" incident; releasing
             # it is best-effort, because a teardown failure here must not lose
@@ -1398,6 +1419,21 @@ class ModelSession:
             except Exception as teardown_exc:  # noqa: BLE001 -- best-effort
                 self.log(f"{self.model}: llama-server teardown after a failed "
                          f"start did not complete: {teardown_exc}")
+            # Try colibri as intermediate fallback for big models
+            if self.colibri_base_url:
+                try:
+                    self.engine = "colibri"
+                    self.fallback_engine = "ollama"
+                    self.transport = colibri_transport(
+                        self.colibri_base_url, self.request_json)
+                    self.log(f"{self.model}: serving on colibri")
+                    return self.transport
+                except Exception as colibri_exc:
+                    self.log(f"{self.model}: colibri unavailable "
+                             f"({type(colibri_exc).__name__}: {colibri_exc}); "
+                             f"falling back to Ollama")
+            self.fallback_engine = "ollama"
+            self.engine = "ollama"
             self.transport = ollama_transport(self.base_url, self.request_json)
             return self.transport
         self.engine = "llama.cpp"

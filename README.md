@@ -13,6 +13,23 @@ run at **home under Arcane**, publish only on the WireGuard interface, and are
 exposed to the internet **through the VPS** — HTTP via Traefik, everything else
 raw-tunnelled with a port bridge.
 
+The "automated" half is done by named loops, not asserted. It **correlates**
+attacker activity across sensors and rolls it up into identities and campaigns
+(`WORKER_LOOPS=correlator` and `attacker-identity`,
+[arcane/home/honeypot-dashboard/backend-service/src/worker.rs](arcane/home/honeypot-dashboard/backend-service/src/worker.rs));
+**detects** anomalies by scoring every event with an IsolationForest/HBOS/LSTM
+composite ([ml-worker/worker.py](ml-worker/worker.py)); **dedupes and
+YARA-scans** captured payloads
+([arcane/home/honeypot-payload-analysis/compose.yml](arcane/home/honeypot-payload-analysis/compose.yml));
+**raises** alerts on a 60s loop with cooldown and an optional webhook, and
+**schedules** generated reports (the `alert-notifier` and `reports-scheduler`
+loops, same `worker.rs`); and **reports** attacker IPs to AbuseIPDB and
+Blocklist.de, dry-run by default
+([arcane/home/honeypot-utilities/reporter/](arcane/home/honeypot-utilities/reporter/),
+see [docs/ip-reporting-plan.md](docs/ip-reporting-plan.md)). The full sweep
+behind that sentence is
+[docs/claims-audit-3504.md](docs/claims-audit-3504.md).
+
 This is a public repository: copy the example environment files locally and
 never commit real addresses, credentials, captures, payloads, or sandbox images.
 

@@ -57,3 +57,39 @@ round7/
 # phantom diff in unrelated work and was one `git add -A` away from committing
 # a machine-local artifact. Same failure mode as the Python bytecode above.
 arcane/home/honeypot-http/http-honeypot/http-honeypot
+
+# archify's working folder (#3497): the typed candidate, the rendered HTML and
+# its gate receipts. Intermediate -- the shipped artifact is docs/diagrams/.
+.archify/
+
+# graphify knowledge-graph output (#3497). `graphify update .` writes ~890 MB
+# here: a 282 MB graph.json, a 311 MB AST cache, and a per-run-date copy of
+# both. All of it is regenerable from the tree and nothing in the repo reads
+# it, so only the two reader-facing artifacts are tracked -- the explorer
+# (graph.html) and the dated report (YYYY-MM-DD/GRAPH_REPORT.md), both indexed
+# from docs/architecture/graph-report.md. Ignoring the rest is the same
+# failure mode as .ci-artifacts/ and .playwright-mcp/ above: generated output
+# that a `git add -A` would otherwise put in a public repository.
+graphify-out/cache/
+graphify-out/graph.json
+graphify-out/manifest.json
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_labels.json
+graphify-out/.graphify_labels.json.sig
+graphify-out/.graphify_root
+graphify-out/.graph.html.stale
+graphify-out/20??-??-??/*
+!graphify-out/20??-??-??/graph.html
+!graphify-out/20??-??-??/GRAPH_REPORT.md
+
+# Ad-hoc coder worktrees that get created in the repository root during
+# dispatch (oc-<issue>-wt/). They are
+# untracked scratch, but they sit inside the tree graphify indexes, so every
+# artifact they produce counts them as real files: a published report listed a
+# script under one of them that #3310 had already deleted from the mainline
+# tree, so test_3310_design_lab_dedupe.py failed on a path that no longer
+# exists. graphify honours .gitignore by default, so this one rule fixes the
+# artifact by construction rather than by editing the report or by teaching the
+# test to skip generated output. Remove a directory only when the dispatch it
+# belongs to is finished; these are live worktrees for open issues.
+oc-*-wt/

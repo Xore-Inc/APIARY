@@ -63,7 +63,8 @@ def profile_entries(path: Path) -> list[str]:
 def main() -> int:
     for profile in sorted(PROFILES.glob("*.txt")):
         entries = profile_entries(profile)
-        cpus = mem = 0
+        cpus: float = 0.0
+        mem = 0
         undeclared = []
         for entry in entries:
             compose = stack_for(entry)

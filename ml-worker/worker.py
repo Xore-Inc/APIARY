@@ -333,7 +333,7 @@ def save_checkpoint(es: Elasticsearch, index_pattern: str, last_timestamp: str, 
              })
 
 
-def advance_checkpoint(events: list, previous: dict) -> dict:
+def advance_checkpoint(events: list, previous: "dict | None") -> dict:
     """Compute the next checkpoint tuple (#168) from a batch of processed
     events (ascending by @timestamp) and the checkpoint they were fetched
     against. Keeps only the IDs at the NEW max timestamp -- everything
@@ -1089,7 +1089,7 @@ def run_worker() -> None:
     retrain_slots = parse_retrain_slots(RETRAIN_SLOTS_UTC)
     last_fired_slot_id = load_last_fired_slot(es)  # #172: persisted, not restart-relative
     last_drift_retrain_at = load_last_drift_retrain(es)  # #3168: persisted, not restart-relative
-    recent_flags = deque(maxlen=DRIFT_WINDOW)  # composite >= THRESHOLD, drift detection (#65)
+    recent_flags: "deque[tuple[str, float]]" = deque(maxlen=DRIFT_WINDOW)  # composite >= THRESHOLD, drift detection (#65)
     consecutive_es_failures = {idx: 0 for idx in SOURCE_INDICES}  # #188
 
     logger.info(f"Worker ready. Poll={POLL_INTERVAL}s Threshold={THRESHOLD}")
@@ -1103,8 +1103,9 @@ def run_worker() -> None:
             # failure it operationally is and let the #188 counter below
             # see it, rather than opening a second accounting channel.
             checkpoint, ckpt_ok = load_checkpoint(es, index_pattern)
-            events, ok = [], False
-            if ckpt_ok:
+            events: list = []
+            ok = False
+            if ckpt_ok and checkpoint is not None:
                 events, ok = fetch_new_events(
                     es, index_pattern, checkpoint["last_timestamp"],
                     exclude_ids=set(checkpoint["seen_ids"]),

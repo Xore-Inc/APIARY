@@ -1,7 +1,7 @@
 # apiary-dashboard-next — the TanStack Start SSR/BFF tier (#1608).
 # Nitro's node-server output is self-contained (.output holds server +
 # client assets + public/static, including the vendored theme.css copy).
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
 # #3315: which revision of the repository this image is built from, stamped
 # into the served /build.json below. Unset is normal, not an error: the
 # generated file then says "unknown" rather than the build failing or the
@@ -23,7 +23,7 @@ COPY . .
 RUN node scripts/write-build-info.mjs --out public/build.json
 RUN npm run build
 
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 # Redeclared per stage: Docker scopes an ARG to the stage that declares it, so
 # the value the build stage wrote into public/build.json is not in scope here
 # on its own.

@@ -1909,6 +1909,19 @@ jobs:
               # a dead server still fails fast, and that both ends clamp so no
               # caller can buy an unbounded wait.
               python analysis/ghidra/benchmarks/tests/test_request_timeout.py
+              # Bridge/unit coverage always runs on ordinary GitHub-hosted
+              # workers; neither coding CLI is required.
+              python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
+              # Provisioned runners can exercise the CLIs against local stubs.
+              if [ "${APIARY_OPENCODE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_OPENCODE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_coding_cli.py
+              fi
+              if [ "${APIARY_CLAUDE_INTEGRATION:-0}" = "1" ]; then
+                APIARY_CLAUDE_INTEGRATION=1 \
+                  python analysis/ghidra/benchmarks/tests/test_claude_code_cli.py
+              fi
               python analysis/ghidra/benchmarks/tests/test_bench_tools.py
               # full_capabilities.py (#800): inventories env vars straight out of
               # the real pipeline source, so its own test runs against the real
@@ -2126,6 +2139,113 @@ jobs:
               echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  $bin" | sha256sum -c -
               chmod +x "$bin"
               git ls-files -z | grep -zE '(^|/)Dockerfile[^/]*$' | xargs -0 "$bin" --config .hadolint.yaml
+
+          # #3501: fail CI on a real credential anywhere in FULL git history.
+          # scripts/check-git-secrets.py landed in 8cc55aa9 with nothing calling
+          # it -- `grep -rn gitleaks .github/workflows/` was empty -- so that
+          # commit's "fail CI on a real credential" claim was untrue. This row
+          # is what makes it true, and it is the only place gitleaks is on PATH.
+          #
+          # Its own lane rather than a row on the public-leak side: that check
+          # walks `git ls-files`, so it can only ever see the checked-out tree.
+          # A credential committed once and deleted in the next commit is
+          # still a credential, and this is the gate that sees it.
+          - name: "Full-history secret scan (gitleaks, #3501)"
+            home: true
+            env:
+              # #3314 zizmor: never expand an Actions expression into a run: body.
+              PR_MERGE_REF: ${{ github.event.number }}
+            run: |
+              set -euo pipefail
+              # The scan's entire claim is FULL history, and actions/checkout
+              # defaults to fetch-depth 1 -- so on a pull_request the
+              # merge-commit checkout hands gitleaks exactly one commit and the
+              # gate passes vacuously. That is the worst failure mode a secret
+              # scanner has: green, having measured nothing. Unshallow first,
+              # then prove the history is really there before believing a pass.
+              if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+                git fetch --unshallow --no-tags origin
+              fi
+              commits="$(git rev-list --count HEAD)"
+              if [ "$commits" -lt 100 ]; then
+                echo "::error::secret-scan: only $commits commit(s) under HEAD -- refusing to report a clean scan of a truncated history"
+                exit 1
+              fi
+              echo "secret-scan: scanning $commits commits of full history"
+              # Purge remote-tracking refs so the scan's view of history is the
+              # commit it was told to scan. checkout's `git clean -ffdx` removes
+              # leftover FILES and never stale REFS, so on a reused honeypot-ci
+              # workspace refs from earlier PRs survive and both
+              # `git log --all` (in the allowlist probe) and gitleaks' object
+              # walk read them: two clones of one identical tree measured 120
+              # findings (62 under the two allowlisted historical paths) against
+              # 23 and 0 for the same tree without them.
+              #
+              # No pipeline here on purpose. Under `set -o pipefail` a `grep -v`
+              # that selects nothing exits 1, which killed the job on a CLEAN
+              # runner -- the exact case this exists to make work. Read the refs
+              # into a variable instead; an empty one is a valid state, not an
+              # error. origin/HEAD stays because update-ref refuses deletes
+              # through a symref, and this PR's own merge ref stays because it
+              # is the ref the job just checked out.
+              #
+              # PR_MERGE_REF comes in via env, not inline: zizmor blocks
+              # template-injection (an Actions expression in a run: body), and
+              # #3314 gates on it. An env: value is a string, not a shell
+              # fragment, so nothing is expanded into the script.
+              pr_merge_ref="refs/remotes/pull/${PR_MERGE_REF:-}/merge"
+              stale_refs="$(git for-each-ref --format='%(refname)' refs/remotes \
+                | grep -v -e 'origin/HEAD$' -e "^${pr_merge_ref}$" || true)"
+              for ref in $stale_refs; do
+                if ! git update-ref -d "$ref"; then
+                  echo "::error::secret-scan: failed to delete stale ref $ref"
+                  exit 1
+                fi
+              done
+              # Prove the purge did what it claims, so a failed delete can never
+              # read as a clean scan.
+              leftover="$(git for-each-ref --format='%(refname)' refs/remotes \
+                | grep -c -v -e 'origin/HEAD$' -e "^${pr_merge_ref}$" || true)"
+              if [ "$leftover" -ne 0 ]; then
+                echo "::error::secret-scan: $leftover stale remote-tracking ref(s) survived the purge -- the scan would measure a history this job was not asked to check"
+                exit 1
+              fi
+              # Pinned version + sha256 verified before extraction, unpacked
+              # into $RUNNER_TEMP because the self-hosted honeypot-ci runner
+              # cannot write /usr/local/bin -- the constraint
+              # scripts/install-trivy.sh already works under, and the reason
+              # `home: true` is right here: checkout, this workflow's own
+              # setup-python, a download into a writable temp dir. No docker,
+              # no host state, nothing the metal cannot do.
+              # The install has to reach THIS step, not a later one. Each `run:`
+              # is its own process, and GITHUB_PATH is applied by the runner to
+              # *subsequent* steps -- so `scripts/install-gitleaks.sh` writing
+              # it (install-gitleaks.sh:123) left the very next line scanning
+              # with a PATH that never had gitleaks on it, which is the exit 2
+              # #3516's CI run reported. --print-path names the binary the pin
+              # verified; exporting its directory puts it on PATH for the rest
+              # of this block. The GITHUB_PATH write stays in the script for
+              # later steps -- it is right there, it is just not enough here.
+              export PATH="$(dirname "$(scripts/install-gitleaks.sh --print-path)"):$PATH"
+              # Prove the propagation before the scan, so a broken PATH fails
+              # as "gitleaks missing" next to the install, not as an opaque
+              # exit 2 from a scan that never ran.
+              command -v gitleaks
+              # check-git-secrets.py exits 2 when gitleaks fails TO RUN and 1
+              # when it finds something unallowlisted. Both are failures here
+              # and neither is softened: under `set -euo pipefail` an exit 2
+              # cannot be mistaken for a clean scan, which is the flagged vs
+              # unresolved split #2763 forced for trivy. Nothing in this step
+              # appends `|| true` or pipes the status away.
+              python3 scripts/check-git-secrets.py
+              # The gate's own regression suite. It lives in tests/docs/ and
+              # the docs-regression row above already collects it, but its
+              # four gitleaks-backed tests skip on a box with no binary -- and
+              # the docs row has none. This row does, so this is the only place
+              # they actually execute in CI; without it the suite would skip
+              # forever and quietly stop guarding the gate (#2981's shape).
+              python -m pip install pytest
+              python -m pytest tests/docs/test_3501_secret_scan_allowlist.py -q
 
           - name: Shell syntax and high-severity ShellCheck
             home: true

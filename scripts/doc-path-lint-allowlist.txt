@@ -27,6 +27,7 @@ analysis/geoip/ # geoipupdate owns this dir on the runner; nothing under it is t
 analysis/threat-intel/threat-cidrs.csv # generated on the host from the tracked .csv.example
 analysis/ghidra/revdeck/ # hand-vendored/build-generated on the host, untracked (CI-CD says so itself)
 analysis/ghidra/revdeck/ai-reverse-engineering # upstream clone target inside that host-side tree
+docs/benchmarks/runs/ # host-side and historical transcript directory; committed August runs now live in runs-archive-20261005
 ../.env # untracked local env file; the tracked template is vps/.env.example
 
 # --- removed components kept deliberately in era records ---
@@ -97,3 +98,18 @@ analysis/ghidra/training/TOOLCHAIN.md # resolved-version record #3080 writes int
 # upstream spans the first-segment screen cannot discard on its own.
 docs/kimi_k3.md # upstream colibri doc the `kimi` family guard points at; not a path in this repo
 docs/deepseek-v4.md # upstream colibri doc the `deepseek_v4` family guard points at; not a path in this repo
+
+# --- graphify knowledge-graph output (#3497): the index page deliberately
+#     names the excluded artifacts so a reader knows what is NOT published.
+#     All of it is generated and regenerable; only graph.html and the dated
+#     GRAPH_REPORT.md are tracked. Same reasoning as the vps/ host-side block
+#     above -- an untracked-by-design path named on purpose. ---
+graphify-out/graph.json # generated graph, 282 MB, deliberately untracked (#3497)
+graphify-out/cache/ # graphify AST cache, 311 MB, deliberately untracked (#3497)
+graphify-out/manifest.json # per-run file index, 3.4 MB, nothing consumes it (#3497)
+graphify-out/.graphify_labels.json # graphify cluster-label sidecar, untracked (#3497)
+graphify-out/.graphify_labels.json.sig # graphify label signature sidecar (#3497)
+graphify-out/.graphify_analysis.json # graphify analysis sidecar, untracked (#3497)
+graphify-out/.graphify_root # graphify scan-root marker, untracked (#3497)
+graphify-out/2026-10-04/graph.json # per-date generated graph, untracked (#3497)
+graphify-out/2026-10-04/manifest.json # per-date file index, untracked (#3497)

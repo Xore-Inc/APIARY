@@ -28,7 +28,7 @@
 # sharing) -- honeypot.cfg below only turns on output_jsonlog, matching
 # this repo's declined-third-party-sharing stance
 # (docs/community-threat-intel-sharing.md).
-FROM python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217 AS build
+FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 ARG ELASTICPOT_REF=619df91b96881cea5bb3c7923784910f6ee19e6d
@@ -48,7 +48,7 @@ RUN python3 -m venv /elasticpot-env \
       "configparser>=3.5.0" "service_identity>=18.1.0" "setuptools<45.0.0" \
       "Twisted>=18.9.0" "geoip2>=2.7.0" "maxminddb>=1.3.0"
 
-FROM python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217
+FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d
 RUN apt-get update && apt-get install -y --no-install-recommends netcat-openbsd \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /elasticpot-env /elasticpot-env

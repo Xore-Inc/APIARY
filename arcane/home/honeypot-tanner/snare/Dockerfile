@@ -19,7 +19,7 @@
 # already pin that version elsewhere in this repo; it fails identically to
 # 3.14, no cp312 wheel exists either -- 3.11 is the newest that actually
 # has one).
-FROM python:3.11-slim@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6
+FROM python:3.11-slim@sha256:6f31d6e9ba2b0a787a3f81c37b004155b87b9efa1b771182bd550c1615745be5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git wget libxml2-dev libxslt-dev gcc \

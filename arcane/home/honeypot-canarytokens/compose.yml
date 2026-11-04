@@ -85,7 +85,7 @@ x-runtime-defaults: &runtime-defaults
 services:
   canarytokens-redis:
     <<: *runtime-defaults
-    image: redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: hp-canarytokens-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --protected-mode no --save 60 1

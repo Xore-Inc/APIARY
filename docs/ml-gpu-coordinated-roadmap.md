@@ -209,8 +209,13 @@ U2 and daily reports stay disabled for their later milestones.
 3. Enable synthetic U1 summaries, then a small production canary; keep U2 and
    daily reports disabled initially.
 4. Review factuality, compliance, latency, injection behavior, and retention.
-5. Later UI output is escaped, labelled “AI-generated”, and shows confidence
-   and evidence links.
+5. Later UI output is escaped, labelled “AI-generated”, and shows the model's
+   self-reported confidence and evidence links. The confidence value is a
+   `low`/`medium`/`high` adjective the model assigns to its own answer, not a
+   computed or calibrated score — see
+   [`gpu-llm-analysis-worker.md` §10](gpu-llm-analysis-worker.md). The
+   evidence links and the deterministic corrections behind `severity` are the
+   grounded fields. #3504.
 
 **Exit:** LLM acceptance tests and idle unload pass; disabling Ollama has no
 effect on ingestion or ML scoring.
@@ -295,6 +300,14 @@ removes them.
 - GPU use is measured, optional, and OOM-safe.
 - The LLM is local, pinned, injection-tested, advisory, and disableable.
 - Dashboard output is authenticated, bounded, escaped, and clear about
-  degraded or AI-generated data.
+  AI-generated data: every `/llm-analysis` row carries an "AI-generated" badge,
+  the severity column is headed "severity (AI-guessed)", and the page subtitle
+  says no judgment there is verified until a human confirms it
+  (`arcane/home/honeypot-dashboard/frontend-next/src/routes/llm-analysis.tsx`).
+  There is no separate dashboard "degraded" mode to label: `ml-worker`'s
+  degraded path — an Elasticsearch read failure degrades to the last in-memory
+  checkpoint — is logged loudly in the worker log
+  (`ml-worker/worker.py:308`) and surfaces there, not as a dashboard badge.
+  A degraded dashboard label is still owed and is not yet built. #3504.
 - Model/schema versions and evidence links make findings reproducible.
 - The 72-hour shared-GPU soak and both rollback drills pass.

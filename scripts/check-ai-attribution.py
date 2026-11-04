@@ -35,6 +35,7 @@ import os
 import re
 import sys
 import urllib.request
+from typing import Any
 
 # Co-author trailers: any assistant or model family -- nobody legitimately
 # co-authors a commit with a model.
@@ -80,7 +81,7 @@ def findings(text: str) -> list[str]:
     return hits
 
 
-def _api(url: str, token: str) -> object:
+def _api(url: str, token: str) -> Any:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- fixed GitHub API host
         return json.load(resp)

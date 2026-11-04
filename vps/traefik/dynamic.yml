@@ -31,12 +31,10 @@
 # socat-hp-http           :8081   →  10.8.0.2:19081 (http-honeypot :8080)
 # socat-hp-snare          :8082   →  10.8.0.2:19082 (snare :8080)
 # socat-hp-dashboard      :8090   →  10.8.0.2:19090 (dashboard :8080)
-# socat-hp-dashboard-next :8092   →  10.8.0.2:19092 (dashboard-next :8080,
-#                                     #1628 staged/beta path -- side by
-#                                     side with socat-hp-dashboard above,
-#                                     not yet wired up: needs the ports:
-#                                     mapping added to dashboard-next in
-#                                     compose.yml first)
+# socat-hp-dashboard-next :8092   →  10.8.0.2:19092 (standalone
+#                                     Xore/apiary-dashboard :3000, the
+#                                     staging path; historical name, no
+#                                     longer dashboard-next)
 # socat-hp-kibana         :5601   →  10.8.0.2:19601 (kibana :5601)
 # socat-hp-tanner         :8091   →  10.8.0.2:19091 (tanner_web :8091)
 # socat-hp-evebox         :5636   →  10.8.0.2:19636 (evebox :5636)

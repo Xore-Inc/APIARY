@@ -1,6 +1,6 @@
 # mushorg/phpox — PHP sandbox for tanner (no published Docker Hub image)
 # Provides the PHP eval sandbox tanner uses for template-injection emulation.
-FROM php:8.5-cli-alpine@sha256:0554eb53778b5316f6b9a3447c9dfa3cf2141c0c02ff816c42cdc9aa240a34aa
+FROM php:8.5-cli-alpine@sha256:93684051146ec037620855feb77f278090bde45ddc030801cd3f2a7685bc4deb
 
 LABEL maintainer="honeypot-stack"
 

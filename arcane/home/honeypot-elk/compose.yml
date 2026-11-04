@@ -250,7 +250,7 @@ services:
   # overlap is with our composable template's pattern, not EveBox's.
   evebox:
     <<: *runtime-defaults
-    image: jasonish/evebox:latest@sha256:216ef6eb5bfcc1d8d9b13a41ba38eb067060e68c3970fa4579d07c8f5d5a9326
+    image: jasonish/evebox:latest@sha256:34be7618354071a19d2f16d7ebcde6556a960f414ed957a1e82495c42f152b6c
     container_name: hp-evebox
     restart: unless-stopped
     command:
@@ -535,7 +535,7 @@ services:
   # needed for the chmod once root no longer owns the path post-chown).
   arkime-pcap-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6.7.0@sha256:754ac8d50c8d4136462c3bb3701c400be66310020ab01d5ea94a4e73942b0127
+    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
     container_name: hp-arkime-pcap-init
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
@@ -556,8 +556,8 @@ services:
     # offline files", merged 2026-05-19, first released in v6.4.0) fixes
     # the exact deadlock this container hit live -- "Waiting for reader
     # slot N to drain, finishWaiting=255" repeating forever until manually
-    # restarted. v6.7.0 is the latest stable release and includes it.
-    image: ghcr.io/arkime/arkime/arkime:v6.7.0@sha256:754ac8d50c8d4136462c3bb3701c400be66310020ab01d5ea94a4e73942b0127
+    # restarted. v6.8.0 is the latest stable release and includes it.
+    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
     container_name: hp-arkime-capture
     restart: unless-stopped
     # Offline import mode: -R watches the locally synced pcap dir (see
@@ -700,7 +700,7 @@ services:
     <<: *runtime-defaults
     # #1497: pinned for the same reason as arkime-capture above -- keep
     # both in lockstep, same image either way.
-    image: ghcr.io/arkime/arkime/arkime:v6.7.0@sha256:754ac8d50c8d4136462c3bb3701c400be66310020ab01d5ea94a4e73942b0127
+    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
     container_name: hp-arkime-viewer
     restart: unless-stopped
     # #126: waits on the marker directly instead of depends_on-ing
@@ -784,7 +784,7 @@ services:
   # Networkless except for Elasticsearch: it reads two local paths and posts.
   # It never fetches anything, and it never executes what it reads.
   extracted-file-importer:
-    image: docker.io/library/python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
+    image: docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
     container_name: hp-extracted-file-importer
     restart: unless-stopped
     read_only: true

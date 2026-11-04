@@ -13,6 +13,41 @@ doc recorded the shutdown as final; that framing was wrong and is corrected
 here. Nothing was deleted — volumes, compose files and `.env` are all intact, so
 this is a running stack with a recorded inventory, not a tombstone.
 
+## What it does
+
+PentAGI is an autonomous-pentest stack, and it is **out of band from the
+honeypot fleet**: it consumes no honeypot event, writes to no honeypot index,
+and shares no network with any `hp-*` container. The `hp-galah-llm-broker` and
+`ghidra-ollama-1` Ollama listeners on the host are separate services in
+separate compose projects; neither is reachable from this stack, and both are
+out of scope here.
+
+End to end, as captured 2026-09-27:
+
+- **Web UI on the host LAN, port 8443.** The only non-loopback binding in the
+  stack — every other service is either in-network or on 127.0.0.1.
+- **Drives its own agent sandboxes.** `pentagi-terminal-1..3` are Kali
+  containers it creates and reaps itself as agent execution environments; they
+  carry no compose labels and no `docker compose` invocation can manage them.
+  Each keeps a `/work` volume and binds the **host Docker socket**, so an agent
+  inside one can act on the host's containers.
+- **Self-hosts its model and embeddings.** `pentagi-ollama-embedding` serves
+  both `OLLAMA_SERVER_URL` and `EMBEDDING_URL` on 11434 inside
+  `pentagi-network`; `pentagi-vllm` is profile-gated and contributes nothing.
+- **Configures an external OpenAI-compatible endpoint alongside it.** Both
+  `LLM_SERVER_URL` and `OPEN_AI_SERVER_URL` are set, so which backend a given
+  request actually used is not recorded here.
+- **No search backend, no tracing, no SSO, no licence.** See "Set and unset"
+  below for the full set-vs-unset shape.
+- **Not stably up.** See "Observed instability": the stack is cycled by an
+  unidentified external actor more than once during the capture window, and
+  each cycle destroys in-flight terminal work. "PentAGI is up" is a sampled
+  observation, not a guarantee.
+
+What it detects: nothing in the honeypot's telemetry. This doc records the
+stack's operation and state; it makes no claim about what PentAGI found, which
+is not this repo's record to keep. #3504.
+
 Two things this doc deliberately does **not** carry, and why:
 
 - **No configuration values, for any key, and no lengths.** The record is *set

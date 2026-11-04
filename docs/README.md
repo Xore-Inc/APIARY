@@ -90,9 +90,17 @@ Analysis and sandbox components:
 [GHOSTS sandbox plan](sandbox/ghosts/IMPLEMENTATION_PLAN.md) ·
 [living analysis workstation research](sandbox/windows_kimi/RESEARCH.md)
 
+## Maps — generated views of the tree
+
+[knowledge graph](architecture/graph-report.md) — auto-generated map of every
+file, function and community in this repo, with an explorable viewer; indexed
+from `graphify update .`
+
 ## Records — audit trails
 
 [runtime compatibility record](runtime-compatibility-record.md) ·
+[claims audit (#3504: every broad capability claim in README/docs, and its
+disposition)](claims-audit-3504.md) ·
 [frontend mutation and property testing pilot (#3326)](frontend-mutation-pilot.md) ·
 [security fixes](security-fixes.md) ·
 [approved local-model qualification](analysis/ghidra/models/approval-record.md) ·

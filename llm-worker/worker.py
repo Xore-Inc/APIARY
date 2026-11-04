@@ -840,7 +840,8 @@ class SessionAccumulator:
         return "session-" + hashlib.sha256(self.session_id.encode()).hexdigest()
 
     def add_event(self, hit: dict[str, Any], max_content_chars: int) -> None:
-        source = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+        raw_source = hit.get("_source")
+        source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
         event_key = hashlib.sha256(
             f"{hit.get('_index', '')}\0{hit.get('_id', '')}".encode("utf-8", "replace")
         ).hexdigest()
@@ -1094,7 +1095,8 @@ class LLMWorker:
         covered_session_ids: set[str] = set()
         excluded_session_ids: set[str] = set()
         for hit in hits:
-            source = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+            raw_source = hit.get("_source")
+            source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
             session_id = bounded_string(nested(source, "honeypot", "session"), 128)
             timestamp = bounded_string(source.get("@timestamp"), 64)
             if not session_id or not timestamp:
@@ -1166,7 +1168,8 @@ class LLMWorker:
         )
         ready: list[tuple[str, SessionAccumulator]] = []
         for hit in response.get("hits", {}).get("hits", []):
-            source = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+            raw_source = hit.get("_source")
+            source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
             session_id = source.get("session_id")
             if isinstance(session_id, str) and session_id:
                 accumulator = SessionAccumulator.from_document(source, session_id)
@@ -1226,7 +1229,7 @@ class LLMWorker:
 
     def record_error(self, analysis_id: str, source_id: str, code: str, attempt: int) -> None:
         assert self.es is not None
-        document = {
+        document: dict[str, Any] = {
             "@timestamp": iso_now(),
             "analysis_id": analysis_id,
             "doc_type": "error",
@@ -1495,7 +1498,8 @@ class LLMWorker:
             except NotFoundError:
                 continue
             for hit in response.get("hits", {}).get("hits", []):
-                source = hit.get("_source") if isinstance(hit.get("_source"), dict) else {}
+                raw_source = hit.get("_source")
+                source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
                 lines.append(
                     " | ".join(
                         [
@@ -1800,7 +1804,7 @@ def run_synthetic_model_canary(config: Config, idle_timeout: int = 0) -> dict[st
     config.validate_synthetic_canary()
     client = OllamaClient(config)
     digest = client.model_digest()
-    cases = (
+    cases: tuple[dict[str, Any], ...] = (
         {
             "name": "reconnaissance",
             "commands": ["uname -a", "id", "cat /etc/os-release", "ip addr", "ps aux"],

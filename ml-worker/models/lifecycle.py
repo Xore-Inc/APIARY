@@ -105,7 +105,7 @@ def prune_old_versions(model_dir: str, prefix: str, keep: int = MAX_RETAINED_VER
     "does not exist".
     """
     pattern = _version_pattern(prefix)
-    versions = {}
+    versions: dict = {}
     for path in glob.glob(os.path.join(model_dir, f"{prefix}_*")):
         m = pattern.search(os.path.basename(path))
         if not m:

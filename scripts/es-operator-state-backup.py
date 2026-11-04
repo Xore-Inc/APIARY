@@ -86,6 +86,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,7 +142,7 @@ LEDGER_INDEXES = tuple(name for name, _ in LEDGER)
 
 # Same pin reset-logs.sh and the fleet's compose images use (#2348/#1955): a
 # bare tag would make the backup's HTTP client an unowned mutable input.
-CURL_IMAGE = "curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13"
+CURL_IMAGE = "curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
 
 SCROLL_KEEPALIVE = "5m"
 NDJSON = "application/x-ndjson"
@@ -300,7 +301,7 @@ def export_index(es: Es, index: str, dest: Path, page_size: int,
 
     # Unwrap the single `{index: {...}}` envelope and keep only `mappings`;
     # see the module docstring for why settings are dropped.
-    body = next(iter(response.document.values()), {})
+    body: Any = next(iter(response.document.values()), {})
     mappings = body.get("mappings") if isinstance(body, dict) else None
     if not isinstance(mappings, dict):
         raise EsError(f"GET /{index}/_mapping: no mappings block")

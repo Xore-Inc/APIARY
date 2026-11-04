@@ -49,6 +49,7 @@ pub mod criticality_rules;
 pub mod dashboard;
 pub mod decode_correlate;
 pub mod detail;
+pub mod entity_details;
 pub mod es;
 pub mod event_detail;
 pub mod obs;
@@ -669,6 +670,23 @@ pub fn api_router() -> ContractRouter {
         // definition. See reports_api::generate_payload_report.
         .routes(utoipa_axum::routes!(reports_api::generate_payload_report))
         .routes(utoipa_axum::routes!(stores::generic, stores::generic_delete))
+        .routes(utoipa_axum::routes!(entity_details::store_detail))
+        .routes(utoipa_axum::routes!(entity_details::source_events))
+        .routes(utoipa_axum::routes!(entity_details::source_sessions))
+        .routes(utoipa_axum::routes!(entity_details::source_timeline))
+        .routes(utoipa_axum::routes!(entity_details::source_network))
+        .routes(utoipa_axum::routes!(entity_details::source_identities))
+        .routes(utoipa_axum::routes!(entity_details::asn))
+        .routes(utoipa_axum::routes!(entity_details::campaign))
+        .routes(utoipa_axum::routes!(entity_details::identity))
+        .routes(utoipa_axum::routes!(entity_details::session_summary))
+        .routes(utoipa_axum::routes!(entity_details::blocked_ips))
+        .routes(utoipa_axum::routes!(entity_details::ioc_catalog))
+        .routes(utoipa_axum::routes!(entity_details::ioc))
+        .routes(utoipa_axum::routes!(entity_details::entity_timeline))
+        .routes(utoipa_axum::routes!(entity_details::entity_related))
+        .routes(utoipa_axum::routes!(entity_details::payload_delivery))
+        .routes(utoipa_axum::routes!(entity_details::replay_detail))
         .routes(utoipa_axum::routes!(problem_reports::submit))
         .routes(utoipa_axum::routes!(problem_reports::patch_status))
         // #1612 mounted worker role (phase 3a): sandbox/ghidra/github-

@@ -43,7 +43,7 @@ services:
     # audit trail. Dependabot covers nothing in /sandbox (#2316), so patch
     # releases of mongo:7.0 will NOT arrive automatically -- bump by repinning
     # a freshly observed digest.
-    image: mongo:7.0@sha256:b6421fd6d1c5ded6377b397d8983e2f82e2100dc5123332dcfda2065a472be5b
+    image: mongo:7.0@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b
     volumes:
       - cape-mongo-data:/data/db
     networks:

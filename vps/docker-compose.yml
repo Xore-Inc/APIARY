@@ -15,7 +15,7 @@
 #         /opt/stacks/apiary/logs/suricata -o ro,allow_other
 
 x-oidc-gateway: &oidc-gateway
-  image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+  image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
   restart: unless-stopped
   read_only: true
   security_opt: [no-new-privileges:true]
@@ -124,7 +124,7 @@ services:
 
   # ===== TRAEFIK =====
   traefik:
-    image: traefik:v3.7.12@sha256:9c2a54d87f76f5c2f5f2682c68394af92fb12c0a2686798d6462a3f84bd78eaf
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
     container_name: traefik
     restart: unless-stopped
     ports:
@@ -602,7 +602,7 @@ services:
   # up either way, it just polls BLACKHOLE_LIST on a timer (blackhole.go).
   # See portbridge-blackhole-refresh.sh for the full reasoning.
   portbridge-blackhole-refresh:
-    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-portbridge-blackhole-refresh
     restart: unless-stopped
     user: root
@@ -637,7 +637,7 @@ services:
   # scripts/github-ci-runner/dashboard-source-health.sh uses to reach the Rust
   # tier from a shell. That route is auth-gated (#2183), hence the token below.
   portbridge-manual-blackhole-refresh:
-    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-portbridge-manual-blackhole-refresh
     restart: unless-stopped
     user: root
@@ -769,14 +769,12 @@ services:
     command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:10.8.0.2:19090
     networks: [oidc-dashboard]
 
-  # Staged/beta path for the dashboard modernization port (#1628) --
-  # bridges to dashboard-next directly, side by side with
-  # socat-hp-dashboard above (left untouched). Requires a matching
-  # `ports: ["${HP_BIND:-10.8.0.2}:19092:8080"]` on dashboard-next itself
-  # (arcane/home/honeypot-dashboard/compose.yml) before this resolves to
-  # anything -- see honeypot-dashboard-beta in vps/traefik/dynamic.yml for
-  # the router half, and #1628 for the still-open naming/DNS/Keycloak
-  # decisions this needs before first use.
+  # Staging bridge, side by side with socat-hp-dashboard above (left
+  # untouched). Homeserver port 19092 is bound by the standalone
+  # Xore/apiary-dashboard Arcane project (its
+  # arcane/home/apiary-dashboard/compose.yml), not by dashboard-next any
+  # more; its cutover moves production here by pointing the Traefik
+  # router at this service. The container keeps its historical name.
   socat-hp-dashboard-next:
     image: alpine/socat:latest@sha256:5f275aa1b6e9889c851f61097142ee050fc6ac4615b4ea64ac1f2b0e81ff8d7f
     container_name: socat-hp-dashboard-next
@@ -983,7 +981,7 @@ services:
   # mounted yaml is ignored entirely and pcap-log never activates.
   # =====================================================================
   suricata-update:
-    image: jasonish/suricata:latest@sha256:51a59543dcb6e5f9d586c06053c6b71d462cea919b45719090443f4af1428780
+    image: jasonish/suricata:latest@sha256:7ca2546f7f2735f621b981b6a5ec84fb962984636f7629a1a2fa6a324d4b6840
     container_name: hp-suricata-update
     restart: "no"
     network_mode: host
@@ -1011,7 +1009,7 @@ services:
           --no-reload
 
   suricata:
-    image: jasonish/suricata:latest@sha256:51a59543dcb6e5f9d586c06053c6b71d462cea919b45719090443f4af1428780
+    image: jasonish/suricata:latest@sha256:7ca2546f7f2735f621b981b6a5ec84fb962984636f7629a1a2fa6a324d4b6840
     container_name: hp-suricata
     restart: unless-stopped
     network_mode: host
@@ -1065,7 +1063,7 @@ services:
   # cold-start guarantee -- it only keeps an already-running Suricata's
   # rules current. See suricata-rules-refresh.sh for the reload mechanism.
   suricata-rules-refresh:
-    image: jasonish/suricata:latest@sha256:51a59543dcb6e5f9d586c06053c6b71d462cea919b45719090443f4af1428780
+    image: jasonish/suricata:latest@sha256:7ca2546f7f2735f621b981b6a5ec84fb962984636f7629a1a2fa6a324d4b6840
     container_name: hp-suricata-rules-refresh
     restart: unless-stopped
     network_mode: host

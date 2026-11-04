@@ -116,7 +116,9 @@ def main() -> int:
     args = parser.parse_args()
 
     contract = json.loads(args.contract.read_text())
-    secured, public, skipped = [], [], []
+    secured: list = []
+    public: list = []
+    skipped: list = []
     for path, item in contract.get("paths", {}).items():
         for method, operation in item.items():
             if method in ("parameters", "summary", "description"):

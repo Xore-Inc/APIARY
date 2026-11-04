@@ -13,6 +13,7 @@ import ipaddress
 import json
 import re
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Annotated, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -252,7 +253,10 @@ def sanitize_text(value: object, max_chars: int) -> SanitizedText:
     return SanitizedText(cleaned, truncated, digest)
 
 
-def sanitize_commands(commands: list[object], max_chars: int, max_commands: int = 200) -> tuple[SanitizedText, int]:
+def sanitize_commands(commands: Sequence[object], max_chars: int, max_commands: int = 200) -> tuple[SanitizedText, int]:
+    # Sequence, not list: callers pass accumulator.command lists (list[str])
+    # and literal case tables alike, and a list parameter is invariant so a
+    # typed caller of the former is rejected for a type that is not wrong.
     """Return a bounded transcript and the original command count."""
     original_count = len(commands)
     values = [str(command or "") for command in commands]

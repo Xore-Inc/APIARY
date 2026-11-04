@@ -261,3 +261,11 @@ confidence, model severity, final severity, deterministic flags, truncation,
 token counts, and timing. Raw prompts and captured content are not copied into
 the result index. #150/#155 must HTML-escape and visibly label all narrative
 fields as AI-generated.
+
+`confidence` is the one field in that list that is **not** produced by this
+worker. It is a `low`/`medium`/`high` value the model assigns to its own answer
+(`contracts.py:148`), `model severity` is likewise the model's, and `final
+severity` is the deterministic correction of it by `postprocess_annotation`
+(`contracts.py:331`) against evidence extracted out of the captured text. That
+same pass rewrites `iocs`, `mitre_attack`, `intent` and `summary`, and does not
+touch `confidence` — no code here computes or calibrates it. #3504.

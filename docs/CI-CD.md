@@ -128,6 +128,82 @@ requests need the repository variable `CI_HOMESERVER_PRS=true`, and fork
 PRs are excluded regardless of that variable — defense-in-depth against a
 compromised contributor account, not just fork-origin PRs.
 
+## Base-image CVE gate (#3501)
+
+`.github/workflows/image-security-scan.yml` is a **blocking** gate: it runs
+`trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed` over
+every base image `scripts/list-docker-base-images.py` emits, and **fails the
+build** if any image with fixable CRITICAL/HIGH findings has no written
+exemption.
+
+It was report-only from introduction until #3501, which is the decision this
+section records.
+
+### Three outcomes, deliberately not two
+
+trivy exits non-zero both for "found CVEs" and for "could not pull this
+reference at all". Those are opposite findings, so the workflow classifies
+them rather than merging them, and each lands somewhere different:
+
+| outcome | gate | why |
+|---|---|---|
+| fixable CRITICAL/HIGH, **no** reason | **fails** | this is the backlog |
+| fixable CRITICAL/HIGH, reason in `ACCEPTED_CVES` | passes, `::notice` | an argued, reviewed exception |
+| reference would not resolve | `::warning`, **does not fail** | we measured nothing, which is a coverage gap (#2763) |
+
+The third row is the one most likely to be "fixed" into the wrong shape. An
+unresolvable image is neither vulnerable nor exempt — we did not scan it — so
+failing on it trains operators to ignore the gate, and exempting it silently
+is the dishonest direction. It stays visible as a gap, and it is the reason
+`UNSCANNABLE` in `list-docker-base-images.py` exists: an image that can never
+resolve is withheld from stdout with a written reason and reported on stderr.
+
+### What an exemption has to be
+
+An exemption is a claim that **this repo cannot fix the finding**. If a
+patched artifact exists, the fix is to bump the pin — not to write an
+exemption. So `ACCEPTED_CVES` reasons state the constraint that makes an
+image immovable *despite* a published fix: a build stage nothing inherits, a
+pinned on-disk format, a vendor with no rebuild.
+
+"No patched build is published" does not belong there unless a scan showed no
+`FixedVersion`. trivy reporting a `FixedVersion` is upstream saying a patch
+exists, and a reason that contradicts it is a fabricated exemption. An image
+whose scan could not run is **UNVERIFIED** and is left failing; that is the
+honest state, and guessing a count is worse than a red gate.
+
+### Why the keys are digest-pinned
+
+A key is a reference the script actually emits, matched exactly. Both halves
+matter, and the earlier attempt at this gate broke both:
+
+- **Bare tags cannot match.** `main()` emits digest-pinned refs for 58 of the
+  67 images it walks. A key spelled `python:3.12-slim` compared against
+  `python:3.12-slim@sha256:60deed…` never fires. 30 of that attempt's 40
+  keys were inert like this — entries that read like exemptions somebody had
+  argued for while covering no image at all.
+- **Exact matching is what makes them expire.** Each reason describes the
+  artifact that was measured. When a Dependabot bump moves the digest, the key
+  stops matching and the gate re-applies to whatever now sits at that tag. A
+  bare-tag key would survive every bump forever, carrying a stale judgement
+  onto images nobody looked at.
+
+`scripts/tests/test_3501_base_image_cve_exemptions.py` holds this: every key
+must be a reference the script emits *now* (so deleting a Dockerfile cannot
+leave an entry exempting nothing), and the match must not widen to a
+neighbouring ref.
+
+### Adding an entry
+
+1. Scan it and read the actual numbers:
+   `trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed <ref>`
+2. Try to move it. If a patched tag exists, bump the pin — that is the fix.
+3. Only if it genuinely cannot move, add a key spelled exactly as
+   `list-docker-base-images.py` prints it, with a reason that names the
+   constraint and cites the scan.
+4. `python3 scripts/tests/test_3501_base_image_cve_exemptions.py` will reject
+   a dead or over-broad key.
+
 ## Testing conventions
 
 Python and shell tests live in a sibling `tests/` directory next to the code

@@ -48,10 +48,12 @@ class RosterRunnerSlotsTest(unittest.TestCase):
             with patch.object(roster_run, "OUT_DIR", out_dir), \
                  patch.object(roster_run, "LOG", out_dir / "roster.log"), \
                  patch.object(roster_run.subprocess, "run", side_effect=fake_run), \
-                 patch.object(roster_run, "sync_to_homeserver"):
+                 patch.object(roster_run, "sync_to_homeserver"), \
+                 patch.object(roster_run, "log") as log:
                 records = roster_run.run_one(
                     "model:tag", "roster", ("ghidra", "sessions", "revdeck", "coder")
                 )
+                self.logged = [call.args[0] for call in log.call_args_list]
         return commands[0], records
 
     def test_requests_and_reads_back_all_four_slots(self):
@@ -88,6 +90,7 @@ class RosterRunnerSlotsTest(unittest.TestCase):
         self.assertEqual(records[3]["slot"], "coder")
         self.assertEqual(records[3]["status"], "skipped")
         self.assertIn("does not support tools", records[3]["reason"])
+        self.assertTrue(any("does not support tools" in line for line in self.logged))
 
     def test_a_coder_only_report_does_not_skip_the_new_four_slot_run(self):
         with tempfile.TemporaryDirectory() as tmp:

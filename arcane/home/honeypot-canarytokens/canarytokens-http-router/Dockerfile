@@ -3,7 +3,7 @@
 # canarytokens-adapter/Dockerfile's own scratch-based shape exactly --
 # zero third-party dependencies (redisHGetAll speaks just enough RESP by
 # hand), same build/runtime split.
-FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM golang:1.26-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
 WORKDIR /src
 COPY go.mod .
 COPY *.go ./

@@ -62,7 +62,7 @@ x-runtime-defaults: &runtime-defaults
 services:
   oidc-sessions:
     <<: *runtime-defaults
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:ccfa19b0d743e48927e1c8c14e39e0acb97b5cea347fef0bfe340247fea920cd
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
     container_name: hp-dashboard-oidc-sessions
     restart: unless-stopped
     command: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
@@ -98,13 +98,11 @@ services:
   # Modernization port (#1608) — cutover complete: this stack IS the
   # dashboard now, no profile gate, and the retired Go `dashboard`
   # service is gone from this file entirely (an older git commit is the
-  # only way back, deliberately — no runtime fallback). dashboard-next's
-  # own 19092 port mapping below (#1628's staged/beta path,
-  # vps/traefik/dynamic.yml's honeypot-dashboard-beta router) is a
-  # separate, currently-inert host port — nothing routes to it externally
-  # until the VPS-side socat bridge, DNS, and Keycloak client
-  # registration this still needs are set up (#1628); it does not touch
-  # the production 19090 binding at all.
+  # only way back, deliberately — no runtime fallback). The staging port
+  # 19092 is no longer bound here: it belongs to the standalone
+  # Xore/apiary-dashboard Arcane project, which runs beside this one
+  # until its cutover's seven-day rollback window closes (that repo's
+  # docs/cutover-plan.md). dashboard-next keeps production 19090.
   #
   # Cross-host readiness (per Xore): both tiers are stateless,
   # env-configured containers — session/OIDC state lives in the
@@ -543,18 +541,8 @@ services:
     # that live -- with `dashboard`'s now-removed conflicting ports: line
     # still present, a routine sync failed outright trying to rebind
     # 19090 out from under this container).
-    #
-    # 19092 (#1628 staged/beta path): a second, previously-unused port
-    # (see vps/traefik/dynamic.yml's own socat table) -- nothing external
-    # routes to it until the matching VPS-side socat bridge/DNS/Keycloak
-    # registration (still open, see #1628) exist. Health checks reach
-    # this container over the honeynet bridge without needing either host
-    # port; both exist for real, public, browser-driven validation.
-    # (cutover-dashboard.sh, which once automated that preflight, was
-    # removed with the completed cutover.)
     ports:
       - "${HP_BIND:-10.8.0.2}:19090:8080"
-      - "${HP_BIND:-10.8.0.2}:19092:8080"
     volumes:
       - ${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/honeypot-dashboard/secrets}:/run/dashboard-secrets:ro
       # #1972 read-write: appends DASHBOARD_BFF_LOG_FILE as the node user

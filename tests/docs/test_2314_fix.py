@@ -76,7 +76,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SELF_RELPATH = "tests/docs/test_2314_fix.py"
 
 OLD_GOLANG_DIGEST = "sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
-NEW_GOLANG_DIGEST = "sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468"
+NEW_GOLANG_DIGEST = "sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c"
 
 # Issue #2314's "real bump" section names exactly these six Dockerfiles
 # for the golang:1.26-alpine bump.
@@ -96,7 +96,8 @@ GOLANG_DOCKERFILES = {
 SAME_VERSION_REFRESHES = {
     "python:3.14-slim": {
         "old": "sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc",
-        "new": "sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5",
+        "superseded": "sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5",
+        "new": "sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151",
         "files": [
             "analysis/ghidra/statictools/Dockerfile",
             "arcane/home/honeypot-agent-intrusion-worker/analysis/agent-intrusion-corpus/Dockerfile",
@@ -109,7 +110,8 @@ SAME_VERSION_REFRESHES = {
     },
     "python:3.11-slim": {
         "old": "sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff",
-        "new": "sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6",
+        "superseded": "sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6",
+        "new": "sha256:6f31d6e9ba2b0a787a3f81c37b004155b87b9efa1b771182bd550c1615745be5",
         "files": [
             "arcane/home/honeypot-tanner/snare/Dockerfile",
             "arcane/home/honeypot-init/snare/Dockerfile",
@@ -118,21 +120,24 @@ SAME_VERSION_REFRESHES = {
     },
     "python:3.10-slim": {
         "old": "sha256:63669fd2563fa90b0442fa7b568e66e3667755636cda086d7bcaaa895f66fe39",
-        "new": "sha256:38758a82a44d1acb9bae3dd5f7d2a55452fb44a5ceca7c4589f360f2c4aa3d0c",
+        "superseded": "sha256:38758a82a44d1acb9bae3dd5f7d2a55452fb44a5ceca7c4589f360f2c4aa3d0c",
+        "new": "sha256:c1aaf3d03e14944a039a1647e0b3f6f34c6bee517bac6ff380215ee099c4e808",
         "files": [
             "arcane/home/honeypot-tanner/tanner/tanner/Dockerfile",
         ],
     },
     "python:3.12-slim": {
         "old": "sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65",
-        "new": "sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217",
+        "superseded": "sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217",
+        "new": "sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d",
         "files": [
             "arcane/home/honeypot-elasticpot/elasticpot/Dockerfile",
         ],
     },
     "debian:bookworm-slim": {
         "old": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241",
-        "new": "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+        "superseded": "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+        "new": "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
         "files": [
             "arcane/home/honeypot-cowrie/cowrie/Dockerfile",
             "arcane/home/honeypot-galah/galah/Dockerfile",
@@ -147,21 +152,24 @@ SAME_VERSION_REFRESHES = {
     "valkey/valkey:9.1.2-alpine3.24": {
         "old": "sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328",
         "superseded": "sha256:de31910896150d5e754a07d57d227cfdde4e258ddd0d1aa4607f2d2f95843715",
-        "new": "sha256:ccfa19b0d743e48927e1c8c14e39e0acb97b5cea347fef0bfe340247fea920cd",
+        "superseded": "sha256:ccfa19b0d743e48927e1c8c14e39e0acb97b5cea347fef0bfe340247fea920cd",
+        "new": "sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11",
         "files": [
             "arcane/home/honeypot-dashboard/compose.yml",
         ],
     },
     "postgres:18.6-bookworm": {
         "old": "sha256:7d2695c3aa88e792e8b3b233e7e4adb296a20412c6c0ca361e3edaaacfada108",
-        "new": "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af",
+        "superseded": "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af",
+        "new": "sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650",
         "files": [
             "arcane/home/honeypot-keycloak/compose.yml",
         ],
     },
     "redis:7-alpine": {
         "old": "sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2",
-        "new": "sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf",
+        "superseded": "sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf",
+        "new": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
         "files": [
             "arcane/home/honeypot-tanner/tanner/redis/Dockerfile",
             "scripts/test-dashboard-oidc-chaos.sh",

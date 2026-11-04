@@ -66,7 +66,7 @@ def interpolated_vars(compose_text: str) -> set[str]:
 
 
 def documented_keys(env_example_path: Path) -> set[str]:
-    found = set()
+    found: set[str] = set()
     if not env_example_path.is_file():
         return found
     for line in env_example_path.read_text().splitlines():

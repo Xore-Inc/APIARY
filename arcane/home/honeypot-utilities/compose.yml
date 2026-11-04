@@ -218,7 +218,7 @@ services:
   # read-only here for the same reason.
   disk-space-monitor:
     <<: *runtime-defaults
-    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-disk-space-monitor
     restart: unless-stopped
     entrypoint: ["sh", "/usr/local/bin/disk-space-check.sh"]
@@ -317,7 +317,7 @@ services:
   # never the raw socket.
   docker-hygiene:
     <<: *runtime-defaults
-    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
     container_name: hp-docker-hygiene
     restart: unless-stopped
     entrypoint: ["sh", "/usr/local/bin/docker-hygiene.sh"]

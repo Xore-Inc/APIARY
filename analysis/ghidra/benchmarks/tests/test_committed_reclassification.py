@@ -57,7 +57,9 @@ from transcripts import (  # noqa: E402
     TranscriptWriter,
 )
 
-RUNS_ROOT = REPO_ROOT / "docs" / "benchmarks" / "runs"
+# The committed runs were archived out of docs/benchmarks/runs/ (a55beeb0,
+# dd3dd62c); the archive is the tree these invariants are measured on.
+RUNS_ROOT = REPO_ROOT / "docs" / "benchmarks" / "runs-archive-20261005"
 
 # Measured on the committed runs and re-measured by this file's inventory test.
 # 928 revdeck + 12 sessions, spread over 62 of the 66 run directories; the three

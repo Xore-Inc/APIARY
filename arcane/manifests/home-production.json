@@ -352,5 +352,14 @@
     "autoSync": false,
     "syncDirectory": true,
     "syncInterval": 300
+  },
+  {
+    "syncName": "apiary-dashboard",
+    "gitRepo": "apiary-dashboard",
+    "branch": "main",
+    "dockerComposePath": "arcane/home/apiary-dashboard/compose.yml",
+    "autoSync": false,
+    "syncDirectory": true,
+    "syncInterval": 300
   }
 ]

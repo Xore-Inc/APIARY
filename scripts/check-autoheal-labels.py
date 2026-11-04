@@ -104,7 +104,7 @@ def service_block_text(raw_lines: list[str], service_name: str) -> str:
 
 
 def check_compose_file(path: Path) -> list[str]:
-    failures = []
+    failures: list[str] = []
     raw_lines = path.read_text().splitlines()
     try:
         doc = yaml.safe_load("\n".join(raw_lines))

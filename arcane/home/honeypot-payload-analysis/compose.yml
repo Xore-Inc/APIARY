@@ -33,7 +33,7 @@ services:
   # on the same filesystem are atomically replaced with hard links.
   payload-dedupe:
     <<: *runtime-defaults
-    image: python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
+    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
     container_name: hp-payload-dedupe
     restart: unless-stopped
     # #127: waits on the marker directly instead of depends_on-ing

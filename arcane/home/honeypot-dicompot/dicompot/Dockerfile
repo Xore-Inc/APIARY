@@ -42,7 +42,7 @@
 # above and hard-fails if any anchor stops matching exactly once, so a pin
 # bump that moves the patched code fails the image build loudly instead of
 # silently shipping an unpatched sensor.
-FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS build
+FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -65,7 +65,7 @@ RUN set -eu; \
     test "$(go list -m -f '{{.Dir}}' github.com/nsmfoo/dicompot)" = /src/dicompot-patched
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /dicompot .
 
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 RUN apk add --no-cache busybox-extras
 COPY --from=build /dicompot /usr/local/bin/dicompot
 

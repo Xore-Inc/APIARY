@@ -55,7 +55,7 @@ es_host="${PROBE_REAL_SESSION_ES_HOST:-http://elasticsearch:9200}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fetch_hits() { # $1: ES query body -- read-only _search, nothing written
-  docker run --rm --network honeynet curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13 -s \
+  docker run --rm --network honeynet curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -s \
     -H 'Content-Type: application/json' \
     "$es_host/honeypot-v2-*/_search" -d "$1" \
     | jq '.hits.hits'

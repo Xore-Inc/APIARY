@@ -501,10 +501,24 @@ Mirrors the pattern `ml-anomalies` already established
   existing 1-minute ES ticker (same transport decision as `ml-anomalies`,
   no new broker). `/llm-analysis` page: session summaries and payload
   triage in one filterable table, every row labelled "AI-generated" and
-  showing severity/confidence, with an evidence link back to the
+  showing severity and confidence, with an evidence link back to the
   originating session or payload where one exists
   (`frontend-next/src/routes/llm-analysis.tsx`, backed by the generic store
   route at `main.rs:438` rather than a route of its own).
+
+  `confidence` is the model's own `low`/`medium`/`high` adjective about its
+  own answer, not a computed score. It is a field the model fills in for
+  itself — declared on the output schema at `llm-worker/contracts.py:148`,
+  `:170`, `:208`, with the only instruction about when to lower it being
+  prose in the system prompt (`llm-worker/contracts.py:35`,
+  "... set confidence to low"). The deterministic pass,
+  `postprocess_annotation` (`llm-worker/contracts.py:331`), corrects `iocs`,
+  `mitre_attack`, `intent`, `severity` and `summary` against evidence
+  extracted by regex out of the captured text and deliberately leaves
+  `confidence` alone; nothing in `llm-worker/` computes, calibrates or bounds
+  it, and the UI prints the raw string
+  (`frontend-next/src/routes/llm-analysis.tsx:158`). Read it as one model's
+  self-assessment, and weigh the fields that *are* grounded. #3504.
 - **Deferred:** `GET /api/llm/analysis/stream` (SSE via redis channel
   `llm-analysis-events`) -- optional per this section's original scope
   ("any SSE/Redis wake-up path remains optional and non-authoritative");

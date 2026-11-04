@@ -2123,11 +2123,12 @@ class TranscriptAttributionTest(unittest.TestCase):
         # recorder is handed, not the socket, so the transport is stubbed after
         # the engine has been decided -- the engine facts have to survive that.
         session.transport = request_json
-        evaluate_models.evaluate_slot(
-            "http://127.0.0.1:11435", "revdeck", "gemma2:27b",
-            evaluate_models.qualification_request("revdeck", 8192),
-            writer, "A", session,
-        )
+        with mock.patch.object(evaluate_models, "request_json", request_json):
+            evaluate_models.evaluate_slot(
+                "http://127.0.0.1:11435", "revdeck", "gemma2:27b",
+                evaluate_models.qualification_request("revdeck", 8192),
+                writer, "A", session,
+            )
         return json.loads(writer.path.read_text().splitlines()[0])
 
     def test_a_llama_cpp_record_carries_the_engine_on_the_record(self):
@@ -2250,13 +2251,28 @@ class EngineFlagTest(unittest.TestCase):
 
     def test_the_default_engine_still_prefers_llama_cpp(self):
         remote = FakeRemote()
-        with mock.patch.object(serving.LlamaCppServer, "healthy", return_value=True), \
+        with mock.patch.object(evaluate_models, "request_json",
+                               return_value={"models": [{"name": "gemma2:27b"}]}), \
+             mock.patch.object(serving.LlamaCppServer, "healthy", return_value=True), \
              mock.patch.object(serving, "Remote", return_value=remote):
             session = evaluate_models.open_session(
                 self._args(evaluate_models.ENGINE_LLAMACPP), "http://127.0.0.1:11435",
                 "gemma2:27b", 24576,
             )
         self.assertEqual(session.engine, "llama.cpp")
+        self.assertEqual(len(remote.launches), 1)
+
+    def test_ollama_is_the_first_fallback_when_its_endpoint_is_healthy(self):
+        remote = FakeRemote(start_failures=[(1, "unsupported model architecture")])
+        args = argparse.Namespace(engine=evaluate_models.ENGINE_LLAMACPP,
+                                  colibri_base_url="http://colibri:8973")
+        tags = {"models": [{"name": "gemma2:27b"}]}
+        with mock.patch.object(evaluate_models, "request_json", return_value=tags), \
+             mock.patch.object(serving, "Remote", return_value=remote):
+            session = evaluate_models.open_session(
+                args, "http://ollama:11434", "gemma2:27b", 24576)
+        self.assertEqual(session.engine, "ollama")
+        self.assertIsNone(session.colibri_base_url)
         self.assertEqual(len(remote.launches), 1)
 
     def test_the_manifest_path_reads_the_flag_too(self):

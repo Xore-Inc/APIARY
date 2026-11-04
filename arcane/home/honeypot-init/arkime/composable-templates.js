@@ -296,7 +296,11 @@ async function restore(keepOut) {
       console.log(`restore (dry run): would put ${name} back`);
       continue;
     }
-    const put = await es('PUT', `/_index_template/${name}`, shadowed[name]);
+    // GET returns these and PUT refuses them as system-managed (#3549). Stripped
+    // here rather than at stash time, so a stash written by an older run
+    // restores too.
+    const { created_date, created_date_millis, modified_date, modified_date_millis, ...body } = shadowed[name];
+    const put = await es('PUT', `/_index_template/${name}`, body);
     if (put.status !== 200) {
       throw new Error(`restoring _index_template/${name}: HTTP ${put.status} ${JSON.stringify(put.json)}`);
     }
@@ -460,7 +464,10 @@ async function generate() {
       // made it into the composed settings would install cleanly and leave
       // every new index unmanaged -- the exact state this exists to end, and
       // invisible from here, so it is verified rather than assumed.
-      const lifecycle = sim.json?.template?.settings?.index?.['lifecycle.name'];
+      // The simulate API returns settings nested ({lifecycle: {name}}), not as
+      // the flat key the template was written with (#3551); accept either.
+      const index = sim.json?.template?.settings?.index;
+      const lifecycle = index?.lifecycle?.name ?? index?.['lifecycle.name'];
       if (lifecycle !== family.retention) {
         throw new Error(`${family.name}: simulate shows index.lifecycle.name=${lifecycle}, expected ${family.retention}`);
       }

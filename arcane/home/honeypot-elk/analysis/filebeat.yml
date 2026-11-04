@@ -413,12 +413,16 @@ filebeat.inputs:
   # The BFF tier's stream carries named outcomes (auth started/failed/
   # completed and everything else routed through recordNamedEvent), not one
   # line per request; username deliberately never appears among the fields.
+  # *.jsonl, not app.jsonl: during the standalone dashboard's cutover both
+  # frontends write here, dashboard-next to app.jsonl and Xore/apiary-dashboard
+  # to rewrite.jsonl, one file each so neither races the other's rotation.
+  # Rotated generations (*.jsonl.1) do not match, so nothing is read twice.
   - type: filestream
     id: dashboard-bff-app
     file_identity.fingerprint: ~
     prospector.scanner.fingerprint.enabled: true
     paths:
-      - /logs/dashboard-bff/app.jsonl
+      - /logs/dashboard-bff/*.jsonl
     parsers:
       - ndjson:
           overwrite_keys: true

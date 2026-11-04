@@ -227,7 +227,9 @@ jobs:
               echo "::error::$name: docker compose config failed for $path (see above)"
               fail=1
             fi
-          done < <(jq -r '.[] | [.syncName, .dockerComposePath] | @tsv' arcane/manifests/home-production.json)
+          # Only entries synced from this repository: another repository's
+          # compose file (gitRepo apiary-dashboard) is validated in its own CI.
+          done < <(jq -r '.[] | select(.gitRepo == "apiary") | [.syncName, .dockerComposePath] | @tsv' arcane/manifests/home-production.json)
           exit "$fail"
 
   vps:

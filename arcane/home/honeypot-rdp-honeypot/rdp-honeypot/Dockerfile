@@ -2,7 +2,7 @@
 # #412) -- see main.go's own doc comment for why this is genuinely simple
 # despite RDP's reputation, and why that reverses #238's original "vendor,
 # don't port" call.
-FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS build
+FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 WORKDIR /src
 COPY go.mod .
 COPY *.go ./

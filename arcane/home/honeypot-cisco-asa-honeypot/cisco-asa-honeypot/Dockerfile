@@ -1,7 +1,7 @@
 # Cisco ASA WebVPN + IKE decoy (CVE-2018-0101), Go port of
 # t3chn0m4g3/ciscoasa_honeypot (#238, #414) -- see main.go/ike.go's own
 # doc comments for the real (not vendored-as-is) behavior this reproduces.
-FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS build
+FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
 WORKDIR /src
 COPY go.mod .
 COPY *.go ./

@@ -1156,26 +1156,53 @@ arcane_api() {
   curl "${curl_args[@]}"
 }
 
+# arcane_repo_id <manifest gitRepo> -- prints the Arcane Git repository ID for
+# a manifest source, registering it first if absent (idempotent: Arcane has no
+# upsert-by-name endpoint, so check first). Both are public HTTPS clones, no
+# credentials. An existing registration under that name must point at the
+# expected URL: a wrong association would materialize another repository's
+# tree into the stack directory, so it fails rather than being reused.
+arcane_repo_id() {
+  local repo="$1" url
+  case "$repo" in
+    apiary) url="$GIT_REPO_URL" ;;
+    apiary-dashboard) url="https://github.com/Xore/apiary-dashboard.git" ;;
+    *) echo "unknown gitRepo '$repo' in $ARCANE_STACK_MANIFEST" >&2; return 1 ;;
+  esac
+  local existing
+  existing=$(arcane_api GET /customize/git-repositories \
+    | jq -c --arg name "$repo" '[.data[] | select(.name==$name)][0] // empty')
+  if [[ -n "$existing" ]]; then
+    if [[ "$(jq -r '.url' <<<"$existing")" != "$url" ]]; then
+      echo "Arcane git repository '$repo' points at $(jq -r '.url' <<<"$existing"), expected $url" >&2
+      return 1
+    fi
+    jq -r '.id' <<<"$existing"
+    return 0
+  fi
+  local resp id
+  resp=$(arcane_api POST /customize/git-repositories \
+    "$(jq -n --arg name "$repo" --arg url "$url" \
+      '{name:$name, url:$url, authType:"none", enabled:true}')")
+  id=$(jq -r '.data.id' <<<"$resp")
+  [[ -n "$id" && "$id" != "null" ]] || {
+    echo "failed to register $repo git repository in Arcane: $resp" >&2
+    return 1
+  }
+  echo "$id"
+}
+
 step_arcane_import_stacks() {
   [[ -f "$ARCANE_STACK_MANIFEST" ]] || { echo "missing $ARCANE_STACK_MANIFEST"; return 1; }
 
-  # Register the apiary repo if it isn't already (idempotent: Arcane has no
-  # upsert-by-name endpoint, so check first). Public HTTPS clone, no
-  # credentials needed -- confirmed live against Xore/APIARY.
-  local existing_repo_id
-  existing_repo_id=$(arcane_api GET /customize/git-repositories \
-    | jq -r '.data[] | select(.name=="apiary") | .id' | head -1)
-  if [[ -z "$existing_repo_id" ]]; then
-    local repo_resp
-    repo_resp=$(arcane_api POST /customize/git-repositories \
-      "$(jq -n --arg url "$GIT_REPO_URL" \
-        '{name:"apiary", url:$url, authType:"none", enabled:true}')")
-    existing_repo_id=$(echo "$repo_resp" | jq -r '.data.id')
-    [[ -n "$existing_repo_id" && "$existing_repo_id" != "null" ]] || {
-      echo "failed to register apiary git repository in Arcane: $repo_resp" >&2
-      return 1
-    }
-  fi
+  # Manifest entries name their source by gitRepo. apiary is this checkout's
+  # own remote; apiary-dashboard is the standalone dashboard, whose compose
+  # directory lives in that repository. Register each one the manifest uses.
+  local -A repo_ids=()
+  local repo
+  while read -r repo; do
+    repo_ids[$repo]=$(arcane_repo_id "$repo") || return 1
+  done < <(jq -r '[.[].gitRepo] | unique | .[]' "$ARCANE_STACK_MANIFEST")
 
   # environmentId 0 is Arcane's own "Local Docker" environment -- the only
   # one this single-host deployment has (confirmed live: /api/environments
@@ -1192,9 +1219,9 @@ step_arcane_import_stacks() {
   # create the directory fresh, then put it back and re-deploy -- the same
   # backup/remove/sync/restore sequence used for every stack in the real
   # #1502 cutover, just automated here instead of run by hand.
-  local failures=0 name compose_path
-  while IFS=$'\t' read -r name compose_path; do
-    local dir="/var/dockge/stacks/$name"
+  local failures=0 name compose_path git_repo branch
+  while IFS=$'\t' read -r name compose_path git_repo branch; do
+    local dir="${ARCANE_STACKS_ROOT:-/var/dockge/stacks}/$name"
     [[ -f "$dir/compose.yml" ]] && { echo "$name: already synced, skipping"; continue; }
 
     local staged_env=""
@@ -1207,8 +1234,8 @@ step_arcane_import_stacks() {
     echo "-- importing $name via Arcane directory sync"
     local resp status
     resp=$(arcane_api POST /environments/0/gitops-syncs \
-      "$(jq -n --arg name "$name" --arg repo "$existing_repo_id" \
-             --arg branch "$GIT_REF" --arg path "$compose_path" \
+      "$(jq -n --arg name "$name" --arg repo "${repo_ids[$git_repo]}" \
+             --arg branch "$branch" --arg path "$compose_path" \
         '{name:$name, repositoryId:$repo, branch:$branch, composePath:$path,
           autoSync:false, syncDirectory:true, syncInterval:300}')")
     status=$(echo "$resp" | jq -r '.data.lastSyncStatus // "unknown"')
@@ -1247,7 +1274,11 @@ step_arcane_import_stacks() {
   # file's own header comment (Phase 8) for why those 3 of the 6 non-
   # honeypot-* stacks were safe to fold in and the other 3 (pihole, ghidra,
   # ghosts) deliberately weren't.
-  done < <(jq -r '.[] | select((.syncName | startswith("honeypot-")) or (.syncName as $n | ["auth-events-worker","llm-worker","ml-worker"] | index($n) != null)) | [.syncName, .dockerComposePath] | @tsv' "$ARCANE_STACK_MANIFEST")
+  # Entries from another repository are always imported (that repository
+  # owns its own stack list). apiary entries sync the installer's GIT_REF, as
+  # the checkout itself does; other repositories sync the branch their entry
+  # names (apiary-dashboard has no production branch).
+  done < <(jq -r --arg ref "$GIT_REF" '.[] | select((.gitRepo != "apiary") or (.syncName | startswith("honeypot-")) or (.syncName as $n | ["auth-events-worker","llm-worker","ml-worker"] | index($n) != null)) | [.syncName, .dockerComposePath, .gitRepo, (if .gitRepo == "apiary" then $ref else .branch end)] | @tsv' "$ARCANE_STACK_MANIFEST")
 
   echo "$failures stack(s) reported a non-success initial sync (see above -- often just missing secrets, not a hard failure)."
   return 0
@@ -2619,7 +2650,7 @@ step_verify_exited() {
 }
 
 step_verify_elasticsearch_events() {
-  docker run --rm --network honeynet curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13 -sf \
+  docker run --rm --network honeynet curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -sf \
     http://elasticsearch:9200/honeypot-v2-*/_count >/dev/null
 }
 

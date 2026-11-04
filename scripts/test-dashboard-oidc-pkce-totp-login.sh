@@ -183,7 +183,7 @@ done
 # Redis BEFORE the BFF starts -- same ordering rule the Go suite recorded:
 # startup-time pending-state/session writes must not race container boot.
 docker run -d --name "${redis}" --network "${network}" -p "127.0.0.1:${redis_port}:6379" \
-  redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf >/dev/null
+  redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499 >/dev/null
 for _ in $(seq 1 30); do docker exec "${redis}" redis-cli ping >/dev/null 2>&1 && break; sleep 1; done
 
 kcadm() { docker exec "${kc}" /opt/keycloak/bin/kcadm.sh "$@"; }
