@@ -373,7 +373,10 @@ class RequestBodyTest(unittest.TestCase):
                 "think": False,
                 "keep_alive": "10m",
                 "options": {
-                    "temperature": 0,
+                    # chat() opens every body with the shared benchmark
+                    # sampling; read it from the constant for the same reason
+                    # REVDECK_SAMPLING is read below.
+                    **evaluate_models.BENCHMARK_SAMPLING,
                     "num_ctx": evaluate_models.num_ctx_for(8192),
                     "num_predict": evaluate_models.budget_for("revdeck"),
                     "seed": 144,
