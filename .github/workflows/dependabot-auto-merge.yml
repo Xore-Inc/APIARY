@@ -123,7 +123,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr review --approve "$PR_URL"
+        run: |
+          # main's ruleset requires zero approving reviews, so this approval
+          # is a courtesy, not a merge gate. When the repository setting
+          # "Allow GitHub Actions to create and approve pull requests" is off,
+          # GitHub refuses it with "GitHub Actions is not permitted to approve
+          # pull requests" -- treat only that refusal as non-fatal so the step
+          # below can still arm auto-merge, rather than failing this check on
+          # every compatible dependabot PR (as it did from 2026-10-12 on).
+          if err="$(gh pr review --approve "$PR_URL" 2>&1)"; then
+            echo "$err"
+            exit 0
+          fi
+          echo "$err"
+          if printf '%s' "$err" | grep -q "not permitted to approve pull requests"; then
+            echo "::notice::GitHub Actions may not approve PRs in this repository; skipping the courtesy approval (main requires none)."
+            exit 0
+          fi
+          exit 1
 
       - name: Enable squash auto-merge after required checks
         if: >-
