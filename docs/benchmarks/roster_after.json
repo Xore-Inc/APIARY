@@ -1,0 +1,10 @@
+{
+ "roster": [],
+ "shortlist": [
+  "orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF"
+ ],
+ "safetensors_import": [
+  "orcarouter/OrcaSAQ-2-27B",
+  "orcarouter/Qwen3.8-27B-Uncensored-NVFP4"
+ ]
+}
