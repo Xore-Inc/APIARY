@@ -160,13 +160,11 @@ def test_the_canonical_tree_still_holds_every_file_the_duplicate_had():
         f"{CANONICAL}/ is missing {missing}, which {DUPLICATE}/ carried. The "
         "duplicate is being removed, not its content (#3310)."
     )
-    # And the reason the other tree was the one to delete, asserted so the
-    # direction of the dedupe cannot be quietly reversed.
-    for name in CANONICAL_ONLY_FILES:
-        assert f"{CANONICAL}/{name}" in present, (
-            f"{CANONICAL}/{name} is gone. It never existed in {DUPLICATE}/, so a "
-            "dedupe cannot account for its absence -- see #1828/#1935 (#3310)."
-        )
+    # The two files that made this tree canonical (lab.mjs, lab.test.mjs)
+    # served variants through frontend-next and left with it in #3749; the
+    # README records that. The duplicate must still not come back.
+    readme = (REPO_ROOT / CANONICAL / "README.md").read_text(encoding="utf-8")
+    assert "#3749" in readme, "the design-lab README no longer explains where lab.mjs went"
 
 
 def test_the_redaction_that_existed_only_in_the_duplicate_survived():

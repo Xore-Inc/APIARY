@@ -164,8 +164,8 @@ services:
         chown -R 998:998 /logs/arkime-raw
         # #1972 serving-tier app logs. backend-service and
         # backend-service-mounted run as `USER nobody` (uid 65534, their
-        # Dockerfile's final stage); dashboard-next runs as `USER node`
-        # (node:22-alpine's uid 1000). Without these chowns the writers'
+        # Dockerfile's final stage); the dashboard (apiary-dashboard) runs as
+        # `bun` (uid 1000), as dashboard-next's `node` did before #3749. Without these chowns the writers'
         # first append fails with EACCES -- docker auto-creates a missing
         # bind host dir root-owned before this step would ever see it.
         chown -R 65534:65534 /logs/dashboard-backend /logs/dashboard-backend-mounted

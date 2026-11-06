@@ -164,7 +164,7 @@ class TestHardRules(unittest.TestCase):
             "hp-arkime-capture",
             "hp-filebeat",
             "hp-zeek-proxy",
-            "hp-dashboard-next",
+            "hp-apiary-dashboard",
             "hp-apiary-backend",
             "hp-apiary-worker",
             "hp-keycloak",

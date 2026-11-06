@@ -106,12 +106,14 @@ retained. Wire it into the same schedule as the existing host state copies
 
 **Audit/history (local files):**
 
-1. Stop the dashboard: `docker compose stop dashboard-next` (the service is
-   `dashboard-next`, container `hp-dashboard-next`; the Go `dashboard` service
-   this used to name was deleted at #1628's cutover).
+1. Stop the two writers of `dashboard-state`: `docker stop hp-apiary-backend
+   hp-apiary-backend-mounted` (`backend-service` and
+   `backend-service-mounted`). The dashboard UI (apiary-dashboard) holds no
+   audit files; the legacy `dashboard-next` this step used to name was
+   removed in #3749.
 2. Untar the chosen archive into the volume:
    `docker run --rm -v dashboard-state:/state -v <backup-dir>:/backup alpine:3 tar xzf /backup/dashboard-state-<ts>.tar.gz -C /state`
-3. Start the dashboard: `docker compose start dashboard-next`.
+3. Start them again: `docker start hp-apiary-backend hp-apiary-backend-mounted`.
 
 **Config/users (Elasticsearch):** there is no per-dashboard-replica file to
 move. The documents come back from the essentials backup with
@@ -157,13 +159,14 @@ If the settings subsystem itself misbehaves:
   from the dashboard to Elasticsearch instead of touching a file.
 - **Per-user preferences:** same posture as configuration above.
 - **Admin configuration API:** remove the dashboard's `admin` role from the
-  `apiary-dashboard` Keycloak client (realm `apiary`; the nine clients are
+  `apiary-dashboard-rewrite` Keycloak client, the production dashboard's
+  (realm `apiary`; the clients are
   declared in
   [`arcane/home/honeypot-keycloak/keycloak/realm/apiary-realm.json`](../arcane/home/honeypot-keycloak/keycloak/realm/apiary-realm.json)).
-  The frontend reads client roles from
-  `resource_access.apiary-dashboard.roles` and treats anything without
-  `admin` as `user`
-  ([`arcane/home/honeypot-dashboard/frontend-next/src/lib/oidc.server.ts`](../arcane/home/honeypot-dashboard/frontend-next/src/lib/oidc.server.ts));
+  The dashboard (Xore-Inc/apiary-dashboard, `src/server/oidc.server.ts`)
+  reads client roles from `resource_access.<OIDC_CLIENT_ID>.roles`, i.e.
+  `apiary-dashboard-rewrite`, and treats anything without `admin` as a
+  viewer;
   the admin
   panes and endpoints are gated server-side on live introspection, so access
   ends on the next request. `Xore/auth-backend` was the pre-Keycloak home

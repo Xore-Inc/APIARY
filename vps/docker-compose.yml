@@ -756,19 +756,11 @@ services:
   # oidc-dashboard to route to it directly (#1026: native OIDC, no gateway
   # container in this network any more). Not reachable from the ~20
   # unrelated containers on proxy.
-  socat-hp-dashboard:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
-    container_name: socat-hp-dashboard
-    restart: unless-stopped
-    command: TCP4-LISTEN:8090,fork,reuseaddr TCP4:${DASHBOARD_LEGACY_HOST:-10.8.0.2}:${DASHBOARD_LEGACY_PORT:-19090}
-    networks: [oidc-dashboard]
-
-  # Staging bridge, side by side with socat-hp-dashboard above (left
-  # untouched). Homeserver port 19092 is bound by the standalone
+  # The dashboard bridge (#3749). Homeserver port 19092 is bound by the
   # Xore/apiary-dashboard Arcane project (its
-  # arcane/home/apiary-dashboard/compose.yml), not by dashboard-next any
-  # more; its cutover moves production here by pointing the Traefik
-  # router at this service. The container keeps its historical name.
+  # arcane/home/apiary-dashboard/compose.yml), which has served production
+  # since 2026-10-30. The legacy socat-hp-dashboard bridge to dashboard-next
+  # (19090) left with it. The container keeps its historical name.
   socat-hp-dashboard-next:
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-dashboard-next

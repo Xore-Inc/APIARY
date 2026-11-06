@@ -1,3 +1,7 @@
+> **Retired (#3749, 2026-10-30).** The pilot ran against `frontend-next`, which was
+> removed after production moved to Xore-Inc/apiary-dashboard. Its workflow
+> (`frontend-testing-pilot.yml`) went with it. This page stays as the record.
+
 # Frontend mutation and property testing pilot (#3326)
 
 Status: pilot complete. **Advisory.** No gate, no ratchet, nothing reads the

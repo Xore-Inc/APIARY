@@ -8,7 +8,7 @@
 #   * image-security-scan.yml scans every base image the tree's Dockerfiles and
 #     compose files pull;
 #   * containers.yml scans the digest-bound SBOM generated for the two
-#     dashboard images (backend-service, dashboard-next).
+#     dashboard images (backend-service; dashboard-next until #3749).
 #
 # Those are the same CVE question asked of two different artefacts, and
 # "are we affected?" is only answerable if the two agree. A version + asset +

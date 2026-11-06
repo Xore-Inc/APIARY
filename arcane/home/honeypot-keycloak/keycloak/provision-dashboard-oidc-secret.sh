@@ -16,12 +16,10 @@
 # have restart: unless-stopped, so writing the file here is enough --
 # no need to also restart them, their own crash-restart loop picks it up.
 #
-# #3578: DASHBOARD_CLIENT_ID selects the client (default apiary-dashboard). The
-# rewrite dashboard's client is apiary-dashboard-rewrite, and its secret file
-# lives in the apiary-dashboard Arcane project:
-#   DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite \
-#   DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
-#     ./provision-dashboard-oidc-secret.sh
+# #3578/#3749: DASHBOARD_CLIENT_ID selects the client. The default is the
+# production dashboard's client, apiary-dashboard-rewrite, whose secret file
+# lives in the apiary-dashboard Arcane project (DASHBOARD_SECRETS_DIR). The
+# legacy apiary-dashboard client served dashboard-next, removed in #3749.
 #
 # Run on the homeserver (needs docker exec access to hp-keycloak).
 set -euo pipefail
@@ -29,8 +27,8 @@ set -euo pipefail
 REALM="${KEYCLOAK_REALM:-apiary}"
 KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
 KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-provision-dashboard-oidc-secret.config}"
-SECRETS_DIR="${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/honeypot-dashboard/secrets}"
-CLIENT_ID="${DASHBOARD_CLIENT_ID:-apiary-dashboard}"
+SECRETS_DIR="${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/apiary-dashboard/secrets}"
+CLIENT_ID="${DASHBOARD_CLIENT_ID:-apiary-dashboard-rewrite}"
 KC="/opt/keycloak/bin/kcadm.sh"
 
 : "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
@@ -58,8 +56,9 @@ install -d -m 750 "$SECRETS_DIR"
 umask 077
 printf '%s' "$secret" > "$SECRETS_DIR/oidc-client-secret"
 
-# Group-own the secret by the group honeypot-dashboard's compose joins the
-# container to, so dashboard-next can actually read it.
+# Group-own the secret by the group apiary-dashboard's compose joins the
+# container to (group_add DEPLOY_RUNNER_GID), so the unprivileged dashboard
+# can read it. History below is from the legacy dashboard-next (#3749).
 #
 # The comment that used to sit here said these services "run as root:root" and
 # matched ownership accordingly. That described the RETIRED Go dashboard, which
@@ -82,7 +81,7 @@ if secret_gid="$(getent group "$DASHBOARD_SECRETS_GROUP" | cut -d: -f3)" && [[ -
 else
   chown root:root "$SECRETS_DIR/oidc-client-secret"
   echo "WARNING: group '$DASHBOARD_SECRETS_GROUP' does not exist -- left root:root." >&2
-  echo "         dashboard-next runs unprivileged and will fail with EACCES reading this." >&2
+  echo "         the dashboard runs unprivileged and will fail with EACCES reading this." >&2
 fi
 chmod 750 "$SECRETS_DIR"
 chmod 440 "$SECRETS_DIR/oidc-client-secret"

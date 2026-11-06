@@ -5,8 +5,9 @@ an Arcane GitOps Swarm stack. It has one replica on the non-sensor manager,
 no published port, no host mount, and an encrypted internal overlay with the
 fleet's 1310 MTU. Its image is the same digest as the current Compose service.
 
-This stack is only preparation for phase 5. The live dashboard continues to
-use its Compose `oidc-sessions` container. Deploying this isolated stack does
+This stack is only preparation for phase 5. The live dashboard (apiary-dashboard)
+continues to use its own Compose `oidc-sessions` container (the legacy
+`honeypot-dashboard` one left with frontend-next, #3749). Deploying this isolated stack does
 not move sessions; changing the dashboard's Redis URL would invalidate
 existing sessions, so the route/session cutover must be coordinated with the
 dashboard deployment and its rollback plan. A future dashboard Swarm stack

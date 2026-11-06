@@ -413,16 +413,11 @@ EXEMPT: dict[str, str | dict[str, Any]] = {
     "/logs/dashboard-backend-mounted":
         "the same obs.rs sink under the honeypot-dashboard project's own "
         "mount name; identical self-bounding (#2468).",
-    "/logs/dashboard-bff": {
-        "reason":
-            "the BFF tier's app.jsonl. #2826 ported obs.rs's "
-            "rotate_if_oversized shape into obs.server.ts's rotateIfOversized "
-            "(same 25MiB cap, one retired .1 generation, rename-not-truncate) "
-            "-- self-bounded the same way /logs/dashboard-backend is, so it "
-            "needs no pruner find line either.",
-        "writer": ("arcane/home/honeypot-dashboard/frontend-next/src/lib/obs.server.ts",
-                   ["async function rotateIfOversized(", "MAX_SINK_BYTES"]),
-    },
+    # /logs/dashboard-bff left this ledger with frontend-next (#3749): no
+    # APIARY compose mounts it any more. Its writer is now apiary-dashboard
+    # (Xore-Inc/apiary-dashboard compose.honeynet.yml), whose
+    # src/server/obs.ts bounds rewrite.jsonl itself (MAX_SINK_BYTES 25MiB plus
+    # one renamed .1 generation), the same shape this entry used to prove.
     "/logs/canarytokens/frontend": {
         "reason":
             "vendored Canarytokens app's own frontend.log -- a plain text log, "

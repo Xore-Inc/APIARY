@@ -37,9 +37,7 @@ CONTAINERS = ROOT / ".github" / "workflows" / "containers.yml"
 BACKEND_DOCKERFILE = (
     ROOT / "arcane" / "home" / "honeypot-dashboard" / "backend-service" / "Dockerfile"
 )
-DASHBOARD_DOCKERFILE = (
-    ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next" / "Dockerfile"
-)
+# #3749: the dashboard-next image and its smoke left with frontend-next.
 BACKEND_SRC = ROOT / "arcane" / "home" / "honeypot-dashboard" / "backend-service" / "src"
 BACKEND_MAIN = BACKEND_SRC / "main.rs"
 
@@ -720,7 +718,6 @@ class ParityWithTheDockerfiles(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.containers = CONTAINERS.read_text(encoding="utf-8")
         cls.backend = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
-        cls.dashboard = DASHBOARD_DOCKERFILE.read_text(encoding="utf-8")
 
     def step(self, title: str) -> str:
         """The run: block of one named step, as text."""
@@ -750,7 +747,7 @@ class ParityWithTheDockerfiles(unittest.TestCase):
             ]
         return rows
 
-    def test_the_two_dashboard_rows_are_the_ones_that_get_smoked(self) -> None:
+    def test_the_backend_row_is_the_one_that_gets_smoked(self) -> None:
         """Named rows, not a count of them, so this cannot rot into a
         vacuous pass the way a substring check would -- and the count stays
         as a tripwire, because a *new* long-lived service image is exactly
@@ -761,11 +758,11 @@ class ParityWithTheDockerfiles(unittest.TestCase):
         # #3321's comments last named a number; 53 as of #3597, which added
         # one `scoped: true` row per remaining compose build context (none of
         # them long-lived dashboard services, so the smoked set below is
-        # unchanged). If this fails, the matrix moved: check the new row
-        # before bumping it.
-        self.assertEqual(len(rows), 53, "the build matrix changed size")
+        # unchanged); 52 since #3749 removed dashboard-next. If this fails,
+        # the matrix moved: check the new row before bumping it.
+        self.assertEqual(len(rows), 52, "the build matrix changed size")
         smoked = {name for name, lines in rows.items() if "boot_smoke: true" in lines}
-        self.assertEqual(smoked, {"backend-service", "dashboard-next"})
+        self.assertEqual(smoked, {"backend-service"})
 
     def test_every_other_row_still_builds_exactly_as_before(self) -> None:
         """`push` unchanged, and `load` inert without the flag -- so the
@@ -801,8 +798,8 @@ class ParityWithTheDockerfiles(unittest.TestCase):
 
     def test_every_smoked_row_has_a_step_and_no_other_row_does(self) -> None:
         steps = set(re.findall(r"- name: \"?Boot-smoke (\S+)", self.containers))
-        self.assertEqual(steps, {"backend-service", "dashboard-next"})
-        for image in ("backend-service", "dashboard-next"):
+        self.assertEqual(steps, {"backend-service"})
+        for image in ("backend-service",):
             self.assertIn(f"matrix.image == '{image}'", self.containers)
 
     def test_the_smokes_run_inside_the_build_job_the_required_gate_aggregates(self) -> None:
@@ -812,7 +809,6 @@ class ParityWithTheDockerfiles(unittest.TestCase):
         head, _, gate = self.containers.partition("\n  containers-gate:")
         self.assertTrue(gate, "containers-gate job is gone")
         self.assertIn('"Boot-smoke backend-service (#3316)"', head)
-        self.assertIn('"Boot-smoke dashboard-next (#3316)"', head)
         # The gate has to depend on the job the smokes run in, or it can
         # never observe their failure. needs: is a flow sequence, so match
         # the build entry itself rather than the word.
@@ -823,7 +819,6 @@ class ParityWithTheDockerfiles(unittest.TestCase):
     def test_the_container_ports_match_what_each_image_exposes(self) -> None:
         for image, dockerfile, port in (
             ("backend-service", self.backend, "8081"),
-            ("dashboard-next", self.dashboard, "8080"),
         ):
             with self.subTest(image=image):
                 self.assertIsNotNone(
@@ -832,19 +827,6 @@ class ParityWithTheDockerfiles(unittest.TestCase):
                 )
                 step = self.step(f"Boot-smoke {image} (#3316)")
                 self.assertIn(f"--container-port {port}", step)
-
-    def test_dashboard_next_smokes_the_path_its_own_healthcheck_uses(self) -> None:
-        """The vendored theme asset is a deploy requirement (theme.lock), and
-        the healthcheck is the only thing that fetches it -- if one of the two
-        moves, the smoke would keep passing against the other."""
-        healthcheck = re.search(r"^HEALTHCHECK\b", self.dashboard, re.M)
-        self.assertIsNotNone(healthcheck, "dashboard-next no longer declares a HEALTHCHECK")
-        self.assertIn("/static/theme.css", self.dashboard)
-        step = self.step("Boot-smoke dashboard-next (#3316)")
-        self.assertTrue(
-            "--expect-status 'vendored theme.css is served' /static/theme.css 200" in step,
-            "the dashboard-next smoke no longer asserts the healthcheck's own path",
-        )
 
     def test_backend_service_smokes_routes_the_binary_actually_registers(self) -> None:
         """/healthz and /readyz are the two names #3317's liveness/readiness
@@ -895,16 +877,6 @@ class ParityWithTheDockerfiles(unittest.TestCase):
             f"backend-service no longer registers (declared: {sorted(declared)})",
         )
 
-    def test_dashboard_next_smokes_the_redirect_the_bff_actually_issues(self) -> None:
-        """__root.tsx's beforeLoad is what sends an unauthenticated /
-        to /auth/login; that is the contract, not a guess about it."""
-        root = (
-            ROOT / "arcane" / "home" / "honeypot-dashboard" / "frontend-next"
-            / "src" / "routes" / "__root.tsx"
-        ).read_text(encoding="utf-8")
-        self.assertIn("redirect(", root)
-        self.assertIn("/auth/login", root)
-
     def test_nothing_interpolated_into_a_run_block(self) -> None:
         """zizmor's template-injection audit cannot tell an image name from
         attacker input from the outside, so every `${{ }}` reaches a run:
@@ -912,23 +884,22 @@ class ParityWithTheDockerfiles(unittest.TestCase):
         for title in (
             "Resolve the image ID to boot-smoke (#3316)",
             "Boot-smoke backend-service (#3316)",
-            "Boot-smoke dashboard-next (#3316)",
         ):
             with self.subTest(step=title):
                 self.assertNotIn("${{", self.step(title))
 
     def test_the_health_timeout_covers_the_images_own_retry_budget(self) -> None:
-        """Both images declare --start-period=20s --interval=15s
+        """The image declares --start-period=20s --interval=15s
         --retries=5, so a broken image exhausts its own budget at 95s. A
         timeout under that would report a slow start as a failure, and one
         far above it turns a boot refusal into a job timeout with no
         explanation."""
-        for dockerfile in (self.backend, self.dashboard):
+        for dockerfile in (self.backend,):
             start = int(re.search(r"--start-period=(\d+)s", dockerfile).group(1))
             interval = int(re.search(r"--interval=(\d+)s", dockerfile).group(1))
             retries = int(re.search(r"--retries=(\d+)", dockerfile).group(1))
             budget = start + interval * retries
-            for image in ("backend-service", "dashboard-next"):
+            for image in ("backend-service",):
                 step = self.step(f"Boot-smoke {image} (#3316)")
                 timeout = int(re.search(r"--health-timeout (\d+)", step).group(1))
                 self.assertGreater(timeout, budget, f"{image}: {timeout}s <= {budget}s budget")

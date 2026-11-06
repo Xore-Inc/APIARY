@@ -20,9 +20,9 @@ Pinned here:
 2. deleting the rotate lines the three exemptions name fails, naming them --
    the reviewer's own demonstration, run in reverse;
 3. an exemption claiming a rotate line belonging to a different directory
-   fails, so the claim cannot be satisfied by a neighbour's line;
-4. deleting the ported rotateIfOversized fails /logs/dashboard-bff's
-   exemption, which asserts a self-bounding writer rather than a rotate line.
+   fails, so the claim cannot be satisfied by a neighbour's line.
+(A fourth case pinned frontend-next's self-bounding BFF writer; it left with
+that frontend in #3749.)
 """
 import pathlib
 import shutil
@@ -35,8 +35,6 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check-json-sink-retention-parity.py"
 STACKS = REPO_ROOT / "arcane" / "home"
 MAINTENANCE = STACKS / "honeypot-utilities" / "analysis" / "log-maintenance.sh"
-BFF_OBS = (STACKS / "honeypot-dashboard" / "frontend-next" / "src" / "lib"
-           / "obs.server.ts")
 
 ROTATE_LINES = (
     "  rotate /logs/hellpot/HellPot.log\n",
@@ -45,8 +43,7 @@ ROTATE_LINES = (
 )
 
 
-def build_root(tmp_path: pathlib.Path, *, maintenance_text: str | None = None,
-               bff_obs_text: str | None = None) -> pathlib.Path:
+def build_root(tmp_path: pathlib.Path, *, maintenance_text: str | None = None) -> pathlib.Path:
     """A throwaway repo root the checker resolves itself against.
 
     Same shape as tests/docs/test_2216_sink_guardrail_enumerates_mounts.py's
@@ -67,17 +64,6 @@ def build_root(tmp_path: pathlib.Path, *, maintenance_text: str | None = None,
             (local / "analysis").mkdir(parents=True)
             (local / "analysis" / "log-maintenance.sh").write_text(maintenance_text)
             shutil.copy(stack / "compose.yml", local / "compose.yml")
-        elif stack.name == "honeypot-dashboard" and bff_obs_text is not None:
-            # Only the one file has to be real; the rest of the stack (compose
-            # mounts included) is symlinked so the enumeration is unaffected.
-            local = home / stack.name
-            local.mkdir(parents=True)
-            for child in sorted(stack.iterdir()):
-                if child.name != "frontend-next":
-                    (local / child.name).symlink_to(child)
-            relative = BFF_OBS.relative_to(stack)
-            (local / relative).parent.mkdir(parents=True, exist_ok=True)
-            (local / relative).write_text(bff_obs_text)
         else:
             (home / stack.name).symlink_to(stack)
 
@@ -131,21 +117,3 @@ def test_a_rotate_line_for_a_neighbouring_directory_does_not_satisfy_the_claim(t
     assert "/logs/hellpot" in result.stderr
 
 
-def test_dropping_the_bff_rotation_fails_its_exemption(tmp_path):
-    # /logs/dashboard-bff is exempt because obs.server.ts self-bounds the sink
-    # the way obs.rs does, not because anything prunes it. Remove the rotation
-    # and the exemption has to stop claiming it.
-    original = BFF_OBS.read_text()
-    token = "async function rotateIfOversized("
-    assert token in original, "obs.server.ts's rotation was renamed; update this test"
-    without = original.replace(token, "async function rotateNothing(")
-
-    result = run(build_root(tmp_path, bff_obs_text=without))
-
-    assert result.returncode == 1, result.stdout
-    assert "exemption unproven" in result.stderr
-    assert "/logs/dashboard-bff" in result.stderr
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
