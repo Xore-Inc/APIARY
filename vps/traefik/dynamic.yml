@@ -38,7 +38,7 @@
 #                                     staging path; historical name, no
 #                                     longer dashboard-next)
 # socat-hp-kibana         :5601   →  10.8.0.2:19601 (kibana :5601)
-# socat-hp-tanner         :8091   →  10.8.0.2:19091 (tanner_web :8091)
+# socat-hp-tanner         :8091   →  10.8.0.2:19091 (tanner_web :8091) [swarm stack edge-tanner, #3595]
 # socat-hp-evebox         :5636   →  10.8.0.2:19636 (evebox :5636) [swarm stack edge-evebox, #3595]
 # socat-hp-arkime         :8005   →  10.8.0.2:19080 (arkime viewer :8005) [swarm stack edge-arkime, #3595]
 # socat-hp-revdeck        :5000   →  10.8.0.2:19500 (revdeck :5000, ghidra stack) [swarm stack edge-revdeck, #3595]

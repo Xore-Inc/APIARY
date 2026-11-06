@@ -813,6 +813,9 @@ services:
       - autoheal=true
 
   socat-hp-tanner:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-tanner. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-tanner
     restart: unless-stopped
@@ -833,7 +836,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-tanner:8091
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/tanner:/run/oidc-secrets:ro
-    networks: [oidc-tanner]
+    # #3595: the socat behind this gateway is the swarm stack edge-tanner,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-tanner, edge-tanner]
     labels:
       - autoheal=true
 
@@ -1341,6 +1348,9 @@ networks:
   edge-arkime:
     external: true
     name: edge-arkime_gw
+  edge-tanner:
+    external: true
+    name: edge-tanner_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:
