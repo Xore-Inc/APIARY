@@ -838,6 +838,9 @@ services:
       - autoheal=true
 
   socat-hp-evebox:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-evebox. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-evebox
     restart: unless-stopped
@@ -858,7 +861,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-evebox:5636
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/evebox:/run/oidc-secrets:ro
-    networks: [oidc-evebox]
+    # #3595: the socat behind this gateway is the swarm stack edge-evebox,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-evebox, edge-evebox]
     labels:
       - autoheal=true
 
@@ -1321,6 +1328,9 @@ networks:
   edge-revdeck:
     external: true
     name: edge-revdeck_gw
+  edge-evebox:
+    external: true
+    name: edge-evebox_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:
