@@ -8,8 +8,8 @@
 # network `host-gateway_host`).
 services:
   gateway:
-    # TODO(#3582): the GHCR digest of the first main build with gateway mode.
-    image: ghcr.io/xore-inc/honeypot-backend-service@sha256:REPLACE_AFTER_3771
+    # Main build of 58dee4ce (#3785, gateway mode), digest manifest run 42257015500.
+    image: ghcr.io/xore-inc/honeypot-backend-service@sha256:5644160a41066e024caf77c30daa605f1a03941b7cc1f7cb3992b3695d1c45ff
     labels:
       apiary.swarm.migration: host-gateway
     environment:
