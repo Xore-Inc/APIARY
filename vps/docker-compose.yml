@@ -788,6 +788,9 @@ services:
     networks: [proxy]
 
   socat-hp-kibana:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-kibana. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-kibana
     restart: unless-stopped
@@ -808,7 +811,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-kibana:5601
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/kibana:/run/oidc-secrets:ro
-    networks: [oidc-kibana]
+    # #3595: the socat behind this gateway is the swarm stack edge-kibana,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-kibana, edge-kibana]
     labels:
       - autoheal=true
 
@@ -1351,6 +1358,9 @@ networks:
   edge-tanner:
     external: true
     name: edge-tanner_gw
+  edge-kibana:
+    external: true
+    name: edge-kibana_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:

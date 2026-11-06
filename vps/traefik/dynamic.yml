@@ -37,7 +37,7 @@
 #                                     Xore/apiary-dashboard :3000, the
 #                                     staging path; historical name, no
 #                                     longer dashboard-next)
-# socat-hp-kibana         :5601   →  10.8.0.2:19601 (kibana :5601)
+# socat-hp-kibana         :5601   →  10.8.0.2:19601 (kibana :5601) [swarm stack edge-kibana, #3595]
 # socat-hp-tanner         :8091   →  10.8.0.2:19091 (tanner_web :8091) [swarm stack edge-tanner, #3595]
 # socat-hp-evebox         :5636   →  10.8.0.2:19636 (evebox :5636) [swarm stack edge-evebox, #3595]
 # socat-hp-arkime         :8005   →  10.8.0.2:19080 (arkime viewer :8005) [swarm stack edge-arkime, #3595]
