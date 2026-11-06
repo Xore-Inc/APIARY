@@ -212,28 +212,10 @@ pub fn validate_selections(
     Ok(selections)
 }
 
-fn directory_usable(path: &str, writable: bool) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_dir() {
-        return false;
-    }
-    if !writable {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o222 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+/// A spool directory that exists (and is writable, for a request spool), on
+/// whichever host serves it (#3582).
+fn directory_usable(root: crate::host_fs::Root, writable: bool) -> bool {
+    crate::host_fs::host().usable(root, writable)
 }
 
 fn availability_name(configured: bool, healthy: bool) -> &'static str {
@@ -265,23 +247,21 @@ fn analyzer_reason(
     }
 }
 
-fn env_dir(name: &str) -> String {
-    std::env::var(name).unwrap_or_default()
-}
-
 /// Sync duplicate of worker.rs's read_spool_status's staleness half only
 /// (that one is async/tokio::fs-based and module-private, built for the
 /// alert-notifier's 60s loop) — the registry is computed synchronously
-/// inline in an HTTP handler, so a second, plain std::fs version is
-/// simpler than threading async through workbenchRegistry's whole call
-/// tree for one bool. Same "stale if status.json says worker_state=running
-/// but updated_at is >10min old" contract as loadGhidraStatus.
-pub fn spool_status_stale(results_dir: &str, request_dir: &str) -> bool {
-    if results_dir.is_empty() {
+/// inline in an HTTP handler, so a second, plain version through the host
+/// seam is simpler than threading async through workbenchRegistry's whole
+/// call tree for one bool. Same "stale if status.json says
+/// worker_state=running but updated_at is >10min old" contract as
+/// loadGhidraStatus.
+pub fn spool_status_stale(results: crate::host_fs::Root, request: crate::host_fs::Root) -> bool {
+    use crate::host_fs::{host, ListFilter};
+    let fs = host();
+    if !fs.configured(results) {
         return false;
     }
-    let path = std::path::Path::new(results_dir).join("status.json");
-    let Ok(body) = std::fs::read(&path) else {
+    let Ok((body, _)) = fs.read(results, "status.json", 1024 * 1024) else {
         return true;
     };
     let Ok(value) = serde_json::from_slice::<Value>(&body) else {
@@ -290,24 +270,19 @@ pub fn spool_status_stale(results_dir: &str, request_dir: &str) -> bool {
     if value["worker_state"].as_str() != Some("running") {
         return false;
     }
-    let Ok(meta) = std::fs::metadata(&path) else {
+    let Some(age) = fs.stat(results, "status.json").ok().and_then(|entry| entry.age()) else {
         return true;
     };
-    let Ok(modified) = meta.modified() else {
-        return true;
-    };
-    if modified.elapsed().unwrap_or_default() <= std::time::Duration::from_secs(600) {
+    if age <= std::time::Duration::from_secs(600) {
         return false;
     }
     // Re-check the live spool the same way worker.rs's read_spool_status
     // does: a stale status.json over a genuinely empty queue is a quiet
     // honeypot, not a dead worker.
-    let Ok(entries) = std::fs::read_dir(request_dir) else {
-        return true;
-    };
-    entries
-        .flatten()
-        .any(|entry| entry.file_name().to_string_lossy().ends_with(".request"))
+    match fs.list(request, &ListFilter { suffix: ".request".into(), ..Default::default() }) {
+        Ok(entries) => !entries.is_empty(),
+        Err(_) => true,
+    }
 }
 
 /// The analyzer catalog, scoped to one payload's classification — mirrors
@@ -335,51 +310,23 @@ pub fn registry(
         || classification.category == "library"
         || classification.category == "binary";
 
-    let ghidra_request = env_dir("GHIDRA_REQUEST_DIR");
-    let ghidra_results = env_dir("GHIDRA_RESULTS_DIR");
-    let ghidra_configured =
-        directory_usable(&ghidra_request, true) && directory_usable(&ghidra_results, false);
-    let ghidra_healthy = ghidra_configured && !spool_status_stale(&ghidra_results, &ghidra_request);
+    use crate::host_fs::Root;
+    let pair = |request: Root, results: Root| directory_usable(request, true) && directory_usable(results, false);
 
-    let revdeck_request = env_dir("REVDECK_REQUEST_DIR");
-    let revdeck_results = env_dir("REVDECK_RESULTS_DIR");
-    let revdeck_configured =
-        directory_usable(&revdeck_request, true) && directory_usable(&revdeck_results, false);
+    let ghidra_configured = pair(Root::GhidraRequests, Root::GhidraResults);
+    let ghidra_healthy = ghidra_configured && !spool_status_stale(Root::GhidraResults, Root::GhidraRequests);
 
-    let cape_request = env_dir("CAPE_REQUEST_DIR");
-    let cape_results = env_dir("CAPE_RESULTS_DIR");
-    let cape_configured =
-        directory_usable(&cape_request, true) && directory_usable(&cape_results, false);
+    let revdeck_configured = pair(Root::RevdeckRequests, Root::RevdeckResults);
+
+    let cape_configured = pair(Root::CapeRequests, Root::CapeResults);
 
     let linux_applicable = classification.dynamic && classification.platform != "Windows";
     let windows_applicable = classification.dynamic && classification.platform == "Windows";
 
-    let linux_request = env_dir("SANDBOX_REQUEST_DIR");
-    let linux_request = if linux_request.is_empty() {
-        "/sandbox-requests".to_string()
-    } else {
-        linux_request
-    };
-    let linux_results = {
-        let d = env_dir("SANDBOX_RESULTS_DIR");
-        if d.is_empty() {
-            "/sandbox-results".to_string()
-        } else {
-            d
-        }
-    };
-    let linux_configured =
-        directory_usable(&linux_request, true) && directory_usable(&linux_results, false);
-
-    let windows_request = env_dir("WINDOWS_SANDBOX_REQUEST_DIR");
-    let windows_results = env_dir("WINDOWS_SANDBOX_RESULTS_DIR");
-    let windows_configured =
-        directory_usable(&windows_request, true) && directory_usable(&windows_results, false);
-
-    let ghosts_request = env_dir("GHOSTS_SANDBOX_REQUEST_DIR");
-    let ghosts_results = env_dir("GHOSTS_SANDBOX_RESULTS_DIR");
-    let ghosts_configured =
-        directory_usable(&ghosts_request, true) && directory_usable(&ghosts_results, false);
+    // The Linux spool keeps its /sandbox-requests and /sandbox-results defaults (host_fs::Root).
+    let linux_configured = pair(Root::SandboxRequests, Root::SandboxResults);
+    let windows_configured = pair(Root::WindowsSandboxRequests, Root::WindowsSandboxResults);
+    let ghosts_configured = pair(Root::GhostsSandboxRequests, Root::GhostsSandboxResults);
 
     vec![
         WorkbenchAnalyzer {
