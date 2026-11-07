@@ -1,0 +1,94 @@
+# #3593 (phase 6): the HTTP tarpit hp-hellpot as a sensor stack, pinned to
+# the homeserver. Same container as arcane/home/honeypot-hellpot/compose.yml,
+# which stays defined as the rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - Both ports publish in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to 8080
+#   and 8090 unless they come from the VPS hub on wg0 (or a local container to
+#   10.8.0.2); both are listed in ops/firewall/hosts/homeserver-swarm-host-ports.txt.
+#   The guard matches only flows whose original destination was a host
+#   address (#3769), so keycloak/dashboard-next/canarytokens-adapter traffic
+#   on 8080/8090 inside their own networks is not affected.
+# - `security_opt` is not supported. Gate (#3593): non-root (65534), cap_drop
+#   ALL, read_only, and no setuid/setgid file or file capability in the image
+#   (checked on this digest 2026-11-07).
+# - The healthcheck is restated from the Compose service because the lint
+#   requires it in the stack. autoheal does not act on swarm tasks; the
+#   restart policy and the healthcheck replace it.
+#
+# Source attribution is unchanged: host-mode DNAT keeps the tunnel peer
+# (10.8.0.1) and its source port as RemoteAddr, so ip-enrichment-worker's
+# portbridge via_port join keeps working on 8080, and 8090 stays the
+# Traefik-only listener behind socat-hp-hellpot (#1908).
+services:
+  hellpot:
+    image: ghcr.io/xore-inc/honeypot-hellpot@sha256:8689997bdfc61339dd04ad809e598f2cddc1b3d2242a8bc59a28e45894746e48
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host
+      - target: 8090
+        published: 8090
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/hellpot
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 8080/8090.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone HTTP tarpit, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.21.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"

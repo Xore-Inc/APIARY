@@ -16,3 +16,7 @@ tcp 1102
 tcp 1502
 tcp 2102
 tcp 2502
+tcp 8080
+tcp 8090
+tcp 18083
+tcp 3389
