@@ -62,6 +62,9 @@ services:
       HOST_GATEWAY_TOKEN_FILE: /run/secrets/host_gateway_token
       ACTOR_ASSERTION_MODE: log
       ACTOR_ASSERTION_PUBLIC_KEY_FILE: /run/secrets/actor_assertion_public_key
+      # The fleet's own public addresses, kept out of the attacker views
+      # (#1677). Real addresses, so a secret rather than a literal (#3790).
+      HONEYPOT_SELF_IPS_FILE: /run/secrets/honeypot_self_ips
       # Fleet addresses on the homeserver, reachable over WireGuard (#3576).
       CANARYTOKENS_API_URL: http://10.8.0.2:19426
       CANARYTOKENS_ADAPTER_WEBHOOK_URL: http://canarytokens-adapter.internal:8090/
@@ -76,10 +79,13 @@ services:
       # (#3576); DASHBOARD_LOG_FILE unset = no JSONL file (#3582 decision).
       TZ: Europe/Berlin
       RUST_LOG: info
+    # Swarm mounts secrets as uid 0 unless told otherwise, and the image
+    # runs as nobody (65534): without uid/gid a 0400 secret is unreadable.
     secrets:
-      - {source: service_token, target: service_token, mode: 0400}
-      - {source: host_gateway_token, target: host_gateway_token, mode: 0400}
-      - {source: actor_assertion_public_key, target: actor_assertion_public_key, mode: 0444}
+      - {source: service_token, target: service_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: host_gateway_token, target: host_gateway_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: actor_assertion_public_key, target: actor_assertion_public_key, uid: "65534", gid: "65534", mode: 0444}
+      - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
     volumes:
       - {type: volume, source: backend-state, target: /backend-state}
     networks:
@@ -116,6 +122,9 @@ services:
       HOST_GATEWAY_TOKEN_FILE: /run/secrets/host_gateway_token
       ACTOR_ASSERTION_MODE: log
       ACTOR_ASSERTION_PUBLIC_KEY_FILE: /run/secrets/actor_assertion_public_key
+      # The fleet's own public addresses, kept out of the attacker views
+      # (#1677). Real addresses, so a secret rather than a literal (#3790).
+      HONEYPOT_SELF_IPS_FILE: /run/secrets/honeypot_self_ips
       # The names the gateway resolves (host_fs::Root); the paths are the
       # gateway's, these only switch each root on.
       SANDBOX_REQUEST_DIR: /sandbox-requests
@@ -136,9 +145,10 @@ services:
       TZ: Europe/Berlin
       RUST_LOG: info
     secrets:
-      - {source: service_token, target: service_token, mode: 0400}
-      - {source: host_gateway_token, target: host_gateway_token, mode: 0400}
-      - {source: actor_assertion_public_key, target: actor_assertion_public_key, mode: 0444}
+      - {source: service_token, target: service_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: host_gateway_token, target: host_gateway_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: actor_assertion_public_key, target: actor_assertion_public_key, uid: "65534", gid: "65534", mode: 0444}
+      - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
     volumes:
       - {type: volume, source: backend-state, target: /backend-state}
     networks:
@@ -175,6 +185,9 @@ secrets:
   actor_assertion_public_key:
     external: true
     name: actor_assertion_public_key_v1
+  honeypot_self_ips:
+    external: true
+    name: honeypot_self_ips_v1
 
 volumes:
   # D3: audit and config history, seeded once from the homeserver's

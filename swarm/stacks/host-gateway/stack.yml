@@ -34,9 +34,13 @@ services:
       SCRIPT_PAYLOAD_DIR: /state/script-payloads
       SERVICES_ADAPTER_SOCKET: /run/services-adapter/control.sock
       RUST_LOG: info
+    # Swarm mounts secrets as uid 0 unless told otherwise, and the image
+    # runs as nobody (65534): without uid/gid a 0400 secret is unreadable.
     secrets:
       - source: host_gateway_token
         target: host_gateway_token
+        uid: "65534"
+        gid: "65534"
         mode: 0400
     volumes:
       # Request spools: the only writable mounts (marker create and cancel).

@@ -32,17 +32,16 @@ The two bold rows are Xore's decision on #3582 (2026-11-06):
   The request lines still go to the container log (`docker service logs`).
   They just no longer reach Elasticsearch through Filebeat.
 
-Not carried over (a known gap before going live):
+Not carried over:
 
-- `HONEYPOT_SELF_IPS` holds the fleet's public addresses and is read from the
-  environment only. It does not go into git, so it has to become a `_FILE`
-  secret (code change) before the cutover. Until then the attacker views on
-  precision count the fleet's own addresses (#3790).
 - `EXPORT_TOKEN` is not set: it is empty on the live Compose service as well.
   The VPS blackhole export reads from its own sidecar (#3578).
 
 ## Prerequisites (in this order)
 
+0. **Image:** the digest in `stack.yml` is a main build that contains #3790
+   (`HONEYPOT_SELF_IPS_FILE`). The 58dee4ce build predates it and would
+   ignore the secret, so re-pin before the first deploy.
 1. **D1:** stack `host-gateway` deployed and proven from a precision probe (its README).
 2. **D2:** the overlay `apiary-es` (`10.200.101.0/24`, encrypted, attachable)
    exists, and `hp-elasticsearch` is attached to it with alias
@@ -51,7 +50,10 @@ Not carried over (a known gap before going live):
 3. **Secrets**, created on a manager from the live values (never printed):
    - `dashboard_service_token_v1`: the BFF's `SERVICE_TOKEN`;
    - `host_gateway_token_v1`: the same secret the gateway reads;
-   - `actor_assertion_public_key_v1`: the PEM public key the backends verify with.
+   - `actor_assertion_public_key_v1`: the PEM public key the backends verify with;
+   - `honeypot_self_ips_v1`: the live Compose backend's `HONEYPOT_SELF_IPS`
+     list (#3790), commas or one address per line. An empty secret refuses
+     to boot.
 4. **D3 seed** (on precision, before the first deploy):
    - Create the volume, copy `dashboard-audit.jsonl` (+`.1`) and
      `dashboard-config-history.jsonl` from the homeserver's `dashboard-state`,
@@ -66,7 +68,9 @@ Not carried over (a known gap before going live):
 2. Prove on precision:
    - both tasks are `healthy`;
    - the boot log shows `host paths files=gateway ... adapter=gateway`;
-   - a signed read through `backend-api` matches the Compose backend;
+   - a signed read through `backend-api` matches the Compose backend, and
+     the attacker overview leaves out the same fleet addresses
+     (`honeypot_self_ips_v1`, #3790);
    - a `mounted` submit creates its marker in the homeserver spool, and the
      worker claims it.
 3. Attach `apiary-dashboard` to `backend-api_bff`. Then switch its

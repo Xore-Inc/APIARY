@@ -128,17 +128,45 @@ const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 /// is a property of a deployment, not of this code. The tunnel peer is
 /// always included, which preserves the exclusion this handler has always
 /// had.
+///
+/// The list is the one `main` resolved at boot ([`install_self_addresses`]).
+/// A process that never ran that step (the unit tests) reads the plain
+/// variable on every call, which is what this function always did.
 pub(crate) fn self_addresses() -> Vec<String> {
-    self_addresses_from(
-        &std::env::var("HONEYPOT_SELF_IPS").unwrap_or_default(),
-        crate::fleet::tunnel_peer_ip(),
-    )
+    let raw = match CONFIGURED_SELF_ADDRESSES.get() {
+        Some(raw) => std::borrow::Cow::Borrowed(raw.as_str()),
+        None => std::borrow::Cow::Owned(std::env::var("HONEYPOT_SELF_IPS").unwrap_or_default()),
+    };
+    self_addresses_from(&raw, crate::fleet::tunnel_peer_ip())
 }
 
+static CONFIGURED_SELF_ADDRESSES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// #3790: `HONEYPOT_SELF_IPS`, or the file `HONEYPOT_SELF_IPS_FILE` names.
+/// Swarm stacks have no `.env` interpolation and these are the fleet's real
+/// public addresses, so the stacks hand them over as a secret. Same rules as
+/// every other `_FILE` value (`trust::secret`): both set, an unreadable file
+/// or an empty file refuse to boot. Unset is the old behaviour (the tunnel
+/// peer only). Pure, so its truth table is tested without the process
+/// environment.
+pub fn self_addresses_from_env(
+    env: &dyn Fn(&str) -> Option<String>,
+    read: &dyn Fn(&str) -> std::io::Result<String>,
+) -> Result<String, crate::trust::TrustRefusal> {
+    Ok(crate::trust::secret(env, read, "HONEYPOT_SELF_IPS")?.unwrap_or_default())
+}
+
+/// Called once by `main`, before either listener or any worker loop starts.
+/// A second call keeps the first value.
+pub fn install_self_addresses(raw: String) {
+    let _ = CONFIGURED_SELF_ADDRESSES.set(raw);
+}
+
+/// Entries are separated by commas or whitespace, so a secret file can hold
+/// one address per line as well as the variable's comma-separated form.
 fn self_addresses_from(raw: &str, tunnel_peer: &str) -> Vec<String> {
     let mut addresses: Vec<String> = raw
-        .split(',')
-        .map(str::trim)
+        .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|value| !value.is_empty())
         .map(String::from)
         .collect();
@@ -735,6 +763,53 @@ mod tests {
             self_addresses_from("203.0.113.7", "192.0.2.7"),
             vec!["203.0.113.7", "192.0.2.7"]
         );
+    }
+
+    /// #3790: the plain variable, the swarm secret file, and the refusals,
+    /// over an injected environment and file system (no process state).
+    #[test]
+    fn self_addresses_come_from_the_variable_or_a_secret_file() {
+        use std::collections::HashMap;
+        let files: HashMap<&str, &str> = [
+            ("/run/secrets/self_ips", "203.0.113.7\n198.51.100.2\n"),
+            ("/run/secrets/self_ips_commas", "203.0.113.7, 198.51.100.2\n"),
+            ("/run/secrets/empty", " \n"),
+        ]
+        .into();
+        let resolve = |pairs: &[(&str, &str)]| {
+            let env: HashMap<String, String> =
+                pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            self_addresses_from_env(&|key| env.get(key).cloned(), &|path| {
+                files.get(path).map(|v| v.to_string()).ok_or_else(|| std::io::Error::other("no such file"))
+            })
+            .map(|raw| self_addresses_from(&raw, "192.0.2.7"))
+            .map_err(|refusal| refusal.to_string())
+        };
+        let ours = vec!["203.0.113.7".to_string(), "198.51.100.2".to_string(), "192.0.2.7".to_string()];
+
+        // Neither set: the tunnel peer only, as before.
+        assert_eq!(resolve(&[]), Ok(vec!["192.0.2.7".to_string()]));
+        // An empty variable still counts as unset.
+        assert_eq!(resolve(&[("HONEYPOT_SELF_IPS", "")]), Ok(vec!["192.0.2.7".to_string()]));
+        // The variable, unchanged.
+        assert_eq!(resolve(&[("HONEYPOT_SELF_IPS", "203.0.113.7,198.51.100.2")]), Ok(ours.clone()));
+        // The file, one address per line or comma-separated.
+        assert_eq!(resolve(&[("HONEYPOT_SELF_IPS_FILE", "/run/secrets/self_ips")]), Ok(ours.clone()));
+        assert_eq!(resolve(&[("HONEYPOT_SELF_IPS_FILE", "/run/secrets/self_ips_commas")]), Ok(ours));
+
+        // Both set: refused rather than picking one.
+        let both = resolve(&[
+            ("HONEYPOT_SELF_IPS", "203.0.113.7"),
+            ("HONEYPOT_SELF_IPS_FILE", "/run/secrets/self_ips"),
+        ])
+        .unwrap_err();
+        assert!(both.contains("E-TRUST-CONFIG") && both.contains("both"), "{both}");
+        // An empty or unreadable file is a broken secret, not "no addresses":
+        // booting on it would rank the fleet's own hosts as attackers.
+        let empty = resolve(&[("HONEYPOT_SELF_IPS_FILE", "/run/secrets/empty")]).unwrap_err();
+        assert!(empty.contains("empty"), "{empty}");
+        let missing = resolve(&[("HONEYPOT_SELF_IPS_FILE", "/run/secrets/missing")]).unwrap_err();
+        assert!(missing.contains("cannot be read"), "{missing}");
     }
 
     /// The env var is process-global, so these run as one test rather than

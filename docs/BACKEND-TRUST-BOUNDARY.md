@@ -43,6 +43,11 @@ what a connection may do.
 - `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN` and
   `EXPORT_TOKEN`; both the gateway and its clients refuse to boot otherwise.
   See [BACKEND-HOST-GATEWAY.md](BACKEND-HOST-GATEWAY.md).
+- `HONEYPOT_SELF_IPS[_FILE]` (#3790) is not a credential, but it is the
+  fleet's real public addresses, so the swarm stacks pass it as a secret too.
+  Same rules, checked at boot by the API listeners and the workers alike:
+  setting both, or naming an unreadable or empty file, refuses to boot. The
+  file holds the list separated by commas or one address per line.
 - `HONEYFS_IMPLANT_TOKEN[_FILE]` (#3680) follows the same convention but is
   read when the honeyfs-implant client is used, not at boot: setting both, or
   naming an unreadable or empty file, disables that client and logs
@@ -328,7 +333,8 @@ Where the values go:
   `<base>_vN` (`ops/swarm/stackctl.py secret create`), mounted under
   `/run/secrets/` and named by `SERVICE_TOKEN_FILE`,
   `SERVICE_TOKEN_PREVIOUS_FILE`, `EXPORT_TOKEN_FILE`,
-  `ACTOR_ASSERTION_PUBLIC_KEY_FILE`, `HONEYFS_IMPLANT_TOKEN_FILE` and so on. The `_UNTIL` instants and the
+  `ACTOR_ASSERTION_PUBLIC_KEY_FILE`, `HONEYFS_IMPLANT_TOKEN_FILE`,
+  `HONEYPOT_SELF_IPS_FILE` and so on. The `_UNTIL` instants and the
   mode are plain environment. Follow `ops/swarm/README.md` for secret
   versions and keep the old secret through the next version so a rollback
   can still start.
