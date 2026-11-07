@@ -1,0 +1,221 @@
+# #3582/#3592 (BFF split, #3579): the two HTTP services of the Rust backend on
+# precision. `api` is today's Compose `backend-service` (8081), `mounted` is
+# `backend-service-mounted` (8082). Same image and routes; what changes is
+# where the host paths come from:
+#   - spools, results, payload bytes and the services adapter go through the
+#     host gateway (D1, stack host-gateway) on the homeserver;
+#   - Elasticsearch comes over the dedicated encrypted overlay (D2);
+#   - audit and config history get their own volume here (D3).
+# Decisions on #3582 (2026-11-06): no Ollama on precision until the dedicated
+# `ollama` overlay lands after the benchmark, so OLLAMA_URL is unset and LLM
+# search answers "disabled"; the per-request JSONL log is not kept on
+# precision, so there is no DASHBOARD_LOG_FILE and no log mount (the request
+# lines still go to the container log).
+# Prerequisites and the order of the move: README.md next to this file.
+x-backend-common: &backend-common
+  # Main build of 58dee4ce (#3785), digest manifest run 42257015500.
+  image: ghcr.io/xore-inc/honeypot-backend-service@sha256:5644160a41066e024caf77c30daa605f1a03941b7cc1f7cb3992b3695d1c45ff
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+
+x-deploy-common: &deploy-common
+  mode: replicated
+  replicas: 1
+  placement:
+    constraints:
+      - node.labels.role == manager
+      # Off the sensor/Elasticsearch host (#3583, #3722): precision.
+      - node.labels.sensor == false
+  restart_policy:
+    condition: any
+    delay: 5s
+    window: 60s
+  update_config:
+    parallelism: 1
+    delay: 5s
+    monitor: 100s
+    failure_action: rollback
+    max_failure_ratio: 0
+    order: start-first
+  rollback_config:
+    parallelism: 1
+    delay: 0s
+    monitor: 100s
+    failure_action: pause
+    order: start-first
+
+services:
+  api:
+    <<: *backend-common
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8081
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      HONEYPOT_TUNNEL_PEER_IP: 10.8.0.1
+      HONEYPOT_TUNNEL_SENSOR_IP: 10.8.0.2
+      # OLLAMA_URL deliberately unset (#3582 decision): LLM search is off on
+      # precision until the post-benchmark `ollama` overlay.
+      SERVICE_TOKEN_FILE: /run/secrets/service_token
+      HOST_GATEWAY_URL: http://host-gateway:8083
+      SERVICES_ADAPTER_URL: http://host-gateway:8083
+      HOST_GATEWAY_TOKEN_FILE: /run/secrets/host_gateway_token
+      ACTOR_ASSERTION_MODE: log
+      ACTOR_ASSERTION_PUBLIC_KEY_FILE: /run/secrets/actor_assertion_public_key
+      # The fleet's own public addresses, kept out of the attacker views
+      # (#1677). Real addresses, so a secret rather than a literal (#3790).
+      HONEYPOT_SELF_IPS_FILE: /run/secrets/honeypot_self_ips
+      # Fleet addresses on the homeserver, reachable over WireGuard (#3576).
+      CANARYTOKENS_API_URL: http://10.8.0.2:19426
+      CANARYTOKENS_ADAPTER_WEBHOOK_URL: http://canarytokens-adapter.internal:8090/
+      HONEYFS_IMPLANT_URL: http://10.8.0.2:19428
+      WORKER_LOOPS: user-retention-sweep,reports-scheduler
+      PAYLOAD_DIRS: /dionaea-lib/binaries,/cowrie-downloads
+      SCRIPT_PAYLOAD_DIR: /state/script-payloads
+      # D3: audit and config history live on precision, single writer.
+      DASHBOARD_AUDIT_FILE: /backend-state/dashboard-audit.jsonl
+      DASHBOARD_CONFIG_HISTORY_FILE: /backend-state/dashboard-config-history.jsonl
+      # FILEBEAT_URL unset = the source-health pipeline row reports disabled
+      # (#3576); DASHBOARD_LOG_FILE unset = no JSONL file (#3582 decision).
+      TZ: Europe/Berlin
+      RUST_LOG: info
+    # Swarm mounts secrets as uid 0 unless told otherwise, and the image
+    # runs as nobody (65534): without uid/gid a 0400 secret is unreadable.
+    secrets:
+      - {source: service_token, target: service_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: host_gateway_token, target: host_gateway_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: actor_assertion_public_key, target: actor_assertion_public_key, uid: "65534", gid: "65534", mode: 0444}
+      - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
+    volumes:
+      - {type: volume, source: backend-state, target: /backend-state}
+    networks:
+      bff:
+        aliases: [backend-api]
+      host: {}
+      es: {}
+    healthcheck:
+      test: [CMD, curl, -sf, "http://127.0.0.1:8081/livez"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      <<: *deploy-common
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 1G
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "The dashboard's read API; pause it with apiary-dashboard and host-gateway"
+        apiary.probe: "http:8081/livez"
+
+  mounted:
+    <<: *backend-common
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8082
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      HONEYPOT_TUNNEL_PEER_IP: 10.8.0.1
+      HONEYPOT_TUNNEL_SENSOR_IP: 10.8.0.2
+      SERVICE_TOKEN_FILE: /run/secrets/service_token
+      HOST_GATEWAY_URL: http://host-gateway:8083
+      HOST_GATEWAY_TOKEN_FILE: /run/secrets/host_gateway_token
+      ACTOR_ASSERTION_MODE: log
+      ACTOR_ASSERTION_PUBLIC_KEY_FILE: /run/secrets/actor_assertion_public_key
+      # The fleet's own public addresses, kept out of the attacker views
+      # (#1677). Real addresses, so a secret rather than a literal (#3790).
+      HONEYPOT_SELF_IPS_FILE: /run/secrets/honeypot_self_ips
+      # The names the gateway resolves (host_fs::Root); the paths are the
+      # gateway's, these only switch each root on.
+      SANDBOX_REQUEST_DIR: /sandbox-requests
+      SANDBOX_RESULTS_DIR: /sandbox-results
+      WINDOWS_SANDBOX_REQUEST_DIR: /windows-sandbox-requests
+      WINDOWS_SANDBOX_RESULTS_DIR: /windows-sandbox-results
+      GHOSTS_SANDBOX_REQUEST_DIR: /ghosts-sandbox-requests
+      GHOSTS_SANDBOX_RESULTS_DIR: /ghosts-sandbox-results
+      GHIDRA_REQUEST_DIR: /ghidra-requests
+      GHIDRA_RESULTS_DIR: /ghidra-results
+      REVDECK_REQUEST_DIR: /revdeck-requests
+      REVDECK_RESULTS_DIR: /revdeck-results
+      GITHUB_ANALYSIS_REQUEST_DIR: /github-analysis-requests
+      PAYLOAD_DIRS: /dionaea-lib/binaries,/cowrie-downloads
+      SCRIPT_PAYLOAD_DIR: /state/script-payloads
+      DASHBOARD_AUDIT_FILE: /backend-state/dashboard-audit.jsonl
+      DASHBOARD_CONFIG_HISTORY_FILE: /backend-state/dashboard-config-history.jsonl
+      TZ: Europe/Berlin
+      RUST_LOG: info
+    secrets:
+      - {source: service_token, target: service_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: host_gateway_token, target: host_gateway_token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: actor_assertion_public_key, target: actor_assertion_public_key, uid: "65534", gid: "65534", mode: 0444}
+      - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
+    volumes:
+      - {type: volume, source: backend-state, target: /backend-state}
+    networks:
+      bff:
+        aliases: [backend-api-mounted]
+      host: {}
+      es: {}
+    healthcheck:
+      test: [CMD, curl, -sf, "http://127.0.0.1:8082/livez"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      <<: *deploy-common
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "Analyzer submits and Workbench runs; pause it with apiary-dashboard and host-gateway"
+        apiary.probe: "http:8082/livez"
+
+secrets:
+  # Created out of band on a manager from the live values, never in git
+  # (ops/swarm/stackctl.py secret create <name> < value-file).
+  service_token:
+    external: true
+    name: dashboard_service_token_v1
+  host_gateway_token:
+    external: true
+    name: host_gateway_token_v1
+  actor_assertion_public_key:
+    external: true
+    name: actor_assertion_public_key_v1
+  honeypot_self_ips:
+    external: true
+    name: honeypot_self_ips_v1
+
+volumes:
+  # D3: audit and config history, seeded once from the homeserver's
+  # dashboard-state copy (README). Local to the node the tasks run on.
+  backend-state:
+    name: backend-state
+
+networks:
+  bff:
+    driver: overlay
+    # The dashboard (apiary-dashboard, Compose on the homeserver) attaches to
+    # this network to reach backend-api / backend-api-mounted.
+    attachable: true
+    # Pinned in the block reserved for the #3579 split (ops/swarm/README.md).
+    ipam:
+      config:
+        - subnet: 10.200.102.0/24
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+  host:
+    # The gateway's overlay, owned by the host-gateway stack.
+    external: true
+    name: host-gateway_host
+  es:
+    # D2: the encrypted overlay hp-elasticsearch joins with alias
+    # `elasticsearch` (10.200.101.0/24). Created in the post-benchmark window
+    # with phase 9 (#3587); this stack cannot deploy before it exists.
+    external: true
+    name: apiary-es

@@ -1,10 +1,29 @@
 {
  "roster": [],
  "shortlist": [
-  "orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF"
+  "orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF",
+  "empero-ai/Qwythos-27B-v1-GGUF",
+  "nerkyor/Qwen3.8-27B-Coder390-EfficientThink-Opus5.5-GPT6Astra-Grok4.7-DSV4Pro-K3-SFT-RLOO-MTP-DFlash2",
+  "nerkyor/Qwen3.8-27B-Coder390-EfficientThink-Opus5.5-GPT6Astra-Grok4.7-DSV4Pro-K3-SFT-RLOO-GGUF-NInfer",
+  "deadbydawn101/RavenX-CyberAgent-Qwen3.6-35B-A3B-Opus-4.7-OpenMythos-Pentester-BugHunter-RATH-GGUF",
+  "mradermacher/Llama3.3-8B-Instruct-Thinking-Heretic-Uncensored-Claude-4.5-Opus-High-Reasoning-i1-GGUF",
+  "llmfan46/Qwen3.5-40B-Claude-4.5-Opus-High-Reasoning-Thinking-uncensored-heretic-GGUF",
+  "tvall43/Qwen3.6-14B-A3B-FableVibes-GGUF",
+  "SC117/Ornith-1.0-9B-heretic-MTP-GGUF",
+  "Noobito45/Qwen3.8-9B-heretic-uncensored-NVFP4-GGUF",
+  "mradermacher/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU-i1-GGUF",
+  "mradermacher/gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking-i1-GGUF",
+  "Mal1cc/Llama3.3-8B-Instruct-Thinking-Heretic-Uncensored-Claude-4.5-Opus-High-Reasoning-i1-GGUF",
+  "llmfan46/Qwythos-9B-Claude-Mythos-5-1M-uncensored-heretic-GGUF",
+  "llmfan46/gemma-4-E4B-it-ultra-uncensored-heretic-GGUF",
+  "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
+  "hjgycm/Qwen3.6-14B-A3B-VibeForged-v2-GGUF",
+  "bartowski/cognitivecomputations_Dolphin-Mistral-24B-Venice-Edition-GGUF"
  ],
  "safetensors_import": [
   "orcarouter/OrcaSAQ-2-27B",
-  "orcarouter/Qwen3.8-27B-Uncensored-NVFP4"
+  "orcarouter/Qwen3.8-27B-Uncensored-NVFP4",
+  "DreamFast/gemma-3-12b-it-heretic-v2",
+  "Crownelius/Crow-4B-Opus-4.6-Distill-Heretic_Qwen3.5"
  ]
 }

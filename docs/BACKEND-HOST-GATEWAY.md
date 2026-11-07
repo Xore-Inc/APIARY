@@ -105,3 +105,10 @@ The boot log line `host paths` says which mode is in use, e.g.
 The gateway joins a dedicated encrypted overlay together with the two HTTP
 services, and only them. It is homeserver-pinned and publishes no port. See the
 D1-D3 design on #3582.
+
+- Gateway: [`swarm/stacks/host-gateway`](../swarm/stacks/host-gateway/README.md)
+  (overlay `host-gateway_host`, `10.200.100.0/24`).
+- HTTP services on precision: [`swarm/stacks/backend-api`](../swarm/stacks/backend-api/README.md).
+  Per the #3582 decision of 2026-11-06, LLM search is off there (`OLLAMA_URL`
+  unset) until the post-benchmark `ollama` overlay lands, and the per-request
+  JSONL log is not kept (`DASHBOARD_LOG_FILE` unset, no log mount).
