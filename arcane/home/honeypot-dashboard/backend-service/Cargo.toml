@@ -63,6 +63,16 @@ mail-parser = "0.11.6"
 # shapes they name.
 utoipa = { version = "6", features = ["macros"] }
 utoipa-axum = "0.3"
+# #3577: Ed25519 verification of the BFF's actor assertions. Not a new
+# crate: rustls already compiles ring 0.17 into this binary, so this names
+# it directly instead of adding a second crypto library. The backend only
+# verifies; the private key lives with the BFF.
+ring = "0.17"
+
+[dev-dependencies]
+# #3577: drive the real router with `oneshot` in the trust-boundary tests.
+# Already in the tree through axum.
+tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 lto = "thin"

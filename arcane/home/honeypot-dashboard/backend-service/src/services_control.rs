@@ -34,11 +34,38 @@ const VALID_STATES: &[&str] =
     &["running", "exited", "restarting", "paused", "created", "removing", "dead", "not_found", "unknown"];
 const VALID_ACTIONS: &[&str] = &["start", "stop", "restart"];
 
-fn socket_path() -> Option<String> {
+pub(crate) fn socket_path() -> Option<String> {
     std::env::var("SERVICES_ADAPTER_SOCKET").ok().filter(|s| !s.trim().is_empty())
 }
 
-async fn unix_request(
+/// Where the adapter is reached (#3582): its AF_UNIX socket on this host, or
+/// the host gateway (`SERVICES_ADAPTER_URL`) when this service runs off the
+/// sensor host. Either way only the three adapter calls below are made.
+enum Adapter {
+    Socket(String),
+    Gateway(&'static crate::host_fs::Remote),
+}
+
+fn adapter() -> Option<Adapter> {
+    crate::host_fs::adapter_gateway().map(Adapter::Gateway).or_else(|| socket_path().map(Adapter::Socket))
+}
+
+async fn adapter_request(
+    adapter: &Adapter,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    timeout: Duration,
+    max_body: usize,
+) -> anyhow::Result<(u16, Vec<u8>)> {
+    match adapter {
+        Adapter::Socket(socket) => unix_request(socket, method, path, body, timeout, max_body).await,
+        // The gateway sends the adapter's fixed `{}` body for a POST itself.
+        Adapter::Gateway(remote) => remote.adapter(method, path, timeout, max_body).await,
+    }
+}
+
+pub(crate) async fn unix_request(
     socket: &str,
     method: &str,
     path: &str,
@@ -91,8 +118,8 @@ async fn unix_request(
 /// adapter isn't configured/reachable/valid — distinct from "zero
 /// services" — so callers never render an empty pane as authoritative.
 async fn load_services_status() -> Result<Vec<Value>, String> {
-    let Some(socket) = socket_path() else { return Err("services adapter is not configured".into()) };
-    let (status, body) = unix_request(&socket, "GET", "/v1/services", None, Duration::from_secs(8), 256 << 10)
+    let Some(adapter) = adapter() else { return Err("services adapter is not configured".into()) };
+    let (status, body) = adapter_request(&adapter, "GET", "/v1/services", None, Duration::from_secs(8), 256 << 10)
         .await
         .map_err(|_| "services adapter is unavailable".to_string())?;
     if status != 200 {
@@ -116,11 +143,11 @@ async fn perform_service_action(name: &str, action: &str) -> (bool, u16, String)
     if name.trim().is_empty() || !VALID_ACTIONS.contains(&action) {
         return (false, 400, "unsupported action".into());
     }
-    let Some(socket) = socket_path() else {
+    let Some(adapter) = adapter() else {
         return (false, 503, "services adapter is not configured".into());
     };
     let path = format!("/v1/services/{}/{}", urlencode(name), action);
-    let Ok((status, body)) = unix_request(&socket, "POST", &path, Some(b"{}"), Duration::from_secs(15), 16 << 10).await
+    let Ok((status, body)) = adapter_request(&adapter, "POST", &path, Some(b"{}"), Duration::from_secs(15), 16 << 10).await
     else {
         return (false, 503, "services adapter is unavailable".into());
     };
@@ -138,11 +165,11 @@ async fn fetch_service_logs(name: &str, lines: u32) -> Result<(String, u32), (u1
         return Err((400, "missing service name".into()));
     }
     let lines = if lines == 0 { 200 } else { lines.min(MAX_SERVICE_LOG_LINES) };
-    let Some(socket) = socket_path() else {
+    let Some(adapter) = adapter() else {
         return Err((503, "services adapter is not configured".into()));
     };
     let path = format!("/v1/services/{}/logs?lines={}", urlencode(name), lines);
-    let (status, body) = unix_request(&socket, "GET", &path, None, Duration::from_secs(15), 4 << 20)
+    let (status, body) = adapter_request(&adapter, "GET", &path, None, Duration::from_secs(15), 4 << 20)
         .await
         .map_err(|_| (503u16, "services adapter is unavailable".to_string()))?;
     if status != 200 {
@@ -244,20 +271,31 @@ pub struct ActionQuery {
     ),
     security(("serviceToken" = [])),
 )]
+/// #3577: under `ACTOR_ASSERTION_MODE=enforce` the trust middleware has
+/// already refused anyone but a verified admin, and the audit entry names
+/// that verified actor; the `actor_*` query fields are only the labels for
+/// the `off`/`log` modes, where nothing was verified (`log` warns when they
+/// differ from the assertion).
 pub async fn action(
     State(state): State<AppState>,
+    binding: crate::trust::ActorBinding,
     Path((name, action)): Path<(String, String)>,
     Query(actor): Query<ActionQuery>,
-) -> impl axum::response::IntoResponse {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (actor_subject, actor_username) = match binding.bind_pair(&actor.actor_subject, &actor.actor_username) {
+        Ok(pair) => pair,
+        Err(refusal) => return <(StatusCode, String)>::from(refusal).into_response(),
+    };
     let (ok, status, reason) = perform_service_action(&name, &action).await;
     state.audit.log(AuditEvent {
-        actor_subject: actor.actor_subject,
-        actor_username: actor.actor_username,
+        actor_subject,
+        actor_username,
         action: format!("services.{action}"),
         fields: vec![name.clone()],
         result: if ok { "success" } else { "error" }.into(),
         ..Default::default()
     });
     let body = if ok { json!({"ok": true, "name": name, "action": action}) } else { json!({"ok": false, "error": reason}) };
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body))
+    (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response()
 }

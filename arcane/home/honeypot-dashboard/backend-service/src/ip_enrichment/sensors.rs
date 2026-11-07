@@ -10,9 +10,10 @@ use serde_json::Value;
 
 use super::canonical::promote_canonical_fields;
 use super::tftp::is_tftp_relay_record;
-use super::viamap::ViaMap;
+use super::viamap::{resolve, settled, Join, JoinQuery, Transport, ViaMap};
 
-pub const TUNNEL_PEER_IP: &str = "10.8.0.1";
+#[cfg(test)]
+pub const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 
 /// Loopback sources. A honeypot is reached from the network; nothing on this
 /// fleet is legitimately attacked from inside its own container.
@@ -124,6 +125,20 @@ fn parse_sensor_time(raw: &str) -> Option<i64> {
     if let Ok(t) = chrono::DateTime::parse_from_rfc3339(&normalized) {
         return Some(t.timestamp());
     }
+    // #3573: galah now logs Go's time.Time String() form,
+    // "2026-09-29 08:51:15.402586836 +0200 CEST m=+485577.992530828" -- a
+    // numeric offset followed by a zone abbreviation and the monotonic clock
+    // reading. Only the first two tokens carry the instant. Before this the
+    // whole stamp failed to parse, so galah's lines joined with no time check
+    // at all.
+    let mut tokens = normalized.split_whitespace();
+    if let (Some(stamp), Some(offset)) = (tokens.next(), tokens.next()) {
+        if offset.starts_with('+') || offset.starts_with('-') {
+            if let Ok(t) = chrono::DateTime::parse_from_str(&format!("{stamp}{offset}"), "%Y-%m-%dT%H:%M:%S%.f%z") {
+                return Some(t.timestamp());
+            }
+        }
+    }
     // galah: "2026-08-23T08:38:23.441305976 +0200" -- an offset, space-separated.
     if let Some((head, tail)) = normalized.rsplit_once(' ') {
         if let Ok(t) = chrono::DateTime::parse_from_rfc3339(&format!("{head}{tail}")) {
@@ -171,6 +186,147 @@ fn set_if_changed(e: &mut Value, key: &str, value: impl Into<String>) -> bool {
     true
 }
 
+/// #3573: writes the outcome of one portbridge join onto the line.
+///
+/// `tunnel_attribution` lands in Elasticsearch as
+/// `honeypot.tunnel_attribution` ("portbridge", "ambiguous" or "unmatched"),
+/// so an unattributed tunnel event says *why* it is unattributed and can be
+/// counted, instead of looking identical to one the worker never saw.
+/// `fleet_peer` keeps the tunnel address the sensor actually observed once
+/// `src_ip` has been replaced with the client, the same field #3560's ingest
+/// promotion writes when it passes over a fleet address.
+fn mark_join(e: &mut Value, join: &Join) -> bool {
+    let mut changed = set_if_changed(e, "tunnel_attribution", join.label());
+    if matches!(join, Join::Attributed(_)) {
+        changed |= set_if_changed(e, "fleet_peer", crate::fleet::tunnel_peer_ip());
+    }
+    changed
+}
+
+/// Connection start times by (sensor, session id), for sensors that name
+/// their sessions (#3573).
+///
+/// The join window is a few seconds wide, and it has to be anchored on the
+/// moment the connection opened: a cowrie session writes lines for minutes
+/// or hours, and joining a late line on its own timestamp either finds
+/// nothing or -- worse -- finds an unrelated dial that happened to reuse the
+/// port seconds before that line. Remembering when the session's first line
+/// was written makes every line of the session ask the same question its
+/// connect line asked.
+fn session_starts() -> &'static Mutex<HashMap<(String, String), i64>> {
+    static STARTS: OnceLock<Mutex<HashMap<(String, String), i64>>> = OnceLock::new();
+    STARTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A remembered start older than this is treated as a different session that
+/// reused the identifier, never as the start of this one. Also the age past
+/// which entries are swept once the map is full.
+const SESSION_TTL_SECONDS: i64 = 6 * 3600;
+
+/// Bounds the session map. Sessions are swept by age when it fills; if it is
+/// still full afterwards, lines simply join on their own time.
+const SESSION_CAPACITY: usize = 200_000;
+
+/// When the connection behind this line started: the earliest time seen for
+/// its session, or the line's own time when the sensor names no session.
+fn connection_start(persona: &str, session: Option<&str>, line_at: i64) -> i64 {
+    let Some(session) = session.filter(|s| !s.is_empty()) else { return line_at };
+    if line_at == 0 {
+        return 0;
+    }
+    let Ok(mut starts) = session_starts().lock() else { return line_at };
+    let key = (persona.to_string(), session.to_string());
+    if let Some(&start) = starts.get(&key) {
+        if start <= line_at && line_at - start <= SESSION_TTL_SECONDS {
+            return start;
+        }
+        if start > line_at && start - line_at <= SESSION_TTL_SECONDS {
+            // An earlier line of the session arrived after a later one.
+            starts.insert(key, line_at);
+            return line_at;
+        }
+    }
+    if starts.len() >= SESSION_CAPACITY {
+        starts.retain(|_, start| (line_at - *start).abs() <= SESSION_TTL_SECONDS);
+        if starts.len() >= SESSION_CAPACITY {
+            return line_at;
+        }
+    }
+    starts.insert(key, line_at);
+    line_at
+}
+
+/// The session identifier a sensor writes on every line of one connection,
+/// where it writes one that is unique. mailoney's `session_id` is a counter
+/// that restarts with the container, so it is deliberately not used.
+fn session_key<'a>(persona: &str, e: &'a Value) -> Option<&'a str> {
+    let field = if persona == "cowrie" {
+        "session"
+    } else if persona == "conpot" || persona.starts_with("conpot-") {
+        "id"
+    } else {
+        return None;
+    };
+    e.get(field).and_then(Value::as_str)
+}
+
+/// The transport a generic sensor line was carried over, where the line says.
+fn line_transport(persona: &str, e: &Value) -> Transport {
+    let declared = e
+        .get("transport")
+        .or_else(|| e.get("connection").and_then(|c| c.get("transport")))
+        .and_then(Value::as_str)
+        .map(Transport::parse)
+        .unwrap_or_default();
+    if declared != Transport::Unknown {
+        return declared;
+    }
+    match persona {
+        "cowrie" | "elasticpot" | "mailoney" => Transport::Tcp,
+        p if p == "conpot" || p.starts_with("conpot-") => {
+            let udp_kind = matches!(
+                e.get("data_type").and_then(Value::as_str),
+                Some("snmp") | Some("bacnet") | Some("ipmi") | Some("tftp")
+            );
+            let udp_port = matches!(e.get("dst_port").and_then(Value::as_i64), Some(161 | 623 | 47808 | 69));
+            if udp_kind || udp_port {
+                Transport::Udp
+            } else {
+                Transport::Tcp
+            }
+        }
+        _ => Transport::Unknown,
+    }
+}
+
+/// The port portbridge dialled, for sensors whose own listen port is the
+/// same number (checked against the live portbridge RULES, 2026-10-09).
+///
+/// A wrong value here can only ever cost a match, never produce a wrong one:
+/// two TCP connections to the same target cannot share a source port at the
+/// same time, so filtering on the target can remove the right dial but never
+/// promote an unrelated one. cowrie's ports are shifted by its own compose
+/// file (19022 -> 2222, 19023 -> 2223) and mapped back here; conpot's UDP
+/// services are shifted too (19161 -> 161), so only its TCP lines say.
+fn want_port(persona: &str, e: &Value) -> i64 {
+    let number = |field: &str| match e.get(field) {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
+    };
+    match persona {
+        "dionaea" | "elasticpot" | "mailoney" => number("dst_port"),
+        "dns-honeypot" | "cisco-asa-honeypot" => number("port"),
+        "cowrie" => match number("dst_port") {
+            2222 => 19022,
+            2223 => 19023,
+            _ => 0,
+        },
+        p if (p == "conpot" || p.starts_with("conpot-")) && line_transport(p, e) == Transport::Tcp => number("dst_port"),
+        _ => 0,
+    }
+}
+
 /// The generic case: fix conpot dest port, promote canonical fields
 /// unconditionally on every attempt (including retries — cheap, idempotent
 /// against the same original line), then resolve src_ip via the
@@ -190,27 +346,49 @@ pub fn enrich_line(line: &[u8], vm: &ViaMap, tftp_vm: &ViaMap, persona: &str) ->
     let fields_changed = attck_changed || canonical_changed || port_fixed || probe_marked;
 
     let ip = str(&e, "src_ip");
-    let lookup = if ip == TUNNEL_PEER_IP {
-        vm
-    } else if is_tftp_relay_record(&e, persona) {
-        tftp_vm
-    } else {
-        return (marshal_if_changed(line, &e, fields_changed), true); // already correct or genuinely unknown
-    };
-
     let port = extract_src_port(&e);
-    if port == 0 {
-        return (marshal_if_changed(line, &e, fields_changed), true); // no src_port to join on
-    }
-    // #1771: the entry has to be one that could actually have produced this
-    // line -- dialled before it, for the same service, and not so long before
-    // that we are joining a replayed backlog against a live map.
     let line_at = extract_line_time(&e);
-    let Some(real) = super::viamap::lookup(lookup, port, line_at) else {
-        return (marshal_if_changed(line, &e, fields_changed), false); // via_port miss — retry later
+    if ip != crate::fleet::tunnel_peer_ip() {
+        if !is_tftp_relay_record(&e, persona) {
+            return (marshal_if_changed(line, &e, fields_changed), true); // already correct or genuinely unknown
+        }
+        if port == 0 {
+            return (marshal_if_changed(line, &e, fields_changed), true);
+        }
+        // The TFTP relay's own session log carries no timestamps, so this
+        // keeps the plain port lookup (#1771's checks opt out at time 0).
+        let Some(real) = super::viamap::lookup(tftp_vm, port, line_at) else {
+            return (marshal_if_changed(line, &e, fields_changed), false);
+        };
+        e["src_ip"] = Value::from(real.to_string());
+        return (marshal_if_changed(line, &e, true), true);
+    }
+
+    if port == 0 {
+        let marked = mark_join(&mut e, &Join::Unmatched);
+        return (marshal_if_changed(line, &e, fields_changed || marked), true); // no src_port to join on
+    }
+    // #1771/#3573: the dial has to be one that could actually have produced
+    // this connection -- within a few seconds of when it opened, and the only
+    // client that fits. Anything else is reported, not guessed.
+    let query = JoinQuery {
+        via_port: port,
+        at: connection_start(persona, session_key(persona, &e), line_at),
+        want_port: want_port(persona, &e),
+        transport: line_transport(persona, &e),
     };
-    e["src_ip"] = Value::from(real.to_string());
-    (marshal_if_changed(line, &e, true), true)
+    let join = resolve(vm, query);
+    let marked = mark_join(&mut e, &join);
+    match join {
+        Join::Attributed(real) => {
+            e["src_ip"] = Value::from(real.to_string());
+            (marshal_if_changed(line, &e, true), settled(vm, query.at))
+        }
+        // Final: more of the log can only add rivals, never remove one.
+        Join::Ambiguous => (marshal_if_changed(line, &e, fields_changed || marked), true),
+        // Retried -- portbridge's line for the dial may not have been read yet.
+        Join::Unmatched => (marshal_if_changed(line, &e, fields_changed || marked), false),
+    }
 }
 
 /// Recursively walks `v` (typically dionaea_incident.json's "data" field)
@@ -221,9 +399,7 @@ pub fn enrich_line(line: &[u8], vm: &ViaMap, tftp_vm: &ViaMap, persona: &str) ->
 /// origin ("connection" for most, "child"/"parent" for
 /// dionaea.connection.link).
 fn rewrite_dionaea_connections(v: &mut Value, vm: &ViaMap, line_at: i64) -> DionaeaWalk {
-    let mut changed = 0usize;
-    let mut all_resolved = true;
-    let mut saw_loopback = false;
+    let mut walk = DionaeaWalk { all_resolved: true, ..DionaeaWalk::default() };
     match v {
         Value::Object(map) => {
             if let Some(Value::String(ip)) = map.get("remote_ip") {
@@ -239,9 +415,9 @@ fn rewrite_dionaea_connections(v: &mut Value, vm: &ViaMap, line_at: i64) -> Dion
                 // at a top-level src_ip, so mark_internal_probe never saw
                 // it.
                 if LOOPBACK_IPS.contains(&ip.as_str()) {
-                    saw_loopback = true;
+                    walk.saw_loopback = true;
                 }
-                if ip == TUNNEL_PEER_IP {
+                if ip == crate::fleet::tunnel_peer_ip() {
                     if let Some(port) = map.get("remote_port").and_then(Value::as_f64) {
                         // #1917: the connection object says which of its own
                         // ports the attacker reached, and that is what makes
@@ -251,56 +427,102 @@ fn rewrite_dionaea_connections(v: &mut Value, vm: &ViaMap, line_at: i64) -> Dion
                         // ephemeral port -- inside the time window, newest
                         // entry the map had, and a different attacker. The
                         // destination port rules it out outright.
+                        //
+                        // #3573: anchored on the connection's first record
+                        // (its `id` is shared by accept, link and free), and
+                        // ambiguous rather than newest-wins when two clients
+                        // fit.
                         let want_port = map
                             .get("local_port")
                             .and_then(Value::as_f64)
                             .map(|p| p as i64)
                             .unwrap_or(0);
-                        if let Some(real) =
-                            super::viamap::lookup_to_port(vm, port as i64, line_at, want_port)
-                        {
-                            map.insert("remote_ip".to_string(), Value::from(real.to_string()));
-                            changed += 1;
-                        } else {
-                            // Better queued than answered wrongly: the right
-                            // entry usually arrives within a second, and the
-                            // pending queue flushes it unenriched if it never
-                            // does.
-                            all_resolved = false;
+                        let transport = map
+                            .get("transport")
+                            .and_then(Value::as_str)
+                            .map(Transport::parse)
+                            .unwrap_or_default();
+                        let id = map.get("id").and_then(Value::as_str).map(str::to_string);
+                        let query = JoinQuery {
+                            via_port: port as i64,
+                            at: connection_start("dionaea-incident", id.as_deref(), line_at),
+                            want_port,
+                            transport,
+                        };
+                        match resolve(vm, query) {
+                            Join::Attributed(real) => {
+                                map.insert("remote_ip".to_string(), Value::from(real.to_string()));
+                                walk.changed += 1;
+                                // Better queued than answered before a rival
+                                // dial could still arrive.
+                                walk.all_resolved &= settled(vm, query.at);
+                            }
+                            Join::Ambiguous => walk.ambiguous += 1,
+                            Join::Unmatched => {
+                                // Better queued than answered wrongly: the
+                                // right entry usually arrives within a
+                                // second, and the pending queue flushes it
+                                // unenriched if it never does.
+                                walk.unmatched += 1;
+                                walk.all_resolved = false;
+                            }
                         }
                     }
                 }
             }
             for child in map.values_mut() {
-                let walk = rewrite_dionaea_connections(child, vm, line_at);
-                changed += walk.changed;
-                all_resolved = all_resolved && walk.all_resolved;
-                saw_loopback = saw_loopback || walk.saw_loopback;
+                walk.absorb(rewrite_dionaea_connections(child, vm, line_at));
             }
         }
         Value::Array(arr) => {
             for child in arr {
-                let walk = rewrite_dionaea_connections(child, vm, line_at);
-                changed += walk.changed;
-                all_resolved = all_resolved && walk.all_resolved;
-                saw_loopback = saw_loopback || walk.saw_loopback;
+                walk.absorb(rewrite_dionaea_connections(child, vm, line_at));
             }
         }
         _ => {}
     }
-    DionaeaWalk { changed, all_resolved, saw_loopback }
+    walk
 }
 
 /// What one pass over a dionaea incident's `data` found.
+#[derive(Default)]
 struct DionaeaWalk {
     /// How many nested remote_ip values were rewritten to a real client.
     changed: usize,
+    /// #3573: tunnel connections two clients could have produced.
+    ambiguous: usize,
+    /// #3573: tunnel connections no dial fits (yet).
+    unmatched: usize,
     /// False when a tunnel-peer address had no portbridge entry to join
     /// against, so the line should be retried rather than shipped as-is.
     all_resolved: bool,
     /// Whether any peer in the record was loopback -- dionaea talking to
     /// itself, not an attacker.
     saw_loopback: bool,
+}
+
+impl DionaeaWalk {
+    fn absorb(&mut self, child: DionaeaWalk) {
+        self.changed += child.changed;
+        self.ambiguous += child.ambiguous;
+        self.unmatched += child.unmatched;
+        self.all_resolved = self.all_resolved && child.all_resolved;
+        self.saw_loopback = self.saw_loopback || child.saw_loopback;
+    }
+
+    /// The record-level outcome: one answer per incident, the worst of its
+    /// tunnel connections. None when it had no tunnel connection at all.
+    fn join(&self) -> Option<Join<'static>> {
+        if self.ambiguous > 0 {
+            Some(Join::Ambiguous)
+        } else if self.unmatched > 0 {
+            Some(Join::Unmatched)
+        } else if self.changed > 0 {
+            Some(Join::Attributed(""))
+        } else {
+            None
+        }
+    }
 }
 
 /// dionaea_incident.json's own enrichLine: unlike the flat-log sensors, an
@@ -314,13 +536,14 @@ pub fn enrich_dionaea_incident_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap,
     let line_at = extract_line_time(&e);
     let walk = match e.get_mut("data") {
         Some(data) => rewrite_dionaea_connections(data, vm, line_at),
-        None => DionaeaWalk { changed: 0, all_resolved: true, saw_loopback: false },
+        None => DionaeaWalk { all_resolved: true, ..DionaeaWalk::default() },
     };
     let (changed, all_resolved) = (walk.changed, walk.all_resolved);
+    let marked = walk.join().is_some_and(|join| mark_join(&mut e, &join));
     let probe_marked = walk.saw_loopback && mark_probe_from(&mut e, "127.0.0.1");
     let canonicalized = promote_canonical_fields("dionaea-incident", &mut e);
     let attck_changed = super::attck::promote_attck_technique_fields("dionaea-incident", &mut e);
-    if changed == 0 && !canonicalized && !attck_changed && !probe_marked {
+    if changed == 0 && !marked && !canonicalized && !attck_changed && !probe_marked {
         return (line.to_vec(), all_resolved);
     }
     (serde_json::to_vec(&e).unwrap_or_else(|_| line.to_vec()), all_resolved)
@@ -362,7 +585,7 @@ pub fn enrich_beelzebub_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _perso
     changed |= super::attck::promote_attck_technique_fields("beelzebub", &mut e);
 
     let ip = ev.get("SourceIp").and_then(Value::as_str).unwrap_or("").to_string();
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         if !ip.is_empty() {
             changed |= set_if_changed(&mut e, "src_ip", ip);
         }
@@ -375,9 +598,16 @@ pub fn enrich_beelzebub_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _perso
         return (marshal_if_changed(line, &e, changed), true);
     };
 
-    let Some(real) = super::viamap::lookup(vm, port, extract_line_time(&e)) else {
+    // #3573: beelzebub's only timestamp is the event's own `DateTime`; the
+    // top-level line has none, which used to leave this join with no time
+    // check at all.
+    let at = ev.get("DateTime").and_then(Value::as_str).and_then(parse_sensor_time).unwrap_or(0);
+    let query = JoinQuery { via_port: port, at, want_port: 0, transport: Transport::Tcp };
+    let join = resolve(vm, query);
+    changed |= mark_join(&mut e, &join);
+    let Join::Attributed(real) = join else {
         changed |= set_if_changed(&mut e, "src_ip", ip);
-        return (marshal_if_changed(line, &e, changed), false);
+        return (marshal_if_changed(line, &e, changed), join == Join::Ambiguous);
     };
     let real = real.to_string();
 
@@ -386,7 +616,7 @@ pub fn enrich_beelzebub_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _perso
     e["event"] = ev;
     e["src_ip"] = Value::from(real.clone());
     e["src_port"] = Value::from(port);
-    (marshal_if_changed(line, &e, true), true)
+    (marshal_if_changed(line, &e, true), settled(vm, at))
 }
 
 /// One rule for deciding who sent a relayed request (#1876).
@@ -421,7 +651,7 @@ pub struct SourceVerdict {
 pub fn adjudicate_source(observed: &str, relayed: Option<String>, claimed: Option<String>) -> SourceVerdict {
     // Not relayed: the sensor is looking straight at the client, so no join
     // applies and no header may override what the connection shows.
-    if observed != TUNNEL_PEER_IP {
+    if observed != crate::fleet::tunnel_peer_ip() {
         return SourceVerdict { ip: observed.to_string(), claimed: None, resolved: true };
     }
     match (relayed, claimed) {
@@ -648,7 +878,7 @@ pub fn enrich_hellpot_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona
     };
     changed |= mark_probe_from(&mut e, &ip);
 
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         changed |= set_if_changed(&mut e, "src_ip", ip);
         return (marshal_if_changed(line, &e, changed), true);
     }
@@ -696,14 +926,32 @@ pub fn enrich_hellpot_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona
     // opened -- so the memory is a fallback rather than a rival. The header
     // is a different mechanism entirely, and adjudicate_source ranks it.
     let at = extract_line_time(&e);
-    let relayed = super::viamap::lookup(vm, port, at)
-        .map(|real| real.to_string())
-        .or_else(|| recall_connection(port, at));
+    // #3573: the raw door's DST_PORT is portbridge's target port (8080), so
+    // it narrows the join; the line's own time is the anchor, since hellpot
+    // writes NEW the moment the connection opens and every later line of the
+    // connection resolves from the memory below instead.
+    let query = JoinQuery {
+        via_port: port,
+        at,
+        want_port: e.get("DST_PORT").and_then(Value::as_str).and_then(|p| p.parse().ok()).unwrap_or(0),
+        transport: Transport::Tcp,
+    };
+    let join = resolve(vm, query);
+    let joined = match join {
+        Join::Attributed(real) => Some(real.to_string()),
+        _ => None,
+    };
+    let relayed = joined.clone().or_else(|| recall_connection(port, at));
     let verdict = adjudicate_source(&ip, relayed, forwarded_claim(&e));
 
     if !verdict.resolved {
+        changed |= mark_join(&mut e, &join);
         changed |= set_if_changed(&mut e, "src_ip", ip);
-        return (marshal_if_changed(line, &e, changed), false);
+        return (marshal_if_changed(line, &e, changed), join == Join::Ambiguous);
+    }
+    let from_join = joined.as_deref() == Some(verdict.ip.as_str());
+    if from_join {
+        mark_join(&mut e, &join);
     }
 
     if closes_connection(&e) {
@@ -717,7 +965,7 @@ pub fn enrich_hellpot_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona
     e["REMOTE_ADDR"] = Value::from(join_host_port(&verdict.ip, &port_str));
     e["src_port"] = Value::from(port);
     apply_verdict(&mut e, &verdict);
-    (marshal_if_changed(line, &e, true), true)
+    (marshal_if_changed(line, &e, true), !from_join || settled(vm, at))
 }
 
 /// galah's event_log.json: flat srcIP/srcPort fields already. Promotes
@@ -740,12 +988,26 @@ pub fn enrich_galah_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona: 
     let Ok(mut e) = serde_json::from_slice::<Value>(line) else {
         return (line.to_vec(), true);
     };
-    if e.get("msg").and_then(Value::as_str) != Some("successfulResponse") {
+    // #3666: galah logs one line per request it served, and two shapes of it:
+    // `successfulResponse`, and `failedResponse: returned 500 internal server
+    // error` when the LLM call behind it failed. Both carry the whole request
+    // and the attacker's address, so both are events. The failed one used to
+    // fall through here and never reached `honeypot-v2`, which made a broken
+    // LLM path look like an idle sensor and lost the requests it received.
+    let msg = e.get("msg").and_then(Value::as_str).unwrap_or("");
+    let llm_failed = msg.starts_with("failedResponse");
+    if msg != "successfulResponse" && !llm_failed {
         return (line.to_vec(), true); // not a per-request event line
     }
 
     let mut changed = false;
     changed |= set_if_changed(&mut e, "sensor", "galah");
+    if llm_failed {
+        // Named like the other `*_outcome` fields (auth_outcome). Only the
+        // failure sets it: a count of galah events minus a count of
+        // response_outcome:llm_failed is the served count.
+        changed |= set_if_changed(&mut e, "response_outcome", "llm_failed");
+    }
     changed |= set_if_changed(&mut e, "protocol", "HTTP");
     if let Some(dst) = e.get("port").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string) {
         changed |= set_if_changed(&mut e, "dst_port", dst);
@@ -765,7 +1027,7 @@ pub fn enrich_galah_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona: 
 
     let ip = e.get("srcIP").and_then(Value::as_str).unwrap_or("").to_string();
     changed |= mark_probe_from(&mut e, &ip);
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         if !ip.is_empty() {
             changed |= set_if_changed(&mut e, "src_ip", ip);
         }
@@ -822,18 +1084,34 @@ pub fn enrich_galah_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _persona: 
     // disagrees is kept and flagged rather than dropped: on this path a
     // contradiction is someone trying the above, which is worth seeing.
     let at = extract_line_time(&e);
-    let relayed = super::viamap::lookup(vm, port, at).map(|real| real.to_string());
-    let verdict = adjudicate_source(&ip, relayed, forwarded_claim(&e));
+    // #3573: galah's `port` is the listen port portbridge dials (8888).
+    let query = JoinQuery {
+        via_port: port,
+        at,
+        want_port: e.get("port").and_then(Value::as_str).and_then(|p| p.parse().ok()).unwrap_or(0),
+        transport: Transport::Tcp,
+    };
+    let join = resolve(vm, query);
+    let relayed = match join {
+        Join::Attributed(real) => Some(real.to_string()),
+        _ => None,
+    };
+    let verdict = adjudicate_source(&ip, relayed.clone(), forwarded_claim(&e));
 
     if !verdict.resolved {
+        changed |= mark_join(&mut e, &join);
         changed |= set_if_changed(&mut e, "src_ip", ip);
-        return (marshal_if_changed(line, &e, changed), false);
+        return (marshal_if_changed(line, &e, changed), join == Join::Ambiguous);
+    }
+    let from_join = relayed.as_deref() == Some(verdict.ip.as_str());
+    if from_join {
+        mark_join(&mut e, &join);
     }
 
     e["srcIP"] = Value::from(verdict.ip.clone());
     e["src_port"] = Value::from(port);
     apply_verdict(&mut e, &verdict);
-    (marshal_if_changed(line, &e, true), true)
+    (marshal_if_changed(line, &e, true), !from_join || settled(vm, at))
 }
 
 /// sentrypeer.json: "source_ip" is a single "ip:port" string, same shape
@@ -860,7 +1138,7 @@ pub fn enrich_sentrypeer_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _pers
     };
     changed |= mark_probe_from(&mut e, &ip);
 
-    if ip != TUNNEL_PEER_IP {
+    if ip != crate::fleet::tunnel_peer_ip() {
         changed |= set_if_changed(&mut e, "src_ip", ip);
         return (marshal_if_changed(line, &e, changed), true);
     }
@@ -870,16 +1148,23 @@ pub fn enrich_sentrypeer_line(line: &[u8], vm: &ViaMap, _tftp_vm: &ViaMap, _pers
         return (marshal_if_changed(line, &e, changed), true);
     };
 
-    let Some(real) = super::viamap::lookup(vm, port, extract_line_time(&e)) else {
+    // #3573: SIP over UDP is the common case here, and a UDP session keeps
+    // its via_port for as long as it stays active, so `transport_type` decides
+    // which window applies.
+    let at = extract_line_time(&e);
+    let transport = e.get("transport_type").and_then(Value::as_str).map(Transport::parse).unwrap_or_default();
+    let join = resolve(vm, JoinQuery { via_port: port, at, want_port: 0, transport });
+    changed |= mark_join(&mut e, &join);
+    let Join::Attributed(real) = join else {
         changed |= set_if_changed(&mut e, "src_ip", ip);
-        return (marshal_if_changed(line, &e, changed), false);
+        return (marshal_if_changed(line, &e, changed), join == Join::Ambiguous);
     };
     let real = real.to_string();
 
     e["source_ip"] = Value::from(join_host_port(&real, &port_str));
     e["src_ip"] = Value::from(real.clone());
     e["src_port"] = Value::from(port);
-    (marshal_if_changed(line, &e, true), true)
+    (marshal_if_changed(line, &e, true), settled(vm, at))
 }
 
 /// net.SplitHostPort equivalent for the plain "ip:port" shape every
@@ -1021,7 +1306,7 @@ mod tests {
             // target_port 0 opts these fixtures out of #1917's
             // destination-port check; the tests that exercise it build
             // their own entries with a real port.
-            ip: ip.to_string(), at: 0, target_port: 0,
+            ip: ip.to_string(), ..Default::default()
         }]);
         m
     }
@@ -1101,6 +1386,21 @@ mod tests {
             e["XFF"] = Value::from(xff);
         }
         serde_json::to_vec(&e).unwrap()
+    }
+
+    /// #3573: a join is only final once the map has read past the line's
+    /// window, so fixtures that expect a final answer feed one unrelated,
+    /// later dial -- as the live log always does within seconds.
+    fn read_past(vm: &mut ViaMap, at: &str) {
+        super::super::viamap::parse_portbridge_line(
+            serde_json::to_vec(&serde_json::json!({
+                "sensor": "portbridge", "event": "connect",
+                "src_ip": "198.51.100.250", "via_port": 1, "time": at,
+            }))
+            .unwrap()
+            .as_slice(),
+            vm,
+        );
     }
 
     fn field(out: &[u8], key: &str) -> Option<String> {
@@ -1208,6 +1508,7 @@ mod tests {
             .as_slice(),
             &mut vm,
         );
+        read_past(&mut vm, "2026-08-24T20:00:10Z");
 
         let addr = format!("{TUNNEL_PEER_IP}:{port}");
         let (opened, resolved) = enrich_hellpot_line(&hellpot_line(&addr, None, "NEW"), &vm, &ViaMap::new(), "hellpot");
@@ -1244,6 +1545,7 @@ mod tests {
             .as_slice(),
             &mut vm,
         );
+        read_past(&mut vm, "2026-08-24T20:00:10Z");
         let (_, resolved) = enrich_hellpot_line(&hellpot_line(&addr, None, "NEW"), &vm, &ViaMap::new(), "hellpot");
         assert!(resolved, "the opening line must resolve");
 
@@ -1549,6 +1851,94 @@ mod tests {
         assert_eq!(e["internal_probe"], json!(true));
     }
 
+    /// A `failedResponse` line as galah 1.x writes it (shape copied from a
+    /// real one, #3666): the whole request, an `error` object, no httpResponse.
+    fn galah_failed_line(src_ip: &str, src_port: &str, listen_port: &str) -> String {
+        json!({
+            "level": "error",
+            "msg": "failedResponse: returned 500 internal server error",
+            "srcPort": src_port,
+            "tags": null,
+            "httpRequest": {
+                "body": "",
+                "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "headers": {"User-Agent": "Mozilla/5.0"},
+                "method": "GET",
+                "request": "/favicon.ico",
+                "userAgent": "Mozilla/5.0",
+            },
+            "sensorName": "2be6986b6f40",
+            "port": listen_port,
+            "error": {
+                "invalidResponse": "",
+                "msg": "Post \"http://galah-llm-broker:11434/api/chat\": context canceled",
+                "type": "contentGenerationError",
+            },
+            "responseMetadata": {"generationSource": "", "info": {"model": "qwen2.5:7b-instruct-q4_K_M"}},
+            "eventTime": "2026-10-16 16:34:20.481604614 +0200 CEST m=+320166.444481929",
+            "srcIP": src_ip,
+            "srcHost": "",
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn galah_failed_responses_are_promoted_with_an_outcome() {
+        let line = galah_failed_line("203.0.113.9", "43112", "8888");
+        let (out, resolved) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert!(resolved);
+        assert_eq!(e["sensor"], json!("galah"));
+        assert_eq!(e["src_ip"], json!("203.0.113.9"));
+        assert_eq!(e["path"], json!("/favicon.ico"));
+        assert_eq!(e["dst_port"], json!("8888"));
+        assert_eq!(e["user_agent"], json!("Mozilla/5.0"));
+        assert_eq!(e["response_outcome"], json!("llm_failed"));
+    }
+
+    #[test]
+    fn galah_failed_responses_through_the_tunnel_still_resolve_the_real_source() {
+        // No eventTime, so the fixture's time-less join entry applies (the
+        // same simplification galah_line() makes).
+        let mut v: Value = serde_json::from_str(&galah_failed_line(TUNNEL_PEER_IP, "43112", "8888")).unwrap();
+        v.as_object_mut().unwrap().remove("eventTime");
+        let line = v.to_string();
+        let (out, _) =
+            enrich_galah_line(line.as_bytes(), &vm_with(43112, "203.0.113.9"), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert_eq!(e["src_ip"], json!("203.0.113.9"));
+        assert_eq!(e["response_outcome"], json!("llm_failed"));
+    }
+
+    #[test]
+    fn galah_successful_responses_carry_no_outcome_field() {
+        let line = json!({
+            "msg": "successfulResponse",
+            "srcIP": "203.0.113.9",
+            "srcPort": "43112",
+            "port": "8888",
+            "httpRequest": {"request": "/"},
+        })
+        .to_string();
+        let (out, _) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+        let e: Value = serde_json::from_slice(&out).unwrap();
+
+        assert_eq!(e["sensor"], json!("galah"));
+        assert!(e.get("response_outcome").is_none(), "only the failure is marked");
+    }
+
+    #[test]
+    fn galah_lines_that_are_not_requests_stay_untouched() {
+        for msg in ["Starting galah", "Cache hit for request", "loaded config"] {
+            let line = json!({"level": "info", "msg": msg, "srcIP": "203.0.113.9"}).to_string();
+            let (out, resolved) = enrich_galah_line(line.as_bytes(), &ViaMap::new(), &ViaMap::new(), "galah");
+            assert!(resolved);
+            assert_eq!(out, line.as_bytes(), "{msg}: byte-identical, no sensor");
+        }
+    }
+
     #[test]
     fn a_real_attacker_is_still_never_marked_by_the_per_sensor_enrichers() {
         // The other half. Flagging too eagerly would delete real traffic
@@ -1631,10 +2021,10 @@ mod tests {
             54674,
             vec![
                 super::super::viamap::ViaEntry {
-                    ip: "153.117.32.130".into(), at: 0, target_port: 23,
+                    ip: "153.117.32.130".into(), target_port: 23, ..Default::default()
                 },
                 super::super::viamap::ViaEntry {
-                    ip: "151.243.11.8".into(), at: 0, target_port: 1433,
+                    ip: "151.243.11.8".into(), target_port: 1433, ..Default::default()
                 },
             ],
         );
@@ -1658,5 +2048,147 @@ mod tests {
             json!("151.243.11.8"),
             "the mssql dial, not the telnet client that reused the port",
         );
+    }
+
+    // ---- #3573: anchored, ambiguity-aware tunnel attribution ----
+
+    fn pb(vm: &mut ViaMap, ip: &str, via_port: i64, time: &str, target: &str, proto: &str) {
+        super::super::viamap::parse_portbridge_line(
+            serde_json::to_vec(&json!({
+                "sensor": "portbridge", "event": "connect", "proto": proto,
+                "src_ip": ip, "via_port": via_port, "target": target, "time": time,
+            }))
+            .unwrap()
+            .as_slice(),
+            vm,
+        );
+    }
+
+    fn cowrie(session: &str, port: i64, timestamp: &str, eventid: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "session": session, "protocol": "telnet", "src_ip": TUNNEL_PEER_IP, "src_port": port,
+            "dst_port": 2223, "eventid": eventid, "sensor": "cowrie", "timestamp": timestamp,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tunnel_line_is_attributed_and_keeps_the_peer_it_saw() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.40", 48132, "2026-10-09T23:31:44Z", "10.8.0.2:19023", "tcp");
+        read_past(&mut vm, "2026-10-09T23:31:59Z");
+        let (out, resolved) =
+            enrich_line(&cowrie("3573a0000001", 48132, "2026-10-09T23:31:45.105167Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.40"));
+        assert_eq!(field(&out, "fleet_peer").as_deref(), Some(TUNNEL_PEER_IP));
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("portbridge"));
+    }
+
+    #[test]
+    fn a_late_line_of_a_session_joins_on_when_the_session_opened() {
+        // Ten minutes into the session the port is dialled again for an
+        // unrelated connection. Joined on its own timestamp, the closing line
+        // would pick that dial; anchored on the connect it cannot.
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.41", 48133, "2026-10-09T23:00:00Z", "10.8.0.2:19023", "tcp");
+        pb(&mut vm, "198.51.100.41", 48133, "2026-10-09T23:09:59Z", "10.8.0.2:445", "tcp");
+        read_past(&mut vm, "2026-10-09T23:20:00Z");
+
+        let (_, resolved) =
+            enrich_line(&cowrie("3573a0000002", 48133, "2026-10-09T23:00:01Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
+        assert!(resolved);
+        let (out, resolved) =
+            enrich_line(&cowrie("3573a0000002", 48133, "2026-10-09T23:10:00Z", "cowrie.session.closed"), &vm, &ViaMap::new(), "cowrie");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.41"), "not the 23:09:59 dial");
+    }
+
+    #[test]
+    fn two_clients_on_the_port_leave_the_line_unattributed_and_say_so() {
+        let mut vm = ViaMap::new();
+        // Both telnet: the first connection closed within the second and the
+        // port went straight to the next client. Nothing orders them.
+        pb(&mut vm, "203.0.113.42", 48134, "2026-10-09T23:00:00Z", "10.8.0.2:19023", "tcp");
+        pb(&mut vm, "198.51.100.42", 48134, "2026-10-09T23:00:01Z", "10.8.0.2:19023", "tcp");
+        read_past(&mut vm, "2026-10-09T23:00:30Z");
+        let (out, resolved) =
+            enrich_line(&cowrie("3573a0000003", 48134, "2026-10-09T23:00:01.5Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
+        assert!(resolved, "ambiguity is final -- more of the log can only add rivals");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some(TUNNEL_PEER_IP));
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("ambiguous"));
+        assert!(field(&out, "fleet_peer").is_none());
+    }
+
+    #[test]
+    fn a_rival_on_another_service_is_ruled_out_by_cowries_own_port() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.46", 48137, "2026-10-09T23:00:00Z", "10.8.0.2:19023", "tcp");
+        pb(&mut vm, "198.51.100.46", 48137, "2026-10-09T23:00:01Z", "10.8.0.2:445", "tcp");
+        read_past(&mut vm, "2026-10-09T23:00:30Z");
+        let (out, _) =
+            enrich_line(&cowrie("3573a0000006", 48137, "2026-10-09T23:00:01.5Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.46"), "telnet on 2223 was dialled as 19023");
+    }
+
+    #[test]
+    fn an_unmatched_line_waits_and_is_labelled_when_it_flushes() {
+        let (out, resolved) =
+            enrich_line(&cowrie("3573a0000004", 48135, "2026-10-09T23:00:00Z", "cowrie.session.connect"), &ViaMap::new(), &ViaMap::new(), "cowrie");
+        assert!(!resolved, "queued: the dial may not have been read yet");
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("unmatched"));
+    }
+
+    #[test]
+    fn an_answer_is_held_back_until_a_rival_could_no_longer_appear() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.43", 48136, "2026-10-09T23:00:00Z", "10.8.0.2:19023", "tcp");
+        let (out, resolved) =
+            enrich_line(&cowrie("3573a0000005", 48136, "2026-10-09T23:00:01Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
+        assert!(!resolved, "retried until the map has read past the window");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.43"), "but the flush still carries the answer");
+    }
+
+    #[test]
+    fn a_conpot_snmp_flood_resolves_through_its_udp_session() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.44", 38173, "2026-09-29T20:30:00Z", "10.8.0.2:19161", "udp");
+        read_past(&mut vm, "2026-09-29T21:10:00Z");
+        let line = serde_json::to_vec(&json!({
+            "src_ip": TUNNEL_PEER_IP, "src_port": 38173, "dst_port": 161, "data_type": "snmp",
+            "event_type": "SNMPv2 Bulk", "id": "3573-snmp-flood", "timestamp": "2026-09-29T21:02:34.307904",
+        }))
+        .unwrap();
+        let (out, resolved) = enrich_line(&line, &vm, &ViaMap::new(), "conpot");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.44"));
+    }
+
+    #[test]
+    fn galahs_go_time_string_is_a_usable_time() {
+        assert_eq!(
+            parse_sensor_time("2026-09-29 08:51:15.402586836 +0200 CEST m=+485577.992530828"),
+            parse_sensor_time("2026-09-29T06:51:15Z"),
+        );
+    }
+
+    #[test]
+    fn beelzebub_joins_on_its_events_own_time() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.45", 56912, "2026-10-09T19:54:05Z", "10.8.0.2:389", "tcp");
+        read_past(&mut vm, "2026-10-09T19:55:00Z");
+        let line = |at: &str| {
+            serde_json::to_vec(&json!({"event": {
+                "Protocol": "TCP", "SourceIp": TUNNEL_PEER_IP, "SourcePort": "56912", "DateTime": at,
+            }}))
+            .unwrap()
+        };
+        let (out, resolved) = enrich_beelzebub_line(&line("2026-10-09T19:54:06Z"), &vm, &ViaMap::new(), "beelzebub");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.45"));
+
+        let (out, resolved) = enrich_beelzebub_line(&line("2026-10-09T21:54:06Z"), &vm, &ViaMap::new(), "beelzebub");
+        assert!(!resolved, "two hours later the dial cannot be this connection's");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some(TUNNEL_PEER_IP));
     }
 }

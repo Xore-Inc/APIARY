@@ -50,6 +50,26 @@ class RetiredProjectsTest(unittest.TestCase):
         self._mk("genuinely-retired")
         self.assertEqual(cdw.retired_projects(self.root, {"honeypot-elk"}), ["genuinely-retired"])
 
+    def test_empty_unknown_stack_dir_is_skipped_not_a_crash(self) -> None:
+        # #3651: /var/dockge/stacks/honeypot-stack/ exists but is empty on
+        # the homeserver. stat() raises FileNotFoundError there; that must
+        # read as "no compose file", not abort the whole sweep.
+        (self.root / "honeypot-stack").mkdir()
+        self.assertEqual(cdw.retired_projects(self.root, {"honeypot-elk"}), [])
+
+    def test_unreadable_unknown_stack_dir_is_still_skipped(self) -> None:
+        # #3440: EACCES must keep propagating from is_regular_file() as
+        # PermissionError, and retired_projects() must keep treating it as
+        # "couldn't check", never as "retired".
+        locked = self.root / "locked-stack"
+        locked.mkdir()
+        (locked / "compose.yml").write_text("services: {}\n")
+        locked.chmod(0o000)
+        self.addCleanup(locked.chmod, 0o755)
+        with self.assertRaises(PermissionError):
+            cdw.is_regular_file(locked / "compose.yml")
+        self.assertEqual(cdw.retired_projects(self.root, {"honeypot-elk"}), [])
+
 
 if __name__ == "__main__":
     unittest.main()

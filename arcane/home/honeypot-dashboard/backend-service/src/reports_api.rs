@@ -332,6 +332,46 @@ pub async fn generate_payload_report(
     Ok((StatusCode::CREATED, Json(json!({"id": meta.id, "generated": meta}))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/reports/preview",
+    summary = "What a report definition would contain, without rendering it.",
+    description = "Takes the body `POST /api/v1/reports/definitions` takes (id and schedule are ignored; nothing is stored) and answers with the period, headline totals, and for every selected element its row count, pages, two column headings and the first five rows, plus the total page count of the PDF the same definition would generate. The data comes from the renderer's own query and the page counts from its own layout pass, so the preview and the PDF agree. Every scope field (`window`, `ip`, `network`, `sensor`, `port`, `signature`, `country`, `asn`, `type`, `session`, `text`) is applied exactly as in generation; each is single-valued, so a list-valued picker cannot be expressed and must be reduced to one value (or the report split) by the caller. When no events match, `empty_filter` names the first scope field that leaves nothing. Only the telemetry templates (executive, security, threat, incident, ...) can be previewed; the sandbox, payload and ghidra templates render one artifact and answer 422.",
+    request_body(content = inline(serde_json::Value), description = "Deserialized by the handler into `ReportDefinition`. The shape is left open here on purpose -- see the module doc."),
+    responses(
+        (status = 200, description = "The preview: `{period: {from, to}, events, sources, sensors, sessions, sections: [{id, label, rows, pages, columns: [string, string], sample: [[string, string]]}], pages, empty_filter?: {field, message}}`.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
+        (status = 415, description = "The `Content-Type` is not `application/json`; the extractor refused the body before the handler ran.", body = String, content_type = "text/plain"),
+        (status = 422, description = "Well-formed but unprocessable. Two causes, both text/plain: the Json<T> extractor refused the body before the handler ran, or the route's own domain check rejected the definition (invalid fields, or an artifact template that has no telemetry to preview).", body = String, content_type = "text/plain"),
+        (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
+    ),
+    security(("serviceToken" = [])),
+)]
+pub async fn preview(
+    State(state): State<AppState>,
+    Json(mut def): Json<ReportDefinition>,
+) -> Result<Json<crate::reports_data::ReportPreview>, (StatusCode, String)> {
+    // A draft has no identity or schedule yet; only the content is checked.
+    def.id = String::new();
+    def.schedule = None;
+    reports_store::validate_definition_fields(&def).map_err(|message| (StatusCode::UNPROCESSABLE_ENTITY, message))?;
+    let template = report_template_catalog()
+        .into_iter()
+        .find(|t| t.id == def.template)
+        .ok_or_else(|| (StatusCode::UNPROCESSABLE_ENTITY, "unknown report template".to_string()))?;
+    if template.kind != ReportTemplateKind::Generic {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "preview is only available for the telemetry templates; this template renders a single artifact".to_string(),
+        ));
+    }
+    let title = report_title(&def, template.title);
+    let preview = crate::reports_data::preview_for(&state, &def, title)
+        .await
+        .map_err(bad_gateway)?;
+    Ok(Json(preview))
+}
+
 fn map_render_error(message: String) -> (StatusCode, String) {
     if message.contains("not yet implemented") {
         (StatusCode::NOT_IMPLEMENTED, message)
@@ -359,6 +399,17 @@ async fn sandbox_runs_for_hash(state: &AppState, hash: &str) -> anyhow::Result<V
     Ok(result["hits"]["hits"].as_array().into_iter().flatten().map(|hit| hit["_source"].clone()).collect())
 }
 
+/// The title a definition's report carries: its branding title, else the
+/// template's. Shared by the renderer and the preview.
+fn report_title(def: &ReportDefinition, template_title: &str) -> String {
+    let trimmed = def.branding.title.trim();
+    if trimmed.is_empty() {
+        template_title.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// renderDefinitionToStored + renderDefinitionPDFBytes, shared by the
 /// manual generate endpoint and the scheduler (worker.rs). The sandbox/
 /// payload/ghidra branches each resolve their scope reference to one
@@ -374,14 +425,7 @@ pub async fn render_definition_to_stored(
         .find(|t| t.id == def.template)
         .ok_or_else(|| "unknown report template".to_string())?;
 
-    let title = {
-        let trimmed = def.branding.title.trim();
-        if trimmed.is_empty() {
-            template.title.to_string()
-        } else {
-            trimmed.to_string()
-        }
-    };
+    let title = report_title(def, template.title);
     let theme = crate::report_pdf::pdf_theme_named(&def.theme);
     let branding = def.branding.to_pdf_branding();
     let generated = chrono::Utc::now();

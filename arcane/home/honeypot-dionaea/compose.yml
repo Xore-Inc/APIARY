@@ -154,13 +154,18 @@ services:
     # #1386: the TCP check alone stayed green while live RSS sat at 97% of
     # the 1024M limit below with 84k+ cgroup memory.max hits already
     # recorded (confirmed live) -- a listening socket says nothing about
-    # memory headroom. Reads cgroup v2's own memory.current/memory.max
-    # (same files the #1386 investigation itself read live) and fails
-    # health at 90% of the limit, so the autoheal=true label below actually
-    # gets a signal to restart before an OOM kill instead of only after
-    # one. Falls through silently if those files aren't present (e.g. a
-    # cgroup v1 host) -- this is additive, not a replacement for the TCP
-    # check above.
+    # memory headroom. Fails health at 90% of memory.max so the
+    # autoheal=true label below actually gets a signal to restart before an
+    # OOM kill instead of only after one. Falls through silently if those
+    # files aren't present (e.g. a cgroup v1 host) -- this is additive, not
+    # a replacement for the TCP check above.
+    #
+    # Gates on `anon` from memory.stat, not memory.current: memory.current
+    # includes reclaimable page cache, and dionaea's own log files
+    # (dionaea_incident.json, dionaea.json, dionaea-errors.log) fill that
+    # cache. Live 2026-10-10: memory.current 99.5% of max, anon 32%, the
+    # process itself not under pressure -- so the old gate reported
+    # unhealthy while capture was normal (#3585).
     healthcheck:
       test:
         - CMD
@@ -170,11 +175,16 @@ services:
           import socket
           socket.create_connection(('127.0.0.1', 445), 3).close()
           import os, sys
-          cur_path = '/sys/fs/cgroup/memory.current'
+          stat_path = '/sys/fs/cgroup/memory.stat'
           max_path = '/sys/fs/cgroup/memory.max'
-          if os.path.exists(cur_path) and os.path.exists(max_path):
+          if os.path.exists(stat_path) and os.path.exists(max_path):
               limit = open(max_path).read().strip()
-              if limit != 'max' and int(open(cur_path).read()) >= int(limit) * 0.9:
+              anon = 0
+              for line in open(stat_path):
+                  key, _, value = line.partition(' ')
+                  if key == 'anon':
+                      anon = int(value)
+              if limit != 'max' and anon >= int(limit) * 0.9:
                   sys.exit(1)
       interval: 30s
       timeout: 5s

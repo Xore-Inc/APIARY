@@ -53,9 +53,7 @@ Last audited: 2026-08-05
   2026-08-05). The exceptions are deliberate and catalogued in
   [`docs/README.md`](README.md) — per-stack and vendored `README.md` files stay
   next to their code, and a few dated record trees are exempt from the
-  reachability gate (#3332). Root-level dated task records (`DIFF.md`,
-  `EVIDENCE.md`, `HANDOFF-3097.md`) are the residue of that sweep and are not
-  covered by it.
+  reachability gate (#3332).
 - The dashboard rewrite is done, not pending: the TanStack Start
   frontend/BFF + Rust service tier
   ([#1608](https://github.com/Xore/APIARY/issues/1608) and its

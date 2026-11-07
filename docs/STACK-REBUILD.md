@@ -10,6 +10,13 @@ archive onto a *replacement* host — this is for the *same* hosts, on purpose,
 usually after a schema/volume-layout change or when historical data is no
 longer worth keeping.
 
+**If `/var` itself was lost** (the filesystem under `/var/dockge/stacks`,
+Docker data and Arcane state is gone, not deliberately wiped), this is the
+wrong page: start at
+[`HOMESERVER-VAR-RECOVERY.md`](HOMESERVER-VAR-RECOVERY.md). It restores from
+the essentials archive first and uses Arcane, not the `docker compose` loops
+below. The traps below still apply to it.
+
 [`../factory-reset.sh`](../factory-reset.sh) (see [`RECOVERY.md`](RECOVERY.md))
 automates the homeserver-side steps below (stop, back up via
 `analysis/backup-honeypot.sh`, optionally wipe, restart) as one command. This
@@ -165,6 +172,24 @@ docker volume create yara-results
 docker network ls | grep honeynet   # recreate with `docker network create honeynet` if not
 ```
 
+`honeypot-llm` (an `--internal` network) and `xore-zeek:local` must also exist
+before honeypot-elk and honeypot-init come up on a host with no Docker state:
+the elk compose runs `zeek-proxy` with `pull_policy: never` on a locally
+built tag, and nothing in a project deploy builds it. Both are what
+`scripts/install-homeserver.sh` does in `step_create_shared_resources` and
+`step_build_zeek_image`:
+
+```bash
+docker network create honeypot-llm --internal
+docker build -f vps/zeek/Containerfile -t xore-zeek:local vps/zeek   # from the apiary checkout
+```
+
+On a cold host `state/init-markers` must also be mode 0777 before
+honeypot-init runs (`install -d -m 777 state/init-markers`), and
+`state/honeyfs/cowrie` and `state/honeyfs/cowrie-share` must exist owned by
+2000:2000. Without the first, every one-shot does its work and then exits 1
+on `touch /markers/<job>.done: Permission denied`.
+
 Then:
 
 ```bash
@@ -175,9 +200,75 @@ cd /opt/stacks/honeypot-init && docker compose -f compose.yml up -d
 # persona-apply / snare-clone should all Exit(0) within ~30s
 ```
 
+When these two stacks are deployed **through Arcane** rather than by hand,
+the deploy stream reports failures that are not failures on a cold start:
+the honeypot-elk redeploy ends with `container hp-pcap-sync is unhealthy`
+(pcap-sync waits for the `log-init.done` marker that honeypot-init has not
+written yet), and the honeypot-init redeploy ends with
+`container hp-log-init exited (0)` (the known one-shot behaviour, #2714;
+`scripts/arcane-deploy-honeypot-init.sh` exists for it). Judge by `docker ps
+-a` and the markers, not by the final frame.
+
+### 3b. Swarm overlays before Ollama and Galah
+
+Since #3591, the Galah-to-Ollama broker runs as the Swarm stack
+[`swarm/stacks/galah-broker`](../swarm/stacks/galah-broker/README.md), not in
+Compose. Two Compose services join its encrypted overlays as
+`external: true` networks:
+
+- `ollama` in `analysis/ghidra/docker-compose.ghidra.yml` joins `galah-broker_back`.
+- `galah` in `arcane/home/honeypot-galah/compose.yml` joins `galah-broker_front`.
+
+Compose will not create a container whose external network is missing. So
+neither Ollama (the Ghidra/Ollama stack) nor `honeypot-galah` can start
+until the following hold:
+
+1. The homeserver is still a Swarm manager with availability `active`. A
+   full reset does not leave the Swarm (`docker swarm leave` is never part of
+   this runbook). A `pause` or `drain` node cannot attach Compose containers
+   to an overlay at all (#3722):
+   ```bash
+   docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}'   # active true
+   docker node inspect self --format '{{.Spec.Availability}}'                     # active
+   ```
+2. The `galah-broker` stack is deployed through its Arcane GitOps sync and both
+   overlays exist:
+   ```bash
+   docker network ls --filter name=galah-broker_ --format '{{.Name}} {{.Driver}} {{.Scope}}'
+   # galah-broker_back overlay swarm
+   # galah-broker_front overlay swarm
+   ```
+
+Start the Ghidra/Ollama stack only after that, and `honeypot-galah` after
+Ollama (in step 4). If Compose reports `attaching to network failed` on the
+homeserver, check its availability first (`docker node update --availability
+active supermicro` from any manager); see the broker README.
+
+If the Swarm cannot be brought back, use the broker README's **Rollback**
+section. Starting the old Compose broker with
+`docker compose --profile legacy up -d galah-llm-broker` handles a failed
+broker, but on its own it does not handle a missing overlay. The overlay
+attachments in both Compose files have to be reverted first.
+
 ### 4. Bring up everything else
 
-Order doesn't matter much from here — every remaining stack either has no
+This section is for a deliberate reset, where the host's `/var`,
+permissions and installer-provisioned state are intact. On a **fresh
+`/var`** more than ordering matters: the installer steps listed in
+[`HOMESERVER-VAR-RECOVERY.md`](HOMESERVER-VAR-RECOVERY.md) part 8 are needed
+(enrichment output directories, GeoIP and threat-intel profiles, backend
+ACLs, `/var/image-sbom`, `GIT_SHA` in the backend and dashboard `.env`
+files). Compose profiles (`geoip-update`, `threat-intel`) are not started by
+Arcane's redeploy. And the backend/dashboard order is fixed: sync
+`honeypot-dashboard`, then build+redeploy `honeypot-dashboard-backend`, then
+build+redeploy `honeypot-dashboard`.
+
+Arcane syncs on the live host track `main` while
+`arcane/manifests/home-production.json` says `production`; see
+[`ARCANE-GIT-SYNC.md`](ARCANE-GIT-SYNC.md). Do not change this during a
+rebuild.
+
+For a reset on a healthy host, order doesn't matter much from here — every remaining stack either has no
 cross-stack dependency at deploy time (the standalone honeypots, dionaea,
 tanner) or tolerates being started before what it reads from (payload-analysis,
 dashboard: their shared volumes are non-`external`, so whichever project

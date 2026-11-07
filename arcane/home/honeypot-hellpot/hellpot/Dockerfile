@@ -33,7 +33,7 @@
 # adjudicates -- portbridge's record on the raw path, the forwarded chain
 # on the proxied one. It must run after router_patch.py, whose output it
 # matches on.
-FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 RUN apk add --no-cache python3 git
 ARG HELLPOT_REF=0ba62c99ea4599ec32474e4982a8ea4d4105c471
 WORKDIR /build
@@ -53,7 +53,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
 # HEALTHCHECK pattern (beelzebub/Dockerfile, rdp-honeypot's Dockerfile,
 # etc.) -- consistency with the rest of this stack wins over matching
 # upstream's own base image exactly.
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache busybox-extras
 COPY --from=build /hellpot /usr/local/bin/hellpot
 COPY config.toml /config.toml

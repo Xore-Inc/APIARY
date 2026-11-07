@@ -35,7 +35,7 @@ use pending::{EnrichFn, PendingQueue};
 use rotate::OutputWriter;
 use sensors::{
     enrich_beelzebub_line, enrich_dionaea_incident_line, enrich_galah_line, enrich_hellpot_line, enrich_line,
-    enrich_sentrypeer_line, TUNNEL_PEER_IP,
+    enrich_sentrypeer_line,
 };
 use viamap::{ViaMap, ViaMapBuilder};
 
@@ -81,6 +81,26 @@ struct SourceStats {
     /// #2181: lines whose enricher panicked — skipped rather than allowed
     /// to kill run_source's task and strand the tail offset.
     poisoned: AtomicI64,
+    /// #3573: final join outcomes of the lines written, read off the
+    /// `tunnel_attribution` each enricher stamps. Unlike the counters above
+    /// these do not depend on which field a sensor puts its peer in.
+    attributed: AtomicI64,
+    ambiguous: AtomicI64,
+    unmatched: AtomicI64,
+}
+
+/// #3573: counts what the written lines say about their tunnel join.
+fn count_outcomes(stats: &SourceStats, written: &[Vec<u8>]) {
+    for out in written {
+        let text = String::from_utf8_lossy(out);
+        if text.contains("\"tunnel_attribution\":\"portbridge\"") {
+            stats.attributed.fetch_add(1, Ordering::Relaxed);
+        } else if text.contains("\"tunnel_attribution\":\"ambiguous\"") {
+            stats.ambiguous.fetch_add(1, Ordering::Relaxed);
+        } else if text.contains("\"tunnel_attribution\":\"unmatched\"") {
+            stats.unmatched.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 struct Source {
@@ -237,8 +257,8 @@ fn process_source_tick(
     // reported no join statistics at all while it was in fact resolving
     // every line. A metric that stays silent looks exactly like a metric
     // with nothing to report.
-    let tunnel_peer_marker = format!("\"src_ip\":\"{TUNNEL_PEER_IP}\"");
-    let tunnel_peer_addr_marker = format!("\"REMOTE_ADDR\":\"{TUNNEL_PEER_IP}:");
+    let tunnel_peer_marker = format!("\"src_ip\":\"{}\"", crate::fleet::tunnel_peer_ip());
+    let tunnel_peer_addr_marker = format!("\"REMOTE_ADDR\":\"{}:", crate::fleet::tunnel_peer_ip());
     let mut ready = Vec::new();
     // Byte position of the line being processed, for poison attribution:
     // lines were read from `offset`, so numbering within the batch pins the
@@ -293,6 +313,7 @@ fn process_source_tick(
         }
     }
     ready.extend(drained);
+    count_outcomes(&source.stats, &ready);
 
     if !writer.write_lines(&ready) {
         return offset; // don't advance/persist the offset over a batch that failed to write
@@ -317,7 +338,10 @@ async fn log_stats(sources: &[Arc<SourceStats>], names: &[String], interval: Dur
             let retry = stats.resolved_retry.swap(0, Ordering::Relaxed);
             let timed_out = stats.timed_out.swap(0, Ordering::Relaxed);
             let poisoned = stats.poisoned.swap(0, Ordering::Relaxed);
-            if attempted == 0 && first == 0 && poisoned == 0 {
+            let attributed = stats.attributed.swap(0, Ordering::Relaxed);
+            let ambiguous = stats.ambiguous.swap(0, Ordering::Relaxed);
+            let unmatched = stats.unmatched.swap(0, Ordering::Relaxed);
+            if attempted == 0 && first == 0 && poisoned == 0 && attributed + ambiguous + unmatched == 0 {
                 continue; // nothing seen for this source this interval
             }
             tracing::info!(
@@ -327,6 +351,10 @@ async fn log_stats(sources: &[Arc<SourceStats>], names: &[String], interval: Dur
                 resolved_retry = retry,
                 timed_out,
                 poisoned,
+                attributed,
+                ambiguous,
+                unmatched,
+                portbridge_readable = viamap::portbridge_readable(),
                 "ip-enrichment: tunnel-peer join stats"
             );
         }

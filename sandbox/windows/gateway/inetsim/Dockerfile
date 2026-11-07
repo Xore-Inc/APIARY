@@ -8,7 +8,7 @@
 # Build on a host WITH internet. The container runs with none: it is attached
 # to an internal macvlan on the isolated sandbox bridge, which has no route off
 # the box. See docker-compose.sandbox.yml.
-FROM kalilinux/kali-rolling:latest@sha256:3093a0bd1f1196f4b10ab8e4a671929a6cd0153768642e6aa20dfced5e4132c5
+FROM kalilinux/kali-rolling:latest@sha256:4be87f78671419c13dcf4f207ead1cfc0de178ea281b3f69c0f49b69ba4e79b1
 
 # procps for the entrypoint's process check; ca-certificates so the build step
 # itself can talk to the Kali mirror over TLS.

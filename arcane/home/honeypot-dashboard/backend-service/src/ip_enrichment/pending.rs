@@ -70,7 +70,6 @@ impl PendingQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use super::super::sensors::enrich_line;
 
     fn never_resolves(line: &[u8], _vm: &ViaMap, _tftp_vm: &ViaMap, _persona: &str) -> (Vec<u8>, bool) {
@@ -80,7 +79,7 @@ mod tests {
     #[test]
     fn unresolved_line_stays_queued_until_its_deadline() {
         let mut q = PendingQueue::default();
-        let vm = HashMap::new();
+        let vm = ViaMap::new();
         let now = Instant::now();
         q.add(b"line".to_vec(), Duration::from_secs(5), now);
         let ready = q.drain(&vm, &vm, now, "cowrie", never_resolves);
@@ -105,7 +104,7 @@ mod tests {
     #[test]
     fn a_panicking_retry_is_dropped_rather_than_requeued_forever() {
         let mut q = PendingQueue::default();
-        let vm = HashMap::new();
+        let vm = ViaMap::new();
         let now = Instant::now();
         q.add(b"{\"bad\":\"POISON\"}".to_vec(), Duration::from_secs(5), now);
         q.add(b"{\"ok\":1}".to_vec(), Duration::from_secs(5), now);
@@ -157,7 +156,7 @@ mod tests {
         assert!(ready.is_empty(), "not ready before resolution or timeout");
 
         let mut vm = ViaMap::new();
-        vm.insert(1, vec![super::super::viamap::ViaEntry { ip: "203.0.113.9".into(), at: 0, target_port: 0 }]);
+        vm.insert(1, vec![super::super::viamap::ViaEntry { ip: "203.0.113.9".into(), ..Default::default() }]);
         let ready = q.drain(&vm, &ViaMap::new(), now + Duration::from_secs(2), "", enrich_line);
 
         assert_eq!(ready.len(), 1, "the line resolves and flushes");
@@ -181,7 +180,7 @@ mod tests {
         assert_eq!(ready.len(), 1, "flushes unenriched at its deadline");
 
         let mut vm = ViaMap::new();
-        vm.insert(1, vec![super::super::viamap::ViaEntry { ip: "203.0.113.9".into(), at: 0, target_port: 0 }]);
+        vm.insert(1, vec![super::super::viamap::ViaEntry { ip: "203.0.113.9".into(), ..Default::default() }]);
         let again = q.drain(&vm, &ViaMap::new(), now + Duration::from_secs(7), "", enrich_line);
         assert!(again.is_empty(), "an already-flushed line must not reappear");
     }

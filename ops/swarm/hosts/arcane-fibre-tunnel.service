@@ -1,0 +1,13 @@
+[Unit]
+Description=Arcane manager tunnel over the manager hub route
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -F /dev/null -i /var/lib/github-runners/precision-services/arcane/ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/var/lib/github-runners/precision-services/arcane/ssh/known_hosts -o ConnectTimeout=5 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -T -L 127.0.0.1:13552:10.8.0.2:3552 xore@10.8.0.2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

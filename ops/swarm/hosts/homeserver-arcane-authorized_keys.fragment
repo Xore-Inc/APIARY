@@ -1,0 +1,5 @@
+# Line in ~xore/.ssh/authorized_keys on homeserver for the precision Arcane
+# agent tunnel (arcane-fibre-tunnel.service). from= admits the raw fibre address
+# (phase 0) and precision's hub address (phase 1, the tunnel now targets
+# 10.8.0.2). The key can only forward to the Arcane manager; it runs nothing.
+from="10.254.250.2,10.8.0.3",restrict,port-forwarding,permitopen="10.8.0.2:3552",command="/bin/false" ssh-ed25519 REPLACE_WITH_PRECISION_ARCANE_TUNNEL_PUBLIC_KEY arcane-precision-fibre

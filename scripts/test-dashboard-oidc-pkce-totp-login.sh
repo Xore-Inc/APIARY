@@ -113,7 +113,8 @@ cleanup() {
   fi
   [ -n "${bff_pid}" ] && kill "${bff_pid}" >/dev/null 2>&1 || true
   # -v matters: postgres:18.4-bookworm declares an anonymous VOLUME for
-  # /var/lib/postgresql and redis:7-alpine one for /data. Without -v,
+  # /var/lib/postgresql (redis:7-alpine also declared one for /data;
+  # the redis 8 image pinned below no longer does). Without -v,
   # `docker rm -f` deletes the container but leaves that volume behind,
   # dangling and unnamed, on every run.
   #
@@ -165,7 +166,7 @@ docker run -d --name "${kc}" --network "${network}" -p "127.0.0.1:${kc_port}:808
   -e "KC_HOSTNAME=http://127.0.0.1:${kc_port}" -e KC_HTTP_ENABLED=true -e KC_HEALTH_ENABLED=true \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=test-admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=test-only-not-real \
   -v "${rendered_realm}:/opt/keycloak/data/import/apiary-realm.json:ro" \
-  quay.io/keycloak/keycloak:26.7.1@sha256:f1f1f01e472c8a78df40d8f2a49a925274eda4d3d80d5f6edbb5c880ee3c01c6 \
+  quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b \
   start --http-port=8080 --import-realm >/dev/null
 
 printf 'Waiting for the disposable Keycloak + realm import (up to 240s)...\n'
@@ -183,7 +184,7 @@ done
 # Redis BEFORE the BFF starts -- same ordering rule the Go suite recorded:
 # startup-time pending-state/session writes must not race container boot.
 docker run -d --name "${redis}" --network "${network}" -p "127.0.0.1:${redis_port}:6379" \
-  redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499 >/dev/null
+  redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0 >/dev/null
 for _ in $(seq 1 30); do docker exec "${redis}" redis-cli ping >/dev/null 2>&1 && break; sleep 1; done
 
 kcadm() { docker exec "${kc}" /opt/keycloak/bin/kcadm.sh "$@"; }

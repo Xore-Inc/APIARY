@@ -68,13 +68,16 @@ fn sensor_raw(source: &serde_json::Value) -> serde_json::Value {
 /// shape campaign_correlator.rs/criticality_rules.rs consume. Real ES
 /// `_id`s are used directly as event_id so a dashboard page can link
 /// straight back to raw evidence.
+/// Each event is paired with the concrete `_index` it was read from (#3519),
+/// which build_campaign_verdict stores as `source_index` so a consumer can
+/// build an exact `_id` + `_index` lookup.
 async fn fetch_window_events(
     state: &AppState,
     index_pattern: &str,
     since: &str,
     page_size: u64,
     max_events: u64,
-) -> Vec<CorrelatorEvent> {
+) -> Vec<(CorrelatorEvent, String)> {
     // max_pages bounds total fetched at page_size*max_pages >= max_events,
     // with headroom since a page may partially exceed the cap (checked
     // per-hit below, matching the Python worker's own early-break).
@@ -137,7 +140,7 @@ async fn fetch_window_events(
             break;
         }
     }
-    events.into_iter().map(|(e, _source_index)| e).collect()
+    events
 }
 
 /// campaign_correlator.rs's parse_ts expects a bare "%Y-%m-%dT%H:%M:%SZ";
@@ -172,6 +175,7 @@ fn sha256_hex(data: &[u8]) -> String {
 fn build_campaign_verdict(
     campaign: &Campaign,
     events_by_id: &HashMap<String, CorrelatorEvent>,
+    source_index_by_id: &HashMap<String, String>,
 ) -> Option<serde_json::Value> {
     let raw_by_id: HashMap<String, serde_json::Value> = events_by_id
         .iter()
@@ -219,6 +223,9 @@ fn build_campaign_verdict(
             let matches = &matches_per_event[eid];
             serde_json::json!({
                 "event_id": eid,
+                // #3519: the concrete index the event was read from; empty
+                // when unknown (never invented).
+                "source_index": source_index_by_id.get(eid).map(String::as_str).unwrap_or_default(),
                 "timestamp": event.timestamp,
                 "matched_rules": matches.iter().map(|m| serde_json::json!({
                     "rule": m.rule,
@@ -272,9 +279,9 @@ async fn run_cycle(state: &AppState, fetch_window: Duration, max_events_per_sour
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
-    let mut events = Vec::new();
+    let mut fetched: Vec<(CorrelatorEvent, String)> = Vec::new();
     for index_pattern in SOURCE_INDICES {
-        events.extend(
+        fetched.extend(
             fetch_window_events(
                 state,
                 index_pattern,
@@ -285,9 +292,14 @@ async fn run_cycle(state: &AppState, fetch_window: Duration, max_events_per_sour
             .await,
         );
     }
-    if events.is_empty() {
+    if fetched.is_empty() {
         return 0;
     }
+    let source_index_by_id: HashMap<String, String> = fetched
+        .iter()
+        .map(|(event, index)| (event.event_id.clone(), index.clone()))
+        .collect();
+    let events: Vec<CorrelatorEvent> = fetched.into_iter().map(|(event, _)| event).collect();
 
     // Normalize/sort/correlate/score is CPU-bound, synchronous work with no
     // .await points in it anywhere — run it on tokio's dedicated blocking-
@@ -325,7 +337,7 @@ async fn run_cycle(state: &AppState, fetch_window: Duration, max_events_per_sour
 
         campaigns
             .iter()
-            .filter_map(|campaign| build_campaign_verdict(campaign, &events_by_id))
+            .filter_map(|campaign| build_campaign_verdict(campaign, &events_by_id, &source_index_by_id))
             .collect::<Vec<_>>()
     })
     .await
@@ -413,7 +425,7 @@ mod tests {
         let events_by_id: HashMap<String, CorrelatorEvent> = events.into_iter().map(|e| (e.event_id.clone(), e)).collect();
         let critical: Vec<serde_json::Value> = campaigns
             .iter()
-            .filter_map(|c| build_campaign_verdict(c, &events_by_id))
+            .filter_map(|c| build_campaign_verdict(c, &events_by_id, &HashMap::new()))
             .filter(|v| v["severity"] == "critical")
             .collect();
         assert_eq!(critical.len(), 1);
@@ -428,7 +440,7 @@ mod tests {
         assert!(!benign.is_empty(), "corpus fixture should contain at least one benign event");
         let campaigns = campaign_correlator::correlate_campaigns(&benign, chrono::Duration::hours(72));
         let events_by_id: HashMap<String, CorrelatorEvent> = benign.into_iter().map(|e| (e.event_id.clone(), e)).collect();
-        let verdicts: Vec<serde_json::Value> = campaigns.iter().filter_map(|c| build_campaign_verdict(c, &events_by_id)).collect();
+        let verdicts: Vec<serde_json::Value> = campaigns.iter().filter_map(|c| build_campaign_verdict(c, &events_by_id, &HashMap::new())).collect();
         assert!(verdicts.is_empty());
     }
 
@@ -501,7 +513,7 @@ mod tests {
             start: "2026-01-01T00:00:00Z".to_string(),
             end: "2026-01-01T00:00:00Z".to_string(),
         };
-        assert!(build_campaign_verdict(&campaign, &events_by_id).is_none());
+        assert!(build_campaign_verdict(&campaign, &events_by_id, &HashMap::new()).is_none());
     }
 
     #[test]
@@ -524,8 +536,39 @@ mod tests {
             end: "2026-01-01T00:01:00Z".to_string(),
         };
         let campaign_b = Campaign { event_ids: vec!["b".to_string(), "a".to_string()], ..campaign_a.clone() };
-        let verdict_a = build_campaign_verdict(&campaign_a, &make_events(["a", "b"])).expect("single-rule match should reach high severity");
-        let verdict_b = build_campaign_verdict(&campaign_b, &make_events(["b", "a"])).expect("same fixture, reversed event order");
+        let verdict_a = build_campaign_verdict(&campaign_a, &make_events(["a", "b"]), &HashMap::new()).expect("single-rule match should reach high severity");
+        let verdict_b = build_campaign_verdict(&campaign_b, &make_events(["b", "a"]), &HashMap::new()).expect("same fixture, reversed event order");
         assert_eq!(verdict_a["campaign_id"], verdict_b["campaign_id"]);
+    }
+
+    #[test]
+    fn build_campaign_verdict_carries_source_index_onto_each_event() {
+        let raw = serde_json::json!({"event": "container_create", "flags": ["--privileged", "-v", "/:/host"]});
+        let events_by_id: HashMap<String, CorrelatorEvent> = ["a", "b"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| (id.to_string(), hand_built_event(id, &format!("2026-01-01T00:0{i}:00Z"), raw.clone())))
+            .collect();
+        let campaign = Campaign {
+            event_ids: vec!["a".to_string(), "b".to_string()],
+            identifiers: ["session:s1".to_string()].into_iter().collect(),
+            start: "2026-01-01T00:00:00Z".to_string(),
+            end: "2026-01-01T00:01:00Z".to_string(),
+        };
+        // "b" is deliberately unknown: the key stays present but empty.
+        let source_index_by_id: HashMap<String, String> =
+            [("a".to_string(), "honeypot-v2-2026.01.01".to_string())].into_iter().collect();
+        let verdict = build_campaign_verdict(&campaign, &events_by_id, &source_index_by_id).expect("verdict");
+        let events = verdict["events"].as_array().unwrap();
+        assert_eq!(events[0]["event_id"], "a");
+        assert_eq!(events[0]["source_index"], "honeypot-v2-2026.01.01");
+        assert_eq!(events[1]["event_id"], "b");
+        assert_eq!(events[1]["source_index"], "");
+        // Existing keys are untouched (additive change).
+        assert_eq!(events[0]["timestamp"], "2026-01-01T00:00:00Z");
+        assert!(events[0]["matched_rules"].is_array());
+        // The stored document round-trips through JSON with the key intact.
+        let reparsed: serde_json::Value = serde_json::from_str(&verdict.to_string()).unwrap();
+        assert_eq!(reparsed["events"][0]["source_index"], "honeypot-v2-2026.01.01");
     }
 }

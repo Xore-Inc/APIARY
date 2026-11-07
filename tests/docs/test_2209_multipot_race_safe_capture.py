@@ -141,7 +141,8 @@ def test_go_race_detector_reports_no_race():
     go = shutil.which("go")
     if go is None:
         pytest.skip("Go toolchain not installed on this host")
-    env = dict(os.environ, GOFLAGS="-mod=mod")
+    # CI disables CGO for ordinary Go builds; the race detector requires it.
+    env = dict(os.environ, GOFLAGS="-mod=mod", CGO_ENABLED="1")
     try:
         proc = subprocess.run(
             [go, "test", "-race", "-count=1", "-run", f"^{FUNC_NAME}$", "."],

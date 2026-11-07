@@ -22,7 +22,8 @@
 # Running in place from ~/Github/APIARY fails with 203/EXEC. Anything under
 # /usr/local/libexec gets bin_t and just works.
 #
-# Re-run this script after a `git pull` to pick up a new version.
+# Re-run this script after a `git pull` to pick up a new version. The installed
+# copy notices when you forgot (sha256 stamp, #3709) and logs a WARNING.
 #
 # Run once, as root, on the backup host:
 #   sudo scripts/install-backup-essentials.sh
@@ -119,6 +120,13 @@ trap 'rm -f "$tmp_unit"' EXIT
 
 install -d -m 0755 -o root -g root /usr/local/libexec
 install -m 0755 -o root -g root "$script_dir/backup-essentials.sh" "$libexec"
+# Stamp the sha256 of what was copied (#3709). The installed copy compares it
+# with the checkout's current script on every run and in --check, and says so
+# loudly when they differ -- otherwise a `git pull` without a re-run leaves the
+# timer on old code with nothing noticing (the copy that missed the
+# es-operator-state export in #3708 was six weeks stale).
+sha256sum "$script_dir/backup-essentials.sh" | cut -d' ' -f1 \
+  | install -m 0644 -o root -g root /dev/stdin "$libexec.src-sha256"
 # Belt and braces: install(1) already gives it bin_t under /usr/local/libexec,
 # but a restorecon makes that explicit and repairs the label if the file was
 # copied in some other way first.

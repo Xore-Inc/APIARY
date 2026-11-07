@@ -94,7 +94,9 @@ def test_every_sbom_step_is_gated_on_the_matrix_opt_in():
 
 def test_only_pushing_events_generate_one():
     """A pull_request row builds with push=false and load=false: no image,
-    no digest, nothing to key an inventory to."""
+    no digest, nothing to key an inventory to. The SBOM contract is main-only
+    (decided in #3609), so the pull_request notice step is retired rather
+    than kept as a recurring annotation."""
     workflow = _load(CONTAINERS)
     generate = _step_running(workflow, "generate-image-sbom.sh")
     condition = str(generate.get("if", ""))
@@ -102,10 +104,9 @@ def test_only_pushing_events_generate_one():
         "SBOM generation must be limited to events that push the image (#3321); "
         f"got if: {condition!r}"
     )
-    # ...and the gap must be explained rather than left silent.
-    assert any(
+    assert not any(
         "no sbom" in str(s.get("name", "")).lower() for s in _steps(workflow)
-    ), "a pull_request row must carry a notice explaining why it has no SBOM (#3321)"
+    ), "the pull_request 'no SBOM' notice was retired by decision #3609; do not re-add it"
 
 
 # -------------------------------------------------------------- digest ----

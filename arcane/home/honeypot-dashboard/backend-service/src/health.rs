@@ -252,7 +252,10 @@ async fn filebeat_decode_failures(state: &AppState) -> u64 {
 
 async fn pipeline_health(state: &AppState) -> PipelineHealth {
     let decode_failures = filebeat_decode_failures(state).await;
-    let url = std::env::var("FILEBEAT_URL").unwrap_or_default();
+    // Unset or blank means Filebeat is not co-located with this backend
+    // (#3576): report "disabled" instead of probing a name that cannot
+    // resolve and calling the pipeline "unreachable".
+    let url = std::env::var("FILEBEAT_URL").unwrap_or_default().trim().to_string();
     if url.is_empty() {
         return PipelineHealth { state: "disabled".into(), acked: 0, failed: 0, dropped: 0, active: 0, decode_failures };
     }

@@ -37,6 +37,15 @@ below.
   is still there; the nightly's unseeded high-run search is the lane that is
   *meant* to move (#3326, [record](frontend-mutation-pilot.md)).
 
+### Ubuntu 26.04 trial (#3608)
+
+`ubuntu-latest` moves to Ubuntu 26.04 from 2026-10-19. `ubuntu-26-trial.yml`
+runs the image-dependent hosted legs (shellcheck, hadolint, bare `python3`,
+docker tooling, the Playwright `--with-deps` + `redis-server` browser suite) on
+`ubuntu-26.04`. Every job is `continue-on-error: true` and nothing gates on it;
+a red job is the evidence for pinning the matching `quality.yml` job to
+`ubuntu-24.04`. Delete the workflow once `ubuntu-latest` has settled.
+
 ### Advisory frontend testing pilot (#3326)
 
 `frontend-testing-pilot.yml` runs nightly (`41 4 * * *`) and on
@@ -478,6 +487,97 @@ purpose:**
 script, and the contract marks it `x-endless-stream: true`. Its body never
 ends, so probing it on a service with auth open would hang the run instead
 of reporting the leak.
+
+## Swarm images: GHCR by digest (#3597)
+
+Swarm ignores `build:`, and a worker node cannot pull a tag that only exists
+in the build host's local image store. Every image a swarm stack runs
+therefore comes from GHCR and is referenced by digest. This is phase 2 of
+epic #3587. Phase 3 (#3590) builds the stacks on top of it. Converting the
+existing compose projects to `image@digest` is not part of this phase; each
+stack does that in its own migration issue (#3591-#3596).
+
+### What publishes the images
+
+`containers.yml` has one matrix row per compose `build:` context. A row
+pushes `ghcr.io/<owner>/honeypot-<image>` with the tags `:sha-<short>`,
+`:<branch>`, `:<tag>` and, on `main`, `:latest`. Rows marked `scoped: true`
+are the contexts added by #3597. On a pull request a scoped row builds only
+when the `scope` job finds a changed path inside its context (or the
+workflow itself changed); on `main`, tags and `workflow_dispatch` every row
+builds and pushes. The older rows are not scoped and build every time.
+
+`scripts/check-swarm-images.py` is the CI job "GHCR image coverage and
+swarm stack pinning" in `quality.yml`. It fails when:
+
+- a compose `build:` context has no `containers.yml` row, or a row builds
+  something other than its compose block (Dockerfile, target, build args),
+  or a second path claimed as an identical copy (`also_contexts:`) drifted;
+- a file matching `swarm/stacks/*/stack.yml` (or `.yaml`) contains `build:`,
+  or an `image:` that is not pinned `@sha256:<64 hex>` (a bare tag, `:latest`
+  and a tag-plus-digest without the digest all fail). The lint is inert until
+  that directory exists.
+
+Run it locally with `python3 scripts/check-swarm-images.py all` (needs
+PyYAML).
+
+### The digest manifest
+
+After every non-pull-request run the `digest-manifest` job resolves each
+row's `:sha-<short>` tag in the registry and uploads one JSON file as the
+workflow artifact **`image-digests`** (file `image-digests.json`, kept 90
+days). It is also rendered as a table in the run's step summary. Phase 3
+reads it from the `Containers` run for the commit it pins, for example:
+
+```sh
+gh run list --workflow containers.yml --branch main --status success -L 1
+gh run download <run-id> -n image-digests
+jq -r '.images["ghosts-api"].ref' image-digests.json
+```
+
+Shape (`schema` is bumped on any breaking change):
+
+```json
+{
+  "schema": 1,
+  "repository": "Xore-Inc/APIARY",
+  "commit": "<full sha>",
+  "run_id": "<actions run id>",
+  "generated_at": "2026-10-11T00:00:00Z",
+  "images": {
+    "<image>": {
+      "repository": "ghcr.io/<owner>/honeypot-<image>",
+      "digest": "sha256:<64 hex>",
+      "ref": "ghcr.io/<owner>/honeypot-<image>@sha256:<64 hex>",
+      "context": "<build context path>",
+      "compose_services": ["<compose file>:<service>", "..."]
+    }
+  }
+}
+```
+
+`ref` is what goes in a stack's `image:` line. The digest is the one
+`docker pull <repository>@<digest>` resolves (the index digest for a
+multi-platform push).
+
+### Finding an image's digest
+
+- Latest on `main`: download the manifest as above.
+- Any pushed tag, by hand:
+  `docker buildx imagetools inspect ghcr.io/<owner>/honeypot-<image>:sha-<short> --format '{{.Manifest.Digest}}'`.
+- In the GitHub UI: the package page under the repository's Packages lists
+  each tag with its digest.
+
+### Pinning and rolling back
+
+To pin, copy `ref` from the manifest into the stack file's `image:` line,
+keeping the tag as a comment if useful, and open a PR; the lint rejects
+anything that is not a `@sha256:` reference. To roll back, take the `ref` for
+the same image from an earlier run's manifest (the 90 day retention is the
+window; older digests stay pullable from GHCR as long as the tag or package
+version exists), put it back in the stack file and redeploy. Because the
+file names an immutable digest, a rollback is a one-line revert of the pin
+and cannot be undone by a moved tag.
 
 ## Pull request workflow
 
@@ -1340,10 +1440,9 @@ that existing independence into actual wall-clock parallelism. The
 `conpot_persona_pipeline` rows each pick a random host port in `19000-19899`
 for their throwaway Elasticsearch container specifically so two instances
 running one concurrently don't collide on a fixed port; `containers.yml`'s
-buildx cache is `type=local` under `/var/buildx-cache/<image>` when the
-build lands on this box (#2822, below), which is a path on shared local
-disk rather than per-instance state, so a second instance is not cold
-there either -- no extra work needed for that tier.
+buildx cache is `type=local` under `/var/buildx-cache/<runner>/<image>`
+when the build lands on this box (#2822 and #3605, below). Each runner
+keeps its own cache so another job cannot prune it during export.
 
 `actions/setup-go`/`actions/setup-node` cache their toolchain downloads in
 the runner's own persistent tool cache -- unlike an ephemeral GitHub-hosted
@@ -1451,32 +1550,39 @@ the images evicting *each other*, but did nothing about the quota itself.
 
 The `Pick cache backend` step therefore chooses per executor:
 
-- **Homeserver runner** -- `type=local,dest=/var/buildx-cache/<image>`.
+- **Self-hosted runner** -- `type=local,dest=/var/buildx-cache/<runner>/<image>`.
   Local disk on `/var` (see `docs/HOMESERVER-DISK-LAYOUT.md`), outside
-  the GitHub quota entirely, and it survives between runs on this box.
+  the GitHub quota entirely, and it survives between runs on this runner.
+  One job runs per runner, so build and prune never touch that directory
+  concurrently. This uses more disk and starts each runner with a cold cache.
 - **GitHub-hosted fallback** -- `type=gha,scope=<image>`, unchanged. An
   ephemeral runner has no local disk worth caching to.
 
 **The directory must be provisioned before the runner can use it.**
 `/var` is `root:root 0755`, so the workflow cannot create
 `/var/buildx-cache` itself: `mkdir` as `github-ci-runner` fails with
-`Permission denied`. `scripts/install-homeserver.sh`'s
-`provision-buildx-cache` step creates it `2775 github-ci-runner:github-ci-runner`
-(setgid so per-image subdirectories stay group-owned) and then verifies
-the runner can actually write it, so a rebuild replay (#1609) recreates it
-rather than leaving a hand-made directory nobody records. If the step has
-not run on a given box, `Pick cache backend` emits a workflow warning and
-falls back to `type=gha` -- a slow build, not nineteen failed matrix rows.
+`Permission denied`. `scripts/github-ci-runner/provision-buildx-cache.sh`
+(#3606) provisions it on every executor: it creates the shared
+`github-ci-runner` group, adds every `github-ci-runner[-N]` user to it,
+creates `/var/buildx-cache` `2775 root:github-ci-runner` with a default and
+access ACL for the group, repairs existing subdirectories, and proves each
+runner user can create and remove a file in each per-runner directory. It is
+idempotent and prints `ok ... already correct` on a correct host.
+`install-homeserver.sh`'s `provision-buildx-cache` step and
+`install-ci-runner.sh` (precision, `--build-only`) both run it. A host that
+keeps the cache on another volume sets `BUILDX_CACHE_TARGET=/path` so
+`/var/buildx-cache` becomes a symlink to it (precision:
+`/var/lib/precision-storage/buildx-cache`). Group membership only applies to
+a runner service after it restarts. If the helper has not run on a box,
+`Pick cache backend` falls back to `type=gha`: a slow build, not failed
+matrix rows.
 
 **Bounding it.** `type=local` has *no* eviction: every export leaves
 unreferenced blobs behind in `blobs/sha256/` forever.
-`scripts/prune-buildx-cache.sh <dir>` runs after each export and deletes
-blobs untouched for `PRUNE_DAYS` (14), then, if the directory is still
-over `MAX_BYTES` (2 GiB per image), clears it outright. The reset is
-deliberate: BuildKit skips the *entire* import when one referenced blob is
-missing (it warns and builds on, exit 0), so a partially trimmed directory
-is worth nothing while still occupying the disk that `/var/benchmarks`
-shares.
+`scripts/prune-buildx-cache.sh <dir>` runs after each export and clears
+the whole runner/image cache if it exceeds `MAX_BYTES` (2 GiB). It does
+not delete individual old blobs: the current index can still reference
+them, so selective pruning can corrupt the next import.
 
 **Reclaiming the existing `type=gha` backlog.** `.github/workflows/cache-cleanup.yml`
 deletes a PR's cache entries when the PR closes. Actions scopes cache
@@ -1591,8 +1697,11 @@ build exactly as before and pay no syft run and no advisory-DB download. The
 steps are also limited to events that push. A `pull_request` row builds with
 `push: false` and `load: false`, so it produces no image and therefore no
 digest — a tag-keyed inventory would describe whatever that tag pointed at
-when syft ran, which is not the thing a CVE question is about. Those rows
-emit a `::notice` saying so instead of leaving the gap unexplained.
+when syft ran, which is not the thing a CVE question is about. This is the
+contract, decided in #3609: **SBOMs are produced on `main` (pushes to main,
+tags and manual runs) only.** Pull-request builds run no SBOM step and emit no
+notice; the inventory for a change is the one written when it reaches `main`,
+where the pushed image digest exists.
 
 **The digest is stamped into the document, not just the filename.** syft's
 CycloneDX output records the image's name and tag and no digest at all
@@ -1670,8 +1779,9 @@ section exists to close.
 
 Honest limitations:
 
-- **Pull requests get no SBOM.** See above. The inventory that matters is the
-  one for the digest that was actually deployed.
+- **Pull requests get no SBOM, by decision (#3609).** SBOMs are main-only.
+  The inventory that matters is the one for the digest that was actually
+  deployed, which exists only after the image is pushed on `main`.
 - **Trivy warns** `Third-party SBOM may lead to inaccurate vulnerability
   detection` on a Syft-generated CycloneDX file, and recommends Trivy
   generate SBOMs itself. The issue specifies `trivy sbom` over a CycloneDX

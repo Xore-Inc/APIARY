@@ -44,7 +44,7 @@ services:
   # and in place.
   log-maintenance:
     <<: *runtime-defaults
-    image: busybox:1.38.0@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
     container_name: hp-log-maintenance
     restart: unless-stopped
     # #127: waits on the marker directly instead of depends_on-ing
@@ -218,7 +218,7 @@ services:
   # read-only here for the same reason.
   disk-space-monitor:
     <<: *runtime-defaults
-    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
     container_name: hp-disk-space-monitor
     restart: unless-stopped
     entrypoint: ["sh", "/usr/local/bin/disk-space-check.sh"]
@@ -310,14 +310,15 @@ services:
 
   # #252: a narrow, safe subset of what T-Pot's own daily cron does (full
   # container/image/volume prune + forced reboot) -- age-bounded dangling-
-  # image prune and stopped-container prune only, no volumes (real
+  # image prune and prune of stopped containers that no compose project
+  # owns (#3658) only, no volumes (real
   # long-lived state lives there), no downtime, no destructive updates.
   # See analysis/docker-hygiene.sh's own header for the full reasoning.
   # Same trust boundary as autoheal: talks to docker-socket-proxy only,
   # never the raw socket.
   docker-hygiene:
     <<: *runtime-defaults
-    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
     container_name: hp-docker-hygiene
     restart: unless-stopped
     entrypoint: ["sh", "/usr/local/bin/docker-hygiene.sh"]

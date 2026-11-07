@@ -4,9 +4,14 @@
 //! roster config.rs's `users` handler already serves. Identity travels as
 //! plain request params supplied by the BFF (subject/username/role) —
 //! the same trust model ip_block.rs's `actor` body field already uses —
-//! rather than a new header-based scheme; the BFF is the only caller of
-//! this service (gated on the shared service token) so it is exactly as
-//! trustworthy as every other BFF-supplied field here.
+//! rather than a new header-based scheme.
+//!
+//! #3577: those params go through `trust::ActorBinding`. Under
+//! `ACTOR_ASSERTION_MODE=enforce` they are the verified actor's, whatever
+//! the client sent, so an operator reads and writes only their own
+//! preferences (an admin included: nothing in the dashboard edits another
+//! operator's). `off` takes them as sent, as before; `log` reports a
+//! mismatch.
 //!
 //! Deliberately simpler than the Go tier: no per-subject ETag/If-Match
 //! compare-and-swap (nothing else in this crate has that yet either) and
@@ -20,6 +25,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::audit::AuditEvent;
+use crate::trust::{ActorBinding, ActorField};
 use crate::AppState;
 
 const USERS_INDEX: &str = "dashboard-users-v1";
@@ -142,8 +148,15 @@ pub struct PreferencesQuery {
 )]
 pub async fn get(
     State(state): State<AppState>,
+    binding: ActorBinding,
     axum::extract::Query(query): axum::extract::Query<PreferencesQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    let query = PreferencesQuery {
+        subject: binding.bind("subject", ActorField::Subject, &query.subject)?,
+        username: binding.bind("username", ActorField::Username, &query.username)?,
+        role: binding.bind("role", ActorField::Role, &query.role)?,
+        timezone: query.timezone,
+    };
     if query.subject.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "subject is required".into()));
     }
@@ -417,8 +430,11 @@ pub struct PreferencesWriteBody {
 )]
 pub async fn put(
     State(state): State<AppState>,
-    Json(body): Json<PreferencesWriteBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<PreferencesWriteBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.subject = binding.bind("subject", ActorField::Subject, &body.subject)?;
+    body.username = binding.bind("username", ActorField::Username, &body.username)?;
     if body.subject.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "subject is required".into()));
     }
@@ -481,8 +497,11 @@ pub struct PreferencesResetBody {
 )]
 pub async fn reset(
     State(state): State<AppState>,
-    Json(body): Json<PreferencesResetBody>,
+    binding: ActorBinding,
+    Json(mut body): Json<PreferencesResetBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.subject = binding.bind("subject", ActorField::Subject, &body.subject)?;
+    body.username = binding.bind("username", ActorField::Username, &body.username)?;
     if body.subject.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "subject is required".into()));
     }

@@ -12,6 +12,43 @@ Both IPv4 and IPv6 are supported. The same pipeline also classifies providers
 (scanner, cloud, hosting, or network) into `source.as.type` from the ASN
 organization name.
 
+### source.ip promotion (#3560)
+
+`source.ip` is normalized once, at write time, in the first script processor of
+`geoip-honeypot`, so every `source.ip`-keyed view and aggregation sees the
+attacker. Candidates are tried in order and the first **non-fleet** one wins:
+an existing `source.ip`, `honeypot.src_ip`, then dionaea's
+`honeypot.data.connection.remote_ip`, `honeypot.data.parent.remote_ip` and
+`honeypot.data.child.remote_ip`. A fleet `src_ip` therefore never shadows a
+public nested address.
+
+"Fleet" mirrors `backend-service/src/events.rs::is_fleet_address`: loopback
+(`127.0.0.0/8`, `::1`), unspecified, RFC1918, link-local, IPv6 unique-local and
+the deployment's own addresses (`ES_HOME_NET` at pipeline install time,
+`HONEYPOT_SELF_IPS` in the backend; keep the two lists equal). Read-time
+(`attacker_ip`) and write-time therefore agree.
+
+Resulting fields:
+
+- `source.ip` is the promoted public address, or absent when only fleet
+  addresses exist (never a fleet address).
+- `honeypot.fleet_peer` keeps the fleet address that was passed over, or the
+  one dropped when nothing public exists (the tunnel peer, loopback, ...).
+- `tags: source_ip_promoted` is added when a `honeypot.*` address was promoted.
+- `source.geo` / `source.as` are computed from the promoted `source.ip`, after
+  the promotion.
+
+What it cannot do: when `honeypot.src_ip` itself is the tunnel peer and no
+public address exists anywhere in the document, there is nothing to promote
+(the attacker was never recorded in that document); those events need the
+upstream attribution (portbridge join / zeek-proxy) instead.
+
+Install: re-run `arcane/home/honeypot-init/analysis/elasticsearch-setup.sh`
+(idempotent `PUT`). Backfill of older documents:
+`scripts/backfill-source-ip.sh --dry-run` (counts), then `--run` (throttled
+`_update_by_query` with `pipeline=geoip-honeypot`, progress output). Tests:
+`analysis/tests/test_geoip_pipeline.sh`.
+
 ### Threat-intel enrichment (`threat-cidrs.csv`, #244, #1659)
 
 `analysis/threat-intel/threat-cidrs.csv` is `CIDR,label` pairs. Unlike the

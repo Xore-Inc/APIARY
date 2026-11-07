@@ -76,7 +76,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SELF_RELPATH = "tests/docs/test_2314_fix.py"
 
 OLD_GOLANG_DIGEST = "sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
-NEW_GOLANG_DIGEST = "sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c"
+NEW_GOLANG_DIGEST = "sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba"
 
 # Issue #2314's "real bump" section names exactly these six Dockerfiles
 # for the golang:1.26-alpine bump.
@@ -136,8 +136,8 @@ SAME_VERSION_REFRESHES = {
     },
     "debian:bookworm-slim": {
         "old": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241",
-        "superseded": "sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
-        "new": "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "superseded": "sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+        "new": "sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
         "files": [
             "arcane/home/honeypot-cowrie/cowrie/Dockerfile",
             "arcane/home/honeypot-galah/galah/Dockerfile",
@@ -279,6 +279,8 @@ def test_golang_dockerfile_no_longer_pins_1_26_5(name, relpath):
 @pytest.mark.parametrize("name,relpath", sorted(GOLANG_DOCKERFILES.items()))
 def test_golang_dockerfile_pins_1_26_7(name, relpath):
     text = (REPO_ROOT / relpath).read_text(encoding="utf-8")
+    if "golang:1.26-alpine" not in text:
+        return  # moved on to a newer Go minor since (#3720)
     assert f"golang:1.26-alpine@{NEW_GOLANG_DIGEST}" in text, (
         f"{name} ({relpath}) does not pin golang:1.26-alpine at the "
         f"refreshed 1.26.7 digest {NEW_GOLANG_DIGEST} -- #2314"
@@ -315,7 +317,7 @@ def test_golang_pins_are_consistent_across_the_whole_repo():
         "golang:1.26-alpine references not pinned at the refreshed "
         f"{NEW_GOLANG_DIGEST} -- #2314:\n" + "\n".join(sorted(wrong_digest))
     )
-    assert pinned == set(GOLANG_DOCKERFILES.values()), (
+    assert pinned <= set(GOLANG_DOCKERFILES.values()), (
         "the set of files pinning golang:1.26-alpine drifted from the six "
         "#2314 names.\nunexpected: "
         f"{sorted(pinned - set(GOLANG_DOCKERFILES.values()))}\n"
@@ -341,9 +343,14 @@ def test_same_version_refresh_applied(image, spec):
                 f"{relpath} pins {image} at {spec['superseded']}, the digest a later "
                 f"version bump replaced -- #2314"
             )
-        assert spec["new"] in text, (
-            f"{relpath} does not pin {image} at the refreshed digest {spec['new']} -- #2314"
-        )
+        # #3720: later bumps move both tags and digests on, so the exact
+        # "new" digest of this one-time sweep is no longer required. What still
+        # holds is that a file naming the tag pins it by digest, and that none
+        # of the stale digests above is present.
+        if f"{image}:" in text or f"{image}@" in text:
+            assert re.search(re.escape(image) + r"@sha256:[0-9a-f]{64}", text) or image not in text, (
+                f"{relpath} names {image} without a digest pin -- #2314"
+            )
 
 
 def test_no_stale_digest_pins_remain_anywhere():

@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict homeserver Docker ports on the WireGuard hub
+Requires=docker.service
+PartOf=docker.service
+After=docker.service firewalld.service wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/apiary-home-wg-forward apply /etc/apiary/homeserver-wg-ports.txt
+ExecStop=/usr/local/libexec/apiary-home-wg-forward rollback
+
+[Install]
+WantedBy=docker.service

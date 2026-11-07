@@ -37,6 +37,14 @@ const FLOW_BUCKET_CAP: u64 = 2_000;
 const FLOW_EVENT_IDS_CAP: usize = 50;
 const CRED_PAIR_CAP: u64 = 200;
 const CRED_IPS_LISTED: usize = 20;
+/// Painless script keying a terms agg on user NUL password. Painless
+/// single-quoted strings only accept `\\` and `\'` escapes, so the NUL
+/// separator is built with a char cast, not a `\u0000` escape (#3568). The
+/// Rust side splits the bucket key on `'\u{0}'`.
+const CRED_PAIR_SCRIPT: &str =
+    "def u = doc.containsKey(params.uf) && !doc[params.uf].empty ? doc[params.uf].value : ''; \
+     def p = doc.containsKey(params.pf) && !doc[params.pf].empty ? doc[params.pf].value : ''; \
+     if (u.length() == 0 || p.length() == 0) return ''; return u + String.valueOf((char)0) + p;";
 
 // ---------------------------------------------------------------------
 // passes
@@ -158,10 +166,7 @@ async fn write_cred_reuse(state: &AppState, since: chrono::DateTime<chrono::Utc>
         "aggs": {"pairs": {
             "terms": {
                 "script": {
-                    "source":
-                        "def u = doc.containsKey(params.uf) && !doc[params.uf].empty ? doc[params.uf].value : ''; \
-                         def p = doc.containsKey(params.pf) && !doc[params.pf].empty ? doc[params.pf].value : ''; \
-                         if (u.length() == 0 || p.length() == 0) return ''; return u + '\\u0000' + p;",
+                    "source": CRED_PAIR_SCRIPT,
                     "params": {"uf": "honeypot.canonical_user", "pf": "honeypot.canonical_pass"}
                 },
                 "size": CRED_PAIR_CAP * 4,
@@ -423,6 +428,13 @@ fn hex(digest: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cred_pair_script_has_no_unicode_escape() {
+        // Painless rejects `\u` in single-quoted strings (#3568).
+        assert!(!CRED_PAIR_SCRIPT.contains("\\u"), "{CRED_PAIR_SCRIPT}");
+        assert!(CRED_PAIR_SCRIPT.contains("String.valueOf((char)0)"));
+    }
 
     #[test]
     fn flow_family_strips_daily_rollover_suffixes_but_not_version_bits() {

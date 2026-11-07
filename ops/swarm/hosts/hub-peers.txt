@@ -1,0 +1,22 @@
+# Spokes of the VPS WireGuard hub (wg0, 10.8.0.1/24) -- #3619.
+#
+# The single source of truth for every [Peer] block on the VPS hub.
+# scripts/install-vps.sh renders the hub wg0.conf from this list through
+# ops/swarm/vps-hub-peer.sh render, so a VPS rebuild or reinstall brings
+# back every spoke, not only homeserver. Adding a spoke means adding a line
+# here (and its LOCAL_HUB in hosts/<name>.env when it runs peer-route, and
+# its /32 in ../firewall/hosts/vps.env SWARM_PEERS). scripts/tests/
+# test_3619_vps_hub_peers.py fails if those disagree with this file.
+#
+# Keys never live here. On the VPS each spoke's keys are root-only host
+# files: /etc/wireguard/<name>.pub and /etc/wireguard/<name>.psk (backed up
+# with /etc/wireguard by scripts/backup-essentials.sh). The renderer prefers
+# the spoke's block in the current wg0.conf and falls back to those files.
+#
+# No endpoints: every spoke dials in and keeps the session alive itself
+# (PersistentKeepalive on both ends), so the hub learns the endpoint by
+# roaming. A spoke's public address never enters git.
+#
+# name        hub address
+homeserver    10.8.0.2
+precision     10.8.0.3

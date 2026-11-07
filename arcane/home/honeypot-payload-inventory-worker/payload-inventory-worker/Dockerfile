@@ -1,5 +1,5 @@
 # Static Go binary in a scratch image (~5 MB), same shape as ip-enrichment-worker/Dockerfile.
-FROM golang:1.26-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
+FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 WORKDIR /src
 COPY go.mod .
 COPY *.go .

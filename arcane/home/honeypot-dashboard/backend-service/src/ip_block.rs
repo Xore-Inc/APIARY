@@ -20,6 +20,29 @@ use crate::AppState;
 
 const INDEX: &str = "dashboard-ip-block-v1";
 
+/// The `ExpiresAt` a request asks for (#3525). A block must name its
+/// duration: `expires_days` absent is refused, `0` is the one way to ask for
+/// a permanent block (`null`). An unblock carries no expiry.
+fn expiry_for(
+    blocked: bool,
+    expires_days: Option<u32>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, (StatusCode, String)> {
+    if !blocked {
+        return Ok(Value::Null);
+    }
+    match expires_days {
+        None => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "expires_days is required when blocked is true; 0 means permanent".into(),
+        )),
+        // null, not "" -- the index maps ExpiresAt as date and rejects an
+        // empty string outright (confirmed live).
+        Some(0) => Ok(Value::Null),
+        Some(days) => Ok(json!((now + chrono::Duration::days(i64::from(days))).to_rfc3339())),
+    }
+}
+
 fn active(record: &Value) -> bool {
     if !record["Blocked"].as_bool().unwrap_or(false) {
         return false;
@@ -36,8 +59,11 @@ fn active(record: &Value) -> bool {
 pub struct BlockBody {
     pub ip: String,
     pub blocked: bool,
+    /// Required when `blocked` is true (#3525): the number of days the
+    /// block lasts, `0` meaning permanent. Absent on a block is a 422.
+    /// Ignored on an unblock.
     #[serde(default)]
-    pub expires_days: u32,
+    pub expires_days: Option<u32>,
     #[serde(default)]
     pub actor: String,
 }
@@ -46,31 +72,27 @@ pub struct BlockBody {
     post,
     path = "/api/v1/ip-block",
     summary = "Block or unblock an address.",
-    request_body(content = inline(serde_json::Value), description = "Deserialized by the handler into `BlockBody`. The shape is left open here on purpose -- see the module doc."),
+    request_body(content = inline(serde_json::Value), description = "Deserialized by the handler into `BlockBody`: `{ip, blocked, expires_days?, actor?}`. `expires_days` (days, integer >= 0) is required when `blocked` is true and `0` means a permanent block; omitting it on a block is a 422. It is ignored on an unblock. `actor` is bound to the verified actor. The shape is left open here on purpose -- see the module doc."),
     responses(
         (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
         (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
         (status = 415, description = "The `Content-Type` is not `application/json`; the extractor refused the body before the handler ran.", body = String, content_type = "text/plain"),
-        (status = 422, description = "Well-formed but unprocessable. Two causes, both text/plain: the Json<T> extractor refused the body before the handler ran, or the route's own domain check rejected the reference it was asked to resolve (the reports store answers this for an unresolvable scope or an unexpected storage failure).", body = String, content_type = "text/plain"),
+        (status = 422, description = "Well-formed but unprocessable: the Json<T> extractor refused the body before the handler ran, or `blocked` is true and `expires_days` is absent (send `0` for a permanent block).", body = String, content_type = "text/plain"),
     ),
     security(("serviceToken" = [])),
 )]
 pub async fn set_block(
     State(state): State<AppState>,
-    Json(body): Json<BlockBody>,
+    binding: crate::trust::ActorBinding,
+    Json(mut body): Json<BlockBody>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    body.actor = binding.bind("actor", crate::trust::ActorField::Username, &body.actor)?;
     if body.ip.parse::<IpAddr>().is_err() {
         return Err((StatusCode::BAD_REQUEST, "invalid IP address".into()));
     }
     let now = chrono::Utc::now();
-    // null, not "" — the index maps ExpiresAt as date and rejects an
-    // empty string outright (confirmed live).
-    let expires_at = if body.blocked && body.expires_days > 0 {
-        json!((now + chrono::Duration::days(body.expires_days as i64)).to_rfc3339())
-    } else {
-        Value::Null
-    };
+    let expires_at = expiry_for(body.blocked, body.expires_days, now)?;
     let record = json!({
         "IP": body.ip,
         "Blocked": body.blocked,
@@ -127,7 +149,7 @@ pub async fn get_block(
         (status = 200, description = "The blocked addresses, one per line.", body = inline(serde_json::Value), content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
     ),
-    security(("serviceToken" = [])),
+    security(("serviceToken" = []), ("exportToken" = [])),
 )]
 /// Plain text list of actively blocked IPs, sorted — byte-compatible
 /// with the legacy /export/portbridge-manual-blackhole.txt body.
@@ -152,4 +174,43 @@ pub async fn export(State(state): State<AppState>) -> Result<impl IntoResponse, 
         body.push('\n');
     }
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_without_expires_days_is_422() {
+        let (status, message) = expiry_for(true, None, chrono::Utc::now()).unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("expires_days") && message.contains("0 means permanent"));
+    }
+
+    #[test]
+    fn zero_days_is_permanent() {
+        assert_eq!(expiry_for(true, Some(0), chrono::Utc::now()).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn seven_days_expires_in_a_week() {
+        let now = chrono::Utc::now();
+        let at = expiry_for(true, Some(7), now).unwrap();
+        let at = chrono::DateTime::parse_from_rfc3339(at.as_str().unwrap()).unwrap();
+        assert_eq!(at.with_timezone(&chrono::Utc), now + chrono::Duration::days(7));
+    }
+
+    #[test]
+    fn unblock_needs_no_expires_days() {
+        assert_eq!(expiry_for(false, None, chrono::Utc::now()).unwrap(), Value::Null);
+        assert_eq!(expiry_for(false, Some(7), chrono::Utc::now()).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn body_distinguishes_absent_from_zero() {
+        let absent: BlockBody = serde_json::from_str(r#"{"ip":"192.0.2.1","blocked":true}"#).unwrap();
+        let zero: BlockBody = serde_json::from_str(r#"{"ip":"192.0.2.1","blocked":true,"expires_days":0}"#).unwrap();
+        assert_eq!(absent.expires_days, None);
+        assert_eq!(zero.expires_days, Some(0));
+    }
 }

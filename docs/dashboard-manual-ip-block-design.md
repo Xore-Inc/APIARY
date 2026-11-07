@@ -47,9 +47,11 @@ anywhere other than the per-IP attacker page.
 
 ## Decision 2: lifecycle — manual unblock, with an optional per-block expiry
 
-A manual block stays active until an operator explicitly unblocks it, unless
-the operator sets an expiry at block time (`expires_days` on the block form),
-in which case it also lapses automatically once that many days pass. Both
+A manual block stays active until an operator explicitly unblocks it, or the
+duration chosen at block time lapses. The duration is explicit (#3525):
+`POST /api/v1/ip-block` requires `expires_days` when `blocked` is true (422
+if absent), `0` means permanent, and the block form defaults to 7 days. Any
+positive value lapses automatically once that many days pass. Both
 paths exist side by side rather than picking one: an operator blocking known,
 durable malicious infrastructure wants a permanent block with the same
 "acknowledged until reopened" lifecycle `alerts.go`/`ml_anomaly_ack.go`
@@ -100,9 +102,14 @@ that already exists** (home is reachable at `10.8.0.2`,
 `docs/CGNAT-DEPLOYMENT.md`), the same "pull, don't get pushed to" posture
 `portbridge-blackhole-refresh.sh` already uses against GitHub. Concretely:
 
-- The dashboard exposes `GET /export/portbridge-manual-blackhole.txt`
-  (then `dashboard/ip_block.go`'s `serveManualBlackholeExport`, now
-  `backend-service/src/ip_block.rs`'s `export`) — plain text, one
+- The export is served as `GET /export/portbridge-manual-blackhole.txt`, but
+  that is a **frontend** route, not a backend one:
+  `frontend-next/src/routes/export.portbridge-manual-blackhole[.]txt.ts`
+  proxies to the backend's `GET /api/v1/ip-block-export` (handler
+  `ip_block::export` in `backend-service/src/ip_block.rs` — the Rust successor
+  to the Go `dashboard/ip_block.go`'s `serveManualBlackholeExport`). Both tiers
+  exist and they are not the same endpoint: the `.txt` path is the one
+  `vps/portbridge-manual-blackhole-refresh.sh` fetches. The body is plain text, one
   IPv4 address per line, the exact format `blackhole.go`'s existing parser
   already reads. ~~No admin auth on the handler itself, the same posture every
   other `/export/*.csv` GET already takes (access control is the network
@@ -110,13 +117,13 @@ that already exists** (home is reachable at `10.8.0.2`,
   **corrected by #3403:** that posture assumed the frontend's unauthenticated
   passthrough, and it stopped being true. The route is now reached as
   `/api/v1/ip-block-export` behind `require_service_token` (#2183), so the
-  puller authenticates with the dashboard's shared service token rather than
-  relying on reachability alone. The data itself (a list of IPs an operator
+  puller authenticates rather than relying on reachability alone. The credential
+  is no longer the service token: see #3578 below. The data itself (a list of IPs an operator
   already chose to block) is still no more sensitive than the maltrail feed it
   sits alongside; what changed is that the *route* is no longer open. Reachable
-  from the VPS at `10.8.0.2:19090` — the `dashboard` service's real published port
-  (`arcane/home/honeypot-dashboard/compose.yml`, `${HP_BIND:-10.8.0.2}:19090:8080`), not an
-  assumed default.
+  from the VPS at `10.8.0.2:19092`, the standalone apiary-dashboard. The sidecar's
+  `MANUAL_BLACKHOLE_URL` is built from `DASHBOARD_CANDIDATE_HOST`/`_PORT` in
+  `vps/docker-compose.yml`, defaulting to `10.8.0.2:19092`.
 - A new sidecar, `vps/portbridge-manual-blackhole-refresh.sh`, is a near-
   verbatim copy of `portbridge-blackhole-refresh.sh` pointed at that URL
   instead of GitHub's maltrail mirror, writing to a second local file
@@ -176,6 +183,29 @@ status codes:
    untouched. A genuinely empty list is still harmless: `blackhole.go` treats a
    missing file as "no blocklist yet", and the first non-empty export replaces
    the stale one.
+
+### #3578 (2026-10-17): the puller holds an export-only token, not the service token
+
+Correction to point 2 above and to the "no second auth mechanism" line: the
+shared service token reaches the whole backend API, including service actions
+(#3577), so a VPS that holds it can do far more than read a blocklist. The
+decision on apiary-dashboard#246 is a second, narrower credential:
+
+- The rewrite dashboard's `/export/portbridge-manual-blackhole.txt` accepts
+  `X-Export-Token` equal to its `EXPORT_TOKEN` (or a signed-in session) and no
+  longer accepts `SERVICE_TOKEN`. The dashboard refuses to boot if the two are
+  equal. Unset `EXPORT_TOKEN` turns machine access off.
+- The sidecar sends `X-Export-Token: $BLACKHOLE_EXPORT_TOKEN` to that route
+  (host and port from `DASHBOARD_CANDIDATE_HOST`/`_PORT`, default
+  `10.8.0.2:19092`). `DASHBOARD_SERVICE_TOKEN` is gone from the VPS compose
+  file, script and `.env.example`.
+- The failure rules are unchanged: a 401 (wrong or missing token), a 5xx, a
+  login page, an empty body or an unreachable tunnel are each refused with a
+  named `[E-*]` marker and the last good list stays in place.
+- Rollout: deploy the dashboard with `EXPORT_TOKEN`, put the same value in the
+  VPS `.env` as `BLACKHOLE_EXPORT_TOKEN`, then enable the `blackhole` profile
+  service. Verify the export answers 200 with the export token and 401 with
+  the service token.
 
 ## What "first step" deliberately leaves out
 

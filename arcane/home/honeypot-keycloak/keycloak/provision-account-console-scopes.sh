@@ -34,7 +34,7 @@
 # The scopes applied are stock Keycloak's own set for this client, and match
 # every user-facing client already declared in this realm
 # (apiary-dashboard, arcane, arkime, evebox, kibana, revdeck, tanner,
-# traefik-dashboard all carry exactly these five).
+# traefik-dashboard, unsloth all carry exactly these five).
 #
 # Idempotent: re-running is a no-op, so it is safe on every install and safe
 # to run by hand against a live realm to repair one.

@@ -1011,7 +1011,13 @@ jobs:
   backend-service:
     name: Dashboard backend-service (Rust)
     needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver == 'true'
+    # Never run pull_request code here. Cargo executes checkout-controlled
+    # build scripts, proc-macros and tests as the runner user, and this job
+    # deliberately keeps the persistent HOME (~/.cargo, rustup) and prepends
+    # $HOME/.cargo/bin to PATH without verification, so a PR could plant
+    # tooling that a later trusted job on this runner would execute.
+    # Pull requests use the ephemeral GitHub-hosted twin below instead.
+    if: needs.ci-target.outputs.homeserver == 'true' && github.event_name != 'pull_request'
     runs-on: [self-hosted, linux, x64, honeypot-ci]
     timeout-minutes: 90
     defaults:
@@ -1286,7 +1292,7 @@ jobs:
   backend-service-cloud:
     name: Dashboard backend-service (Rust) (GitHub-hosted)
     needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver != 'true'
+    if: needs.ci-target.outputs.homeserver != 'true' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -1658,6 +1664,19 @@ jobs:
             home: true
             run: python scripts/check-zeek-pin-parity.py
 
+          # #3597 (epic #3587): swarm ignores `build:` and a worker cannot pull
+          # a local tag, so every compose build context needs a containers.yml
+          # row that pushes it to GHCR, and every swarm stack file has to pin
+          # its images by digest. The first half keeps coverage complete as
+          # new stacks land; the second is inert until phase 3 (#3590) adds
+          # swarm/stacks/ and then rejects `build:` and floating tags.
+          # PyYAML is installed here for the same reason as the autoheal row.
+          - name: GHCR image coverage and swarm stack pinning (#3597)
+            home: true
+            run: |
+              python3 -m pip install -q pyyaml
+              python3 scripts/check-swarm-images.py all
+
           # #2458: the pointer-rot family (#2352, #2353, #2356/#2453, #2455,
           # #2357, five docs' worth invalidated by #1659) kept being fixed by
           # hand after PR #2367's one-off sweep script proved the shape. This
@@ -1731,6 +1750,13 @@ jobs:
               # a single DoublePulsar connection produce ~643 documents and
               # 47.5% of everything the fleet ingested.
               python arcane/home/honeypot-dionaea/dionaea/tests/test_smb_exploit_patch.py
+          - name: "Dionaea TDS header length guard (#3658)"
+            home: true
+            run: |
+              # Runs mssql.py's receive loop before and after the patch: a TDS
+              # header declaring Length 1 or 2 used to spin the main thread
+              # forever, which stopped every dionaea protocol, SMB included.
+              python arcane/home/honeypot-dionaea/dionaea/tests/test_mssql_patch.py
           - name: Ghidra worker, spool discipline and AI triage
             home: true
             run: |
@@ -2288,7 +2314,7 @@ jobs:
             run: ./scripts/test-keycloak-realm-import.sh
 
           # #977: proves the isolated oauth2-proxy gateway pattern every
-          # protected app (Kibana/EveBox/Arkime/TANNER/RevDeck/Dockge/Traefik)
+          # protected app (Kibana/EveBox/Arkime/TANNER/RevDeck/Unsloth/Dockge/Traefik)
           # uses against a real disposable Keycloak + real oauth2-proxy --
           # unauthenticated redirect target, forged-callback rejection, role
           # enforcement, upstream network isolation, and gateway-outage
@@ -2637,9 +2663,15 @@ jobs:
           # were never run by CI at all. Discovery instead, so the next
           # test_*.py dropped in scripts/tests/ is picked up without a
           # workflow edit.
+          # pytest installed inline: test_3501_base_image_cve_exemptions.py
+          # imports it, and the GitHub-hosted fallback image does not ship it
+          # (the self-hosted runners happen to), so the cloud twin failed at
+          # import time. Not a production dependency.
           - name: scripts/tests suite
             home: true
-            run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+            run: |
+              python3 -m pip install pytest pyyaml
+              python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
     permissions:
       contents: read

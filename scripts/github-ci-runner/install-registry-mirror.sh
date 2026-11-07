@@ -156,7 +156,11 @@ ExecStart=/usr/bin/docker run --rm --name $NAME \\
 ExecStop=/usr/bin/docker stop $NAME
 
 [Install]
-WantedBy=multi-user.target
+# Requires=docker.service stops this unit when Docker stops (#3664: the
+# mirror stayed down after a Docker restart). Only a WantedBy on
+# docker.service starts it again when Docker comes back, so both targets
+# are listed. Related failure shape: #3640.
+WantedBy=multi-user.target docker.service
 EOF
 
 systemctl daemon-reload

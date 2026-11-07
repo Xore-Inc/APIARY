@@ -1,0 +1,13 @@
+[Interface]
+Address = 10.8.0.3/24
+MTU = 1420
+PrivateKey = REPLACE_WITH_HOST_GENERATED_PRIVATE_KEY
+
+[Peer]
+# VPS hub. Only 10.8.0.1 is routed here: homeserver's hub address uses the
+# direct fibre/LAN tunnels (peer-route), never the VPS.
+PublicKey = REPLACE_WITH_VPS_HUB_PUBLIC_KEY
+PresharedKey = REPLACE_WITH_HOST_ONLY_PRESHARED_KEY
+AllowedIPs = 10.8.0.1/32
+Endpoint = REPLACE_WITH_PRIVATE_HOST_ONLY_VPS_ENDPOINT:51820
+PersistentKeepalive = 25

@@ -1,0 +1,63 @@
+# Internal phase-4 Swarm canary (#3591). Arcane GitOps owns this stack.
+# No published port, host mount, secret, or external dependency.
+services:
+  web:
+    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    command: ["httpd", "-f", "-p", "8080", "-h", "/www"]
+    configs:
+      - source: page
+        target: /www/index.html
+        mode: 0444
+    networks: [canary]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.role == manager
+        preferences:
+          - spread: node.labels.sensor
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 30s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "internal canary with no dependents"
+        # #3722: the homeserver is Active; this service may run there on purpose.
+        apiary.homeserver: allow
+        apiary.homeserver.reason: "cross-host canary: spread over the homeserver and precision proves overlay, drain and rollback across hosts (#3591)"
+networks:
+  canary:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.1.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+configs:
+  page:
+    external: true
+    name: canary_page_v2
+    x-apiary-file: ./configs/index.html

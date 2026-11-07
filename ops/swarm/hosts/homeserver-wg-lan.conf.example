@@ -1,0 +1,15 @@
+[Interface]
+Address = 10.8.2.1/30
+ListenPort = 51822
+MTU = 1500
+Table = off
+# Loose reverse-path check: the peer hub /32 moves between wg-fibre and wg-lan on failover;
+# AllowedIPs already rejects spoofed sources.
+PostUp = sysctl -q -w net.ipv4.conf.%i.rp_filter=2
+PrivateKey = REPLACE_WITH_HOST_GENERATED_PRIVATE_KEY
+
+[Peer]
+PublicKey = REPLACE_WITH_PRECISION_LAN_PUBLIC_KEY
+AllowedIPs = 10.8.2.2/32, 10.8.0.3/32
+Endpoint = 192.168.42.247:51822
+PersistentKeepalive = 15

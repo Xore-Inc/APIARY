@@ -26,21 +26,29 @@ set -eu
 # blocklist with nothing, logged a cheerful "updated (0 addresses)", and
 # operator IP blocks never reached portbridge. Three things changed:
 #
-#   * the default is the route that actually serves the export,
-#     /api/v1/ip-block-export (backend-service's ip_block::export), reached
-#     through the BFF's /bff/* proxy -- the same seam
-#     scripts/github-ci-runner/dashboard-source-health.sh already uses to
-#     call the Rust tier from a shell. Redirects are deliberately NOT
-#     followed, so a 307 is visible as a 307 instead of quietly fetching
-#     whatever it pointed at.
-#   * that route is auth-gated (require_service_token, #2183), so the
-#     request carries the dashboard's shared service token --
-#     DASHBOARD_SERVICE_TOKEN, the same value the home stack maps to
-#     SERVICE_TOKEN -- in an X-Service-Token header, handed to curl through
-#     its stdin config (-K -) so the secret is never in argv, never in the
-#     container's process list, and never in this script's log. Unset is a
-#     loud refusal, not an unauthenticated attempt: the unauthenticated
-#     answer IS the bug.
+#   * the default is the route that actually serves the export. #3403 pointed
+#     it at /api/v1/ip-block-export through the old dashboard's /bff proxy;
+#     #3578 moves it to the rewrite dashboard's own
+#     /export/portbridge-manual-blackhole.txt (apiary-dashboard#246), which
+#     accepts the export token below. Redirects are deliberately NOT followed,
+#     so a 307 is visible as a 307 instead of quietly fetching whatever it
+#     pointed at.
+#   * that route is auth-gated, so the request carries an export-only
+#     credential -- BLACKHOLE_EXPORT_TOKEN -- in an X-Export-Token header,
+#     handed to curl through its stdin config (-K -) so the secret is never in
+#     argv, never in the container's process list, and never in this script's
+#     log. Unset is a loud refusal, not an unauthenticated attempt: the
+#     unauthenticated answer IS the bug.
+#
+# #3578 / apiary-dashboard#246: the token is NOT the dashboard's service token.
+# That secret reaches the whole backend API, including service actions, so a
+# VPS holding it could do far more than read a blocklist. The export-only token
+# opens one read-only route and nothing else, and it is a different value from
+# SERVICE_TOKEN (the dashboard refuses to boot if the two are equal). The
+# default URL is therefore the dashboard's own export route, the only place
+# that accepts it; SERVICE_TOKEN there is answered 401 and, like any other
+# refusal below, leaves the last good list untouched.
+#
 #   * a download is written only after it is proven to be a blocklist: HTTP
 #     200, a non-empty body, a text/plain content type, and every
 #     non-comment line an address. Anything else -- a 404, the
@@ -61,10 +69,10 @@ set -eu
 # that is briefly down (or restarting) must cost one skipped refresh, not a
 # sidecar that never runs again.
 
-url="${MANUAL_BLACKHOLE_URL:-http://10.8.0.2:19090/bff/api/v1/ip-block-export}"
+url="${MANUAL_BLACKHOLE_URL:-http://10.8.0.2:19092/export/portbridge-manual-blackhole.txt}"
 dest="${BLACKHOLE_MANUAL_LIST:-/blackhole/manual.txt}"
 interval="${MANUAL_REFRESH_INTERVAL_SECONDS:-300}"  # 5m -- an operator block should take effect quickly, unlike the mostly-static maltrail feed
-token="${DASHBOARD_SERVICE_TOKEN:-}"
+token="${BLACKHOLE_EXPORT_TOKEN:-}"
 
 # A line blackhole.go's readOne would actually consume: blank, a '#'
 # comment, or an address as its first field (mass_scanner.txt's "<ip> #
@@ -104,13 +112,13 @@ refuse() {
 while true; do
   tmp="${dest}.tmp.$$"
   if [ -z "$token" ]; then
-    refuse E-NO-SERVICE-TOKEN "DASHBOARD_SERVICE_TOKEN is unset or empty, and $url is auth-gated: an unauthenticated request answers 307 to /auth/login, not the export. Set it in vps/.env to the same shared secret the home stack carries as SERVICE_TOKEN."
-  elif meta=$(printf 'header = "X-Service-Token: %s"\n' "$token" \
+    refuse E-NO-EXPORT-TOKEN "BLACKHOLE_EXPORT_TOKEN is unset or empty, and $url is auth-gated: an unauthenticated request answers 401 or 307 to /auth/login, not the export. Set it in vps/.env to the dashboard stack's EXPORT_TOKEN (not SERVICE_TOKEN)."
+  elif meta=$(printf 'header = "X-Export-Token: %s"\n' "$token" \
       | curl -sS --max-time 30 -o "$tmp" -w '%{http_code} %{content_type}' -K - "$url"); then
     code="${meta%% *}"
     ctype="${meta#* }"
     if [ "$code" != "200" ]; then
-      refuse E-EXPORT-STATUS "$url answered HTTP $code, not 200. 307 means the export is auth-gated and the body is a login page; 404 means the route is not served here any more. Neither is a blocklist."
+      refuse E-EXPORT-STATUS "$url answered HTTP $code, not 200. 401 or 307 means the token was refused or missing (a login page, or SERVICE_TOKEN sent by mistake); 404 means the route is not served here any more. Neither is a blocklist."
     elif [ ! -s "$tmp" ]; then
       refuse E-EMPTY-BODY "$url answered 200 with a 0-byte body. A genuinely empty export is 0 bytes too, which is exactly the ambiguity that hid #3403, so it is not written -- see this script's header."
     elif [ "${ctype%%;*}" != "text/plain" ]; then

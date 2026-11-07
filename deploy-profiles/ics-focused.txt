@@ -6,6 +6,7 @@ keycloak
 init
 elk
 dashboard
+backend-workers
 utilities
 conpot
 dnp3

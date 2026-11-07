@@ -1,0 +1,8 @@
+# Fixture for scripts/tests/test_3597_swarm_images.py: a stack that passes.
+services:
+  web:
+    image: ghcr.io/example-org/honeypot-dashboard-next@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    deploy:
+      replicas: 1
+  worker:
+    image: ghcr.io/example-org/honeypot-ml-worker:sha-1234567@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

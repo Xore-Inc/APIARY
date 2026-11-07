@@ -1,0 +1,99 @@
+# #3593 (phase 6): the web decoy hp-http (http-honeypot) as a sensor stack,
+# pinned to the homeserver. Same container as the http-honeypot service in
+# arcane/home/honeypot-http/compose.yml, which stays defined as the rollback
+# (see README.md next to this file). api-honeypot, the second service of that
+# project, stays on Compose for now (one sensor at a time).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW flows to 19081 unless
+#   they come from the VPS hub on wg0; the port is listed in
+#   ops/firewall/hosts/homeserver-swarm-host-ports.txt. 19081 is a unique
+#   host port, so the guard's port match cannot hit unrelated traffic (#3769).
+# - `security_opt` is not supported. Gate for moving before the homeserver
+#   gets daemon-wide no-new-privileges (#3593): non-root (65534), cap_drop
+#   ALL, read_only, and no setuid/setgid file in the image (FROM scratch,
+#   checked on this digest 2026-11-01).
+# - The healthcheck is restated (the image's HEALTHCHECK is the same) because
+#   the lint requires it in the stack.
+# - autoheal does not act on swarm tasks; the restart policy and the
+#   healthcheck replace it.
+#
+# Reached from the VPS on public 8081 (portbridge, PROXY header) and through
+# Traefik via socat-hp-http.
+services:
+  http:
+    image: ghcr.io/xore-inc/honeypot-http-honeypot@sha256:a44e608be81e47ca57a784a8f2e8522e2568cd9a2a70db1e65001747507dca74
+    ports:
+      - target: 8080
+        published: 19081
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/http-honeypot
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      LISTEN_ADDR: ":8080"
+      SERVER_HEADER: nginx/1.24.0 (Ubuntu)
+      SENSOR_NAME: http-honeypot
+      PERSONA_ID: nexusai-edge
+      SITE_ID: nexusai-eu-edge
+      ASSET_ID: web-edge-01
+      ORGANIZATION: NexusAI Research GmbH
+      LOG_FILE: /var/log/honeypot/http.json
+      PROXY_PROTOCOL: "1"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "/honeypot", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 19081.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone web decoy, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.10.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"

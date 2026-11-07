@@ -9,6 +9,9 @@ self-hosted-runner:
     # watches that measure that host require it so a --build-only executor
     # on another box (e.g. precision) never picks them up -- #3379.
     - honeypot-homeserver
+    # GitHub-hosted label actionlint 1.7.7 predates; used only by the
+    # non-blocking ubuntu-26-trial.yml (#3608). Drop with that workflow.
+    - ubuntu-26.04
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.

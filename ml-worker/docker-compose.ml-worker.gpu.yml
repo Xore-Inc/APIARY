@@ -22,6 +22,8 @@ services:
       resources:
         reservations:
           devices:
+            # Pinned to the RTX 4000 Ada, not `count: all`: the host's Quadro
+            # P2200 is reserved for the Windows sandbox VM (#1539).
             - driver: nvidia
-              count: all
+              device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]
               capabilities: [gpu]

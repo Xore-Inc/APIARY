@@ -104,6 +104,7 @@ fn read_session_lines(path: &Path, m: &mut ViaMap) {
             // so there is nothing to disambiguate against. 0 opts out of
             // #1917's destination-port check rather than failing it.
             target_port: 0,
+            transport: super::viamap::Transport::Udp,
         });
     }
 }

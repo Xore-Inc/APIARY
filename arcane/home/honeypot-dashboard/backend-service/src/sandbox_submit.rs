@@ -10,10 +10,9 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::Path;
-
+use crate::host_fs::{host, ListFilter, Root};
 use crate::payload_kind::classify_payload;
-use crate::payload_paths::{read_payload_head, resolve_payload_path};
+use crate::payload_paths::{read_payload_head, resolve_payload};
 use crate::AppState;
 
 fn env_dir(name: &str) -> String {
@@ -35,36 +34,28 @@ fn determine_sandbox_target(data: &[u8]) -> Option<&'static str> {
     })
 }
 
-pub fn sandbox_request_dir(target: &str) -> String {
+/// The request spool for a sandbox target. The Linux spool keeps its
+/// in-container default (`/sandbox-requests`), see `host_fs::Root`.
+pub fn sandbox_request_root(target: &str) -> Root {
     match target {
-        "windows" => env_dir("WINDOWS_SANDBOX_REQUEST_DIR"),
-        "ghosts" => env_dir("GHOSTS_SANDBOX_REQUEST_DIR"),
-        _ => {
-            let dir = env_dir("SANDBOX_REQUEST_DIR");
-            if dir.is_empty() {
-                "/sandbox-requests".to_string()
-            } else {
-                dir
-            }
-        }
+        "windows" => Root::WindowsSandboxRequests,
+        "ghosts" => Root::GhostsSandboxRequests,
+        _ => Root::SandboxRequests,
     }
 }
 
-/// Creates {dir}/{hash}.request, O_CREATE|O_EXCL. An already-existing
-/// marker is success, not an error — the same idempotence a second click
-/// on an already-queued job relies on in the Go tier.
-pub fn create_request_marker(dir: &str, hash: &str) -> Result<(), String> {
-    use std::fs::OpenOptions;
-    use std::io::ErrorKind;
-    if dir.is_empty() {
+/// Creates {root}/{hash}.request, O_CREAT|O_EXCL, through the host seam
+/// (#3582). An already-existing marker is success, not an error — the same
+/// idempotence a second click on an already-queued job relies on in the Go
+/// tier.
+pub fn create_request_marker(root: Root, hash: &str) -> Result<(), String> {
+    let fs = host();
+    if !fs.configured(root) {
         return Err("spool is not configured".into());
     }
-    let path = Path::new(dir).join(format!("{hash}.request"));
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(format!("request spool unavailable: {error}")),
-    }
+    fs.create_new(root, &format!("{hash}.request"))
+        .map(|_| ())
+        .map_err(|error| format!("request spool unavailable: {error}"))
 }
 
 #[derive(Deserialize)]
@@ -96,19 +87,19 @@ pub async fn submit(State(_state): State<AppState>, Json(body): Json<SubmitBody>
     if !crate::payload_paths::is_valid_hash(&hash) {
         return Err(err(StatusCode::BAD_REQUEST, "invalid payload hash"));
     }
-    let path = resolve_payload_path(&hash).map_err(|_| err(StatusCode::NOT_FOUND, "captured payload not found"))?;
-    let head = read_payload_head(&path).map_err(|_| err(StatusCode::NOT_FOUND, "captured payload is unreadable"))?;
+    let payload = resolve_payload(&hash).map_err(|_| err(StatusCode::NOT_FOUND, "captured payload not found"))?;
+    let head = read_payload_head(&payload).map_err(|_| err(StatusCode::NOT_FOUND, "captured payload is unreadable"))?;
     let target = determine_sandbox_target(&head).ok_or_else(|| {
         err(
             StatusCode::BAD_REQUEST,
             "this payload has no dynamic detonation path — see its static analysis instead",
         )
     })?;
-    let dir = sandbox_request_dir(target);
-    if dir.is_empty() {
+    let root = sandbox_request_root(target);
+    if !host().configured(root) {
         return Err(err(StatusCode::SERVICE_UNAVAILABLE, format!("the {target} sandbox is not configured on this host")));
     }
-    create_request_marker(&dir, &hash).map_err(|reason| err(StatusCode::SERVICE_UNAVAILABLE, reason))?;
+    create_request_marker(root, &hash).map_err(|reason| err(StatusCode::SERVICE_UNAVAILABLE, reason))?;
     Ok(Json(json!({"target": target, "queued": true})))
 }
 
@@ -126,15 +117,11 @@ pub async fn submit(State(_state): State<AppState>, Json(body): Json<SubmitBody>
 /// already mounted read-only for per-job results, no new mount needed.
 /// Missing/unreadable/unset is not an error: informational badge only.
 pub async fn golden_image_status() -> Json<Value> {
-    let dir = env_dir("WINDOWS_SANDBOX_RESULTS_DIR");
-    if dir.is_empty() {
-        return Json(json!({"configured": false}));
-    }
-    let path = Path::new(&dir).join("golden-image-status.json");
-    let Ok(body) = std::fs::read(&path) else {
+    const CAP: u64 = 16 * 1024;
+    let Ok((body, size)) = host().read(Root::WindowsSandboxResults, "golden-image-status.json", CAP + 1) else {
         return Json(json!({"configured": false}));
     };
-    if body.len() > 16 * 1024 {
+    if size > CAP {
         return Json(json!({"configured": false}));
     }
     let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
@@ -178,17 +165,11 @@ pub async fn vnc_status() -> Result<Json<Value>, (StatusCode, String)> {
     if bridge_ws.is_empty() {
         return Err((StatusCode::NOT_FOUND, "the VNC bridge is not configured on this host (SANDBOX_VNC_BRIDGE_WS unset)".into()));
     }
-    let dir = sandbox_request_dir("windows");
-    if dir.is_empty() {
-        return Err((StatusCode::NOT_FOUND, "no Windows-sandbox detonation is currently running".into()));
-    }
-    let running_sha = std::fs::read_dir(&dir)
-        .ok()
+    let running_sha = host()
+        .list(Root::WindowsSandboxRequests, &ListFilter { suffix: ".request.running".into(), ..Default::default() })
+        .unwrap_or_default()
         .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_str().and_then(|name| running_sha_from(name).map(str::to_string)))
-        .next();
+        .find_map(|entry| running_sha_from(&entry.name).map(str::to_string));
     let Some(sha256) = running_sha else {
         return Err((StatusCode::NOT_FOUND, "no Windows-sandbox detonation is currently running".into()));
     };

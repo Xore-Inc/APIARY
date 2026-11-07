@@ -1,0 +1,24 @@
+# NetworkManager profiles on homeserver (supermicro). nm-profiles.sh check hosts/homeserver.nm
+# /etc/apiary/host.env sets HOMESERVER_LAN_IP (host-only; not published here).
+#
+# ens9f0: 10 Gb LAN uplink, primary route, jumbo frames (MTU 9000 on LAN/fibre, #3588).
+ens9f0 connection.autoconnect yes
+ens9f0 connection.zone
+ens9f0 ipv4.method manual
+ens9f0 ipv4.addresses ${HOMESERVER_LAN_IP}/24
+ens9f0 ipv4.gateway 192.168.42.254
+ens9f0 ipv4.dns 192.168.42.253,${HOMESERVER_LAN_IP}
+ens9f0 ipv4.route-metric 50
+ens9f0 802-3-ethernet.mtu 9000
+# ens9f1: direct fibre to precision, underlay of wg-fibre; swarm-plane zone only.
+ens9f1 connection.autoconnect yes
+ens9f1 connection.zone apiary-swarm
+ens9f1 ipv4.method manual
+ens9f1 ipv4.addresses 10.254.250.1/30
+ens9f1 ipv4.never-default yes
+ens9f1 ipv6.method disabled
+ens9f1 802-3-ethernet.mtu 9000
+# eno1: 1 Gb onboard, DHCP fallback (default route metric 102 > 50).
+eno1 connection.autoconnect yes
+eno1 ipv4.method auto
+eno2 connection.autoconnect no

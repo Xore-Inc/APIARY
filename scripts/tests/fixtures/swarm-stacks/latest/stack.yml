@@ -1,0 +1,4 @@
+# Fixture: a floating tag is not a pin.
+services:
+  web:
+    image: ghcr.io/example-org/honeypot-dashboard-next:latest

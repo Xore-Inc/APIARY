@@ -112,7 +112,12 @@ enriched path for every watched sensor — nothing is shipped twice. A
 portbridge dial must **precede** the flow it explains for the join to fire;
 where no candidate survives that ordering test, the record honestly stays
 tunnel-attributed (surfaced dashboard-wide as `unattributed_24h`, #1723).
-An unattributed flow is honest; a wrong attacker is not.
+An unattributed flow is honest; a wrong attacker is not. Since #3573 the join
+answers only within a few seconds of the connection's start and refuses when
+two clients fit; every tunnel event carries `honeypot.tunnel_attribution`
+(`portbridge` / `ambiguous` / `unmatched`) and attributed ones keep the
+observed peer in `honeypot.fleet_peer`. Rule, failure history and the
+backfill runbook: [TUNNEL-ATTRIBUTION.md](TUNNEL-ATTRIBUTION.md).
 
 ### 1b. Enrichment: the `geoip-honeypot` ingest pipeline
 

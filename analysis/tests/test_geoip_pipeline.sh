@@ -543,5 +543,72 @@ result="$(simulate_community_id "$tmp/no_src_port.json")"
   fail "a community_id was invented without a source port (got '${result%%|*}')"
 pass "no source port means no community_id, rather than a wrong one"
 
+# #3560: source.ip is promoted ONCE, at write time, from the same candidates
+# and by the same rules as backend-service/src/events.rs::attacker_ip /
+# is_fleet_address, so read-time and write-time agree and aggregations keyed on
+# source.ip see the attacker. Candidate order: an existing non-fleet
+# source.ip, honeypot.src_ip, then dionaea's data.connection / data.parent /
+# data.child remote_ip -- the FIRST NON-FLEET one wins (a fleet src_ip must not
+# shadow a public nested address). The fleet address that was passed over is
+# kept in honeypot.fleet_peer; a promotion is tagged source_ip_promoted.
+simulate_src() {
+  # simulate_src <fixture-file> -> "source.ip|fleet_peer|tags|dest.port"
+  curl -fsS -X POST "$es_url/_ingest/pipeline/geoip-honeypot/_simulate" \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$1" |
+    python3 -c "
+import json, sys
+d = json.load(sys.stdin)['docs'][0]['doc']['_source']
+print('|'.join([
+    d.get('source', {}).get('ip', ''),
+    d.get('honeypot', {}).get('fleet_peer', ''),
+    # the test cluster has no GeoLite2 files; geoip adds its own _geoip_* tags
+    ','.join(x for x in d.get('tags', []) if not x.startswith('_geoip')),
+    str(d.get('destination', {}).get('port', '')),
+]))
+"
+}
+expect_src() {
+  # expect_src <name> <document-json> <expected "ip|peer|tags|port">
+  printf '{"docs":[{"_source":%s}]}' "$2" > "$tmp/src_case.json"
+  got="$(simulate_src "$tmp/src_case.json")"
+  [ "$got" = "$3" ] || fail "$1 (got '$got', want '$3')"
+  pass "$1"
+}
+
+expect_src "cowrie with only honeypot.src_ip is promoted to source.ip and tagged" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"203.0.113.10"}}' \
+  "203.0.113.10||source_ip_promoted|"
+expect_src "dionaea nested connection.remote_ip is promoted, with its local port" \
+  '{"honeypot":{"sensor":"dionaea","data":{"connection":{"remote_ip":"203.0.113.11","local_port":5060,"transport":"udp"}}}}' \
+  "203.0.113.11||source_ip_promoted|5060"
+expect_src "a fleet src_ip does not shadow a public nested remote_ip; the peer is kept" \
+  '{"honeypot":{"sensor":"dionaea","src_ip":"10.0.0.1","data":{"connection":{"remote_ip":"203.0.113.12","local_port":5060}}}}' \
+  "203.0.113.12|10.0.0.1|source_ip_promoted|5060"
+expect_src "a fleet connection.remote_ip does not shadow a public parent remote_ip" \
+  '{"honeypot":{"sensor":"dionaea","data":{"connection":{"remote_ip":"10.0.0.1"},"parent":{"remote_ip":"203.0.113.13"}}}}' \
+  "203.0.113.13|10.0.0.1|source_ip_promoted|"
+expect_src "a tunnel-peer-only document stays without a source.ip, peer recorded" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"10.0.0.1"}}' \
+  "|10.0.0.1||"
+expect_src "a private-only document is unchanged (no source.ip)" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"192.168.1.5"}}' \
+  "|192.168.1.5||"
+expect_src "a fleet source.ip is dropped, not kept (loopback /8, like is_fleet_address)" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"127.0.0.2"},"source":{"ip":"127.0.0.2"}}' \
+  "|127.0.0.2||"
+expect_src "an existing public source.ip is kept untouched and not re-tagged" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"10.0.0.1"},"source":{"ip":"203.0.113.14"}}' \
+  "203.0.113.14|||"
+expect_src "IPv6 unique-local is fleet, a public IPv6 nested address wins" \
+  '{"honeypot":{"sensor":"dionaea","src_ip":"fd12::1","data":{"parent":{"remote_ip":"2001:db8::1"}}}}' \
+  "2001:db8::1|fd12::1|source_ip_promoted|"
+expect_src "172.16/12 is fleet, 172.32.x is not" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"172.31.0.9","data":{"connection":{"remote_ip":"172.32.0.9"}}}}' \
+  "172.32.0.9|172.31.0.9|source_ip_promoted|"
+expect_src "re-running on an already-promoted document is idempotent" \
+  '{"honeypot":{"sensor":"cowrie","src_ip":"203.0.113.10"},"source":{"ip":"203.0.113.10"},"tags":["source_ip_promoted"]}' \
+  "203.0.113.10||source_ip_promoted|"
+
 echo
 echo "all geoip-honeypot pipeline tests passed"

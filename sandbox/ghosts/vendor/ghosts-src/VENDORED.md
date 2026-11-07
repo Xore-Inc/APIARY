@@ -191,3 +191,12 @@ dependency in this repo) — bump it by hand:
    and re-run the enrollment smoke test
    (`docker compose --profile test run ghosts-client-test`) before trusting
    the bump.
+
+## Dockerfile-api base-image pin (#3667)
+
+`Dockerfile-api`'s `FROM mcr.microsoft.com/dotnet/sdk:10.0` was a floating
+tag the base-image CVE gate could not pin or exempt. It is now
+`mcr.microsoft.com/dotnet/sdk:10.0.402@sha256:0d99ebf1…`, the same digest
+`sandbox/ghosts/Dockerfile.api-prep` uses. That is the only line changed
+in `Dockerfile-api`. The build that actually runs is `Dockerfile.api-prep`,
+which copies these sources and does not depend on this stage.

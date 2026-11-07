@@ -1,0 +1,17 @@
+# Self-hosted runner units on precision (2026-10-10), all enabled and running.
+# Re-create with scripts/github-ci-runner/install-ci-runner.sh; reuse the existing
+# registrations. Working directories live on the bind mount /var/lib/github-runners
+# (precision-fstab.fragment), so they must be mounted before these start.
+# unit                                                        user                       working directory
+actions.runner.Xore-APIARY.precision-ci.service               github-ci-runner           /var/lib/github-runners/github-ci-runner
+actions.runner.Xore-APIARY.precision-ci-2.service             github-ci-runner-2         /var/lib/github-runners/github-ci-runner-2
+actions.runner.Xore-APIARY.precision-ci-3.service             github-ci-runner-3         /var/lib/github-runners/github-ci-runner-3
+actions.runner.Xore-Inc-APIARY.precision-ci-4.service         github-ci-runner-4         /var/lib/github-runners/github-ci-runner-4
+actions.runner.Xore-apiary-dashboard.precision-dashboard-1.service  github-dashboard-runner-1  /var/lib/github-runners/github-dashboard-runner-1
+actions.runner.Xore-apiary-dashboard.precision-dashboard-2.service  github-dashboard-runner-2  /var/lib/github-runners/github-dashboard-runner-2
+actions.runner.Xore-apiary-dashboard.precision-dashboard-3.service  github-dashboard-runner-3  /var/lib/github-runners/github-dashboard-runner-3
+actions.runner.Xore-apiary-dashboard.precision-dashboard-4.service  github-dashboard-runner-4  /var/lib/github-runners/github-dashboard-runner-4
+actions.runner.Xore-apiary-dashboard.precision-dashboard-5.service  github-dashboard-runner-5  /var/lib/github-runners/github-dashboard-runner-5
+actions.runner.Xore-apiary-dashboard.precision-dashboard-6.service  github-dashboard-runner-6  /var/lib/github-runners/github-dashboard-runner-6
+# Registry mirror: ci-registry-mirror.service (scripts/github-ci-runner/install-registry-mirror.sh),
+# published on the docker0 gateway 172.16.0.1:5555 only, never on the LAN.

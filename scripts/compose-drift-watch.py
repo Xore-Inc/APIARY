@@ -162,8 +162,17 @@ def is_regular_file(path: Path) -> bool:
     caller's `except PermissionError` is dead code and the stacks this
     script exists to watch get silently dropped. stat() directly, so EACCES
     reaches the caller as PermissionError and the two-tier privileged
-    fallback below can actually engage."""
-    return stat.S_ISREG(path.stat().st_mode)
+    fallback below can actually engage.
+
+    The other side of that contract is absence: a missing path
+    (FileNotFoundError) or a path whose parent is not a directory
+    (NotADirectoryError) returns False. A stack dir with no compose file
+    (#3651: the live honeypot-stack dir is empty) is "not a project", not
+    a crash that aborts the whole sweep."""
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
 
 
 def project_dirs(stacks_root: Path) -> list[Path]:

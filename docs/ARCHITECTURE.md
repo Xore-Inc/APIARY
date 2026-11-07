@@ -196,6 +196,7 @@ retention for all of them
 | dashboard-rollups | `honeypot-dashboard` `WORKER_LOOPS` | raw event indices | `overview/geo/attack-rollup-v1` |
 | threat-intel | `honeypot-dashboard` `WORKER_LOOPS` | raw events, `threat-cidrs.csv` | `source.as.type` in place |
 | zeek-proxy-attribution | `honeypot-dashboard` `WORKER_LOOPS` | zeek flows + portbridge log | flow documents |
+| workbench-reconcile | `honeypot-dashboard` `WORKER_LOOPS` on `backend-worker` (homeserver; was `backend-service-mounted` until #3685) | `dashboard-workbench-runs-v1`, analyzer request/result spools (read-only mounts) | `dashboard-workbench-runs-v1` (CAS) |
 | payload-inventory | `backend-worker-payload-inventory` | payload dirs on disk | `dashboard-payload-{inventory,bytes}-v1` |
 | es-results-importer | `backend-worker-importer` | root-owned result spools | `*-analysis-v1` |
 | ip-enrichment | `backend-worker-enrichment` (`network_mode: none`) | raw sensor logs | `logs/enriched/*.json` |
@@ -402,7 +403,7 @@ flowchart TB
   subgraph stack["honeypot-dashboard"]
     fe["frontend-next :19090<br/>TanStack Start (Node cluster)<br/>server functions · SSE hub · BFF cookie"]
     bsm["backend-service-mounted :8082<br/>same route table + host spool mounts<br/>write-capable instance"]
-    loops["backend-worker loops<br/>role picked by WORKER_LOOPS:<br/>alert-notifier · attacker-identity ·<br/>agent-intrusion · correlator · dashboard-rollups ·<br/>threat-intel · zeek-proxy-attribution"]
+    loops["backend-worker loops<br/>role picked by WORKER_LOOPS:<br/>alert-notifier · attacker-identity ·<br/>agent-intrusion · correlator · dashboard-rollups ·<br/>threat-intel · workbench-reconcile · zeek-proxy-attribution"]
     imp["backend-worker importer<br/>es-results-importer, shard-partitionable"]
     enr["backend-worker-enrichment<br/>network_mode: none — via_port join"]
     redis[("oidc-sessions<br/>valkey")]

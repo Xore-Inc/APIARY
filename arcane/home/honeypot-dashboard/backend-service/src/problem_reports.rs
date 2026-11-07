@@ -217,9 +217,13 @@ async fn button_enabled(state: &AppState) -> bool {
 /// still work.
 pub async fn submit(
     State(state): State<AppState>,
-    Query(actor): Query<ActorQuery>,
+    binding: crate::trust::ActorBinding,
+    Query(mut actor): Query<ActorQuery>,
     Json(input): Json<Submission>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, String)> {
+    (actor.actor_subject, actor.actor_username) = binding.bind_pair(&actor.actor_subject, &actor.actor_username)?;
+    actor.actor_display_name =
+        binding.bind("actor_display_name", crate::trust::ActorField::DisplayName, &actor.actor_display_name)?;
     if !button_enabled(&state).await {
         return Err((StatusCode::NOT_FOUND, "the report-a-problem feature is disabled on this dashboard".into()));
     }

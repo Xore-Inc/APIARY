@@ -7,40 +7,19 @@
 # fix, just slower -- an unbounded cache on /var eventually starves
 # whatever else is on that filesystem (including /var/benchmarks).
 #
-# Strategy: OCI local-cache layout is content-addressed
-# (blobs/sha256/<digest>), so a blob's mtime only changes when it is
-# written -- BuildKit does not touch it on a cache-from read. That makes
-# mtime a reasonable staleness signal: a blob nothing has exported in
-# PRUNE_DAYS days is one no recent build layer references. Delete those,
-# then enforce a hard per-image ceiling -- by clearing the directory
-# outright rather than trimming it, for the reason spelled out at the
-# ceiling pass below. The age-based pass never touches index.json /
-# ingest -- those are tiny and BuildKit regenerates or rewrites them on
-# every export.
+# Never delete individual blobs by age: an old blob may still be referenced
+# by the current index. Reset the whole cache only when it exceeds the cap.
 #
 # Usage: prune-buildx-cache.sh <cache-dir>
 set -euo pipefail
 
 dir=${1:?usage: prune-buildx-cache.sh <cache-dir>}
-PRUNE_DAYS=${PRUNE_DAYS:-14}
 MAX_BYTES=${MAX_BYTES:-$((2 * 1024 * 1024 * 1024))}  # 2 GiB per image
 
 [ -d "$dir" ] || { echo "prune-buildx-cache: $dir does not exist, nothing to do"; exit 0; }
-blobs="$dir/blobs/sha256"
-[ -d "$blobs" ] || { echo "prune-buildx-cache: no $blobs yet, nothing to do"; exit 0; }
 
 before=$(du -sb "$dir" 2>/dev/null | cut -f1)
 echo "prune-buildx-cache: $dir before: ${before:-0} bytes"
-
-# Age-based pass. Oldest-blob deletion is safe here only in the weak sense
-# that it cannot HARD-fail a build: measured 2026-09-02, removing one blob
-# a manifest references makes BuildKit emit
-#   WARNING: local cache import at <dir> skipped: digest sha256:... unavailable
-# and build on with EXIT=0. But note what that warning says -- it skips the
-# WHOLE import, not the missing layer. So a partially-pruned directory is
-# worth nothing and still occupies disk, which is why the ceiling pass below
-# resets rather than nibbles.
-find "$blobs" -type f -mtime "+$PRUNE_DAYS" -print0 | xargs -0 -r rm -f --
 
 # Hard-ceiling pass: whole-directory reset, not oldest-blob-at-a-time.
 #
@@ -64,21 +43,7 @@ fi
 after=$(du -sb "$dir" 2>/dev/null | cut -f1)
 echo "prune-buildx-cache: $dir after: ${after:-0} bytes"
 
-# Re-grant group write across the whole cache dir. The workflow sets
-# umask 002 before mkdir, but that only governs the workflow's own shell:
-# BuildKit writes index.json / oci-layout / blobs from inside its
-# buildkitd container under that container's umask, so the files land
-# group-read-only. /var/buildx-cache carries a default ACL
-# (group:github-ci-runner:rwx), but an inherited entry is still ANDed with
-# the creating process's umask, which collapses the ACL mask to r-- and
-# leaves every runner user except the one that wrote the file unable to
-# build the next image that shares this cache dir:
-#
-#   ERROR: failed to build: open /var/buildx-cache/<image>/oci-layout: permission denied
-#
-# Seven runner users share this directory and any of them can take any
-# matrix row, so the last writer must not own it exclusively. chmod is
-# idempotent and cheap next to the du -sb passes above; without it the
-# cache is poisoned for whichever runner does not happen to build next.
+# BuildKit may narrow group permissions despite the workflow's umask 002;
+# retain group access for cache repair and a replacement runner account.
 chmod -R g+rwX "$dir" 2>/dev/null || true
 find "$dir" -type d -exec chmod g+s {} + 2>/dev/null || true

@@ -19,6 +19,7 @@ COPY smb_exploit_patch.py /tmp/smb_exploit_patch.py
 COPY sip_patch.py /tmp/sip_patch.py
 COPY log_rotation_patch.py /tmp/log_rotation_patch.py
 COPY store_acl_patch.py /tmp/store_acl_patch.py
+COPY mssql_patch.py /tmp/mssql_patch.py
 RUN python3 /tmp/tftp_patch.py \
     && python3 /tmp/printer_patch.py \
     && python3 /tmp/ftp_patch.py \
@@ -26,4 +27,5 @@ RUN python3 /tmp/tftp_patch.py \
     && python3 /tmp/sip_patch.py \
     && python3 /tmp/log_rotation_patch.py \
     && python3 /tmp/store_acl_patch.py \
-    && rm /tmp/tftp_patch.py /tmp/printer_patch.py /tmp/ftp_patch.py /tmp/smb_exploit_patch.py /tmp/sip_patch.py /tmp/log_rotation_patch.py /tmp/store_acl_patch.py
+    && python3 /tmp/mssql_patch.py \
+    && rm /tmp/tftp_patch.py /tmp/printer_patch.py /tmp/ftp_patch.py /tmp/smb_exploit_patch.py /tmp/sip_patch.py /tmp/log_rotation_patch.py /tmp/store_acl_patch.py /tmp/mssql_patch.py

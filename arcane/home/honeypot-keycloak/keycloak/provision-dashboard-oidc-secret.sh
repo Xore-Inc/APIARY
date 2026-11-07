@@ -16,6 +16,13 @@
 # have restart: unless-stopped, so writing the file here is enough --
 # no need to also restart them, their own crash-restart loop picks it up.
 #
+# #3578: DASHBOARD_CLIENT_ID selects the client (default apiary-dashboard). The
+# rewrite dashboard's client is apiary-dashboard-rewrite, and its secret file
+# lives in the apiary-dashboard Arcane project:
+#   DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite \
+#   DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
+#     ./provision-dashboard-oidc-secret.sh
+#
 # Run on the homeserver (needs docker exec access to hp-keycloak).
 set -euo pipefail
 
@@ -23,6 +30,7 @@ REALM="${KEYCLOAK_REALM:-apiary}"
 KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
 KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-provision-dashboard-oidc-secret.config}"
 SECRETS_DIR="${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/honeypot-dashboard/secrets}"
+CLIENT_ID="${DASHBOARD_CLIENT_ID:-apiary-dashboard}"
 KC="/opt/keycloak/bin/kcadm.sh"
 
 : "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
@@ -39,8 +47,8 @@ cleanup() { docker exec "$KC_CONTAINER" rm -f "$KC_CONFIG" >/dev/null 2>&1 || tr
 trap cleanup EXIT
 
 client_uuid="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-  -q "clientId=apiary-dashboard" --fields id --format csv --noquotes --config "$KC_CONFIG")"
-[[ -n "$client_uuid" ]] || { echo "apiary-dashboard client not found in realm $REALM -- import the realm first" >&2; exit 1; }
+  -q "clientId=${CLIENT_ID}" --fields id --format csv --noquotes --config "$KC_CONFIG")"
+[[ -n "$client_uuid" ]] || { echo "${CLIENT_ID} client not found in realm $REALM -- import the realm first" >&2; exit 1; }
 
 secret="$(docker exec "$KC_CONTAINER" "$KC" get \
   "clients/${client_uuid}/client-secret" -r "$REALM" --config "$KC_CONFIG" \

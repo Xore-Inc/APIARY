@@ -25,7 +25,7 @@
 # guard in rex86_common.sh -- do not run two of them at once.
 services:
   rex86-eval:
-    image: nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5
+    image: nvidia/cuda:13.4.3-devel-ubuntu24.04@sha256:5626a7d0ecafe3e7c115a452f6b05f20f214f8509346196a7835b205dc5b7fd9
     container_name: rex86-eval
     working_dir: /work
     shm_size: "16gb"

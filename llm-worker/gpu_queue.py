@@ -99,7 +99,7 @@ def _raw_request(es_host: str, method: str, path: str, data: bytes | None) -> tu
     # with `-w` hangs waiting for a body a HEAD response never sends --
     # curl's actual HEAD flag (`-I`) doesn't have that problem, confirmed
     # live; every other verb goes through `-X` as normal.
-    cmd = ["docker", "run", "--rm", "--network", "honeynet", "curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777", "-s"]
+    cmd = ["docker", "run", "--rm", "--network", "honeynet", "curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac", "-s"]
     if method == "HEAD":
         cmd += ["-I", "-o", "/dev/null", "-w", "%{http_code}"]
     else:

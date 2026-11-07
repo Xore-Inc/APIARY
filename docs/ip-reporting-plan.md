@@ -49,7 +49,7 @@ blocklists via their APIs.
 | Service | API | Free tier | Best for |
 |---|---|---|---|
 | **AbuseIPDB** | `POST /api/v2/reports` | 1 000 reports/day | General abuse, SSH, HTTP scans |
-| **Blocklist.de** | `POST https://api.blocklist.de/api` | Unlimited | Traditional fail2ban-style reporting |
+| **Blocklist.de** | `POST https://www.blocklist.de/en/httpreports.html` | Unlimited | Traditional fail2ban-style reporting |
 | **GreyNoise RIOT** | Read-only free tier | — | Cross-check before reporting (avoid FP) |
 
 Primary target: **AbuseIPDB** — widely used, has a public confidence score, and feeds back into many firewall blocklists automatically.
@@ -66,16 +66,16 @@ flowchart TD
     Blocklist["Blocklist.de"]
     GreyNoise["GreyNoise RIOT<br/>(read-only pre-check)"]
 
-    Sensors -->|"JSON event logs on the shared Docker volumes, tailed —<br/>not Redis pub-sub; see 'Resolved design decisions'"| Reporter
+    Sensors -->|"JSON event logs on the shared host bind, tailed —<br/>not Redis pub-sub; see 'Resolved design decisions'"| Reporter
     Reporter -->|"POST /api/v2/reports"| AbuseIPDB
-    Reporter -->|"POST /api"| Blocklist
+    Reporter -->|"POST /en/httpreports.html"| Blocklist
     Reporter -->|"GET /v3/riot/{ip}"| GreyNoise
     AbuseIPDB -->|optional| Blocklist
 ```
 
 The `reporter` container:
-- Watches the same log/event volume already mounted by the `analysis` and `ml-worker` containers
-- Maintains a local SQLite DB (`/data/reported.db`) to deduplicate IPs per service per 24 h
+- Watches the shared sensor-log host bind `/opt/stacks/apiary/logs:/logs:ro`, not per-sensor in-container paths
+- Maintains a local SQLite DB (`reporter-data:/data` → `/data/reported.db`) to deduplicate IPs per service per 24 h
 - Exposes no HTTP listener at all: Phase 4 writes a `metrics.json` snapshot into the
   data volume on an interval instead (see the status banner's Phase 4 note)
 
@@ -83,13 +83,13 @@ The `reporter` container:
 
 ## Log Sources per Sensor
 
-| Sensor | Log path (inside container) | Event format |
+| Sensor | Log path (inside the reporter container) | Event format |
 |---|---|---|
-| cowrie | `/cowrie/var/log/cowrie/cowrie.json` | JSON lines |
-| dionaea | `/opt/dionaea/var/log/dionaea/` | JSON / SQLite |
-| conpot | `/var/log/conpot/` | JSON lines |
-| http-honeypot | stdout JSON | JSON lines |
-| dnp3-honeypot | stdout JSON | JSON lines |
+| cowrie | `/logs/cowrie/cowrie.json` | JSON lines |
+| dionaea | `/logs/dionaea/dionaea.json` | JSON lines |
+| conpot | `/logs/conpot/conpot.json` | JSON lines |
+| http-honeypot | `/logs/http-honeypot/http.json` | JSON lines |
+| dnp3-honeypot | `/logs/dnp3/dnp3.json` | JSON lines |
 | snare/tanner | tanner REST API | JSON |
 
 All sensors already write structured JSON. The reporter will tail these files (or consume Redis events if the stack is extended to pub-sub).

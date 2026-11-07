@@ -81,12 +81,14 @@ in a port-binding position, remote build contexts pinned to a Git tag, the
 sync file-count limit, and stale project records after a `destroy` call
 all have confirmed workarounds documented there). Those were each confirmed
 against `v2.8.0`–`v2.9.0`; `docker-compose.arcane.yml` now pins
-`manager:v2.11.1`, and none of them has been re-confirmed against that
+`manager:v2.17.0`, and none of them has been re-confirmed against that
 image — its own section header says to re-verify on upgrade.
 
 ## WireGuard addressing
 
 The examples reserve `10.8.0.1` for the VPS and `10.8.0.2` for the home server.
+`10.8.0.3` is reserved for precision, and the homeserver ↔ precision fibre
+tunnel uses `10.8.1.0/30`; see [SWARM-NETWORK.md](SWARM-NETWORK.md).
 Change the subnet consistently if it conflicts with an existing network.
 Sensors bind `HP_BIND=10.8.0.2`, never the home LAN address. The VPS gateway is
 the only internet-facing component.
@@ -233,6 +235,13 @@ intervention.
 > WireGuard peer entry for home starts as a placeholder that
 > `install-homeserver.sh`'s `step_wireguard_sync_vps_peer` fills in once the
 > home side exists).
+>
+> The VPS hub `wg0` carries every spoke in
+> [`ops/swarm/hosts/hub-peers.txt`](../ops/swarm/hosts/hub-peers.txt): homeserver
+> and precision (#3619). On a rebuild, restore `/etc/wireguard` from the backup
+> (`vps/wireguard/`) before running the script. Otherwise the precision spoke is
+> skipped with a warning and has to be re-added with
+> `ops/swarm/vps-hub-peer.sh add` ([ops/swarm/README.md](../ops/swarm/README.md)).
 
 1. Move real admin SSH to `2222` first, so cowrie can own `22` — confirm
    `2222` works before continuing. There is no script for this step; do it

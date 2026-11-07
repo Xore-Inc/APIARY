@@ -94,7 +94,7 @@ per runner user:
 
 | directory | holds | bounded by |
 |---|---|---|
-| `/var/buildx-cache/<image>` | that image's `type=local` buildx layer cache (#2822) | `scripts/prune-buildx-cache.sh`, 14 days / 2 GiB per image |
+| `/var/buildx-cache/<runner>/<image>` | that runner's image-specific `type=local` buildx layer cache (#2822, #3605) | `scripts/prune-buildx-cache.sh`, 2 GiB per runner/image |
 | `/var/image-sbom/<image>` | the digest-keyed CycloneDX SBOMs for the two dashboard images (#3321) | `scripts/prune-image-sbom.sh`, 10 records per image |
 
 Neither is in the `/mnt-1` compatibility symlink list above: both were added

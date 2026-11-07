@@ -12,6 +12,8 @@ kind of truth it holds.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | system design: two-machine topology, trust boundaries, the dashboard tier, correlation surfaces, sandbox routes |
 | [PIPELINES.md](PIPELINES.md) | data flow: ingestion → enrichment → indexing → worker loops → dashboard reads; payload lifecycle; full index catalog |
 | [NETWORK.md](NETWORK.md) | network design: CGNAT pattern, ingress paths, source attribution, per-sensor isolation, Docker control surface |
+| [SWARM-NETWORK.md](SWARM-NETWORK.md) | swarm network: WireGuard hub-and-spoke and fibre decisions, addressing and MTU, flow matrix, failure modes, swarm-plane firewall and rollback |
+| [SWARM-GPU.md](SWARM-GPU.md) | swarm phase 7: the homeserver GPU as a generic resource, runtime config, GPU stack lint, which GPU services become stacks, rollout after the benchmark |
 | [STORAGE.md](STORAGE.md) | storage: host tree contract, who-writes/who-reads, Elasticsearch layout, retention and growth bounds |
 
 ## Runbooks — how to operate it
@@ -22,8 +24,10 @@ kind of truth it holds.
 | [STACK-REBUILD.md](STACK-REBUILD.md) | rebuilding or migrating an Arcane-managed stack |
 | [RECOVERY.md](RECOVERY.md) | something is down |
 | [BACKUP-ESSENTIALS.md](BACKUP-ESSENTIALS.md) | backup scope and restore expectations |
+| [HOMESERVER-VAR-RECOVERY.md](HOMESERVER-VAR-RECOVERY.md) | the homeserver's `/var` is lost: rebuild the disk, restore, bring the stacks, runners and Swarm back (worked from #3708) |
 | [CONTAINER-UPDATES.md](CONTAINER-UPDATES.md) | updating images without breaking pinned contracts |
 | [KEYCLOAK-OPERATIONS.md](KEYCLOAK-OPERATIONS.md) | identity-tier administration |
+| [BACKEND-TRUST-BOUNDARY.md](BACKEND-TRUST-BOUNDARY.md) | backend credentials, actor assertions, enforcement modes; install/rotate/revoke/rollback |
 | [vps/SSH-ACCESS.md](vps/SSH-ACCESS.md) | VPS admin SSH key inventory; the direct alias vs. the homeserver-hop route |
 | [CI-CD.md](CI-CD.md) | how CI validates and ships changes |
 | [TESTING.md](TESTING.md) | test surfaces per tier |
@@ -50,6 +54,7 @@ homeserver — how it runs, its config shape, and a host-side inotify finding).
 [deception extensions](DECEPTION-EXTENSIONS.md) ·
 [FMC management-audit contract (#3215: specified, not built)](FMC-MANAGEMENT-AUDIT-CONTRACT.md) ·
 [GeoIP/threat intel](GEOIP-THREAT-INTEL.md) ·
+[tunnel attribution (portbridge join, #3573)](TUNNEL-ATTRIBUTION.md) ·
 [payload workbench](payload-analysis-workbench.md) ·
 [network isolation](honeypot-network-isolation.md) ·
 [agent-intrusion threat model](agent-intrusion-threat-model.md) ·

@@ -23,8 +23,15 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
+
+// defaultMaxInflight is deliberately small: galah caches responses, so the
+// broker sees only first-time request shapes, and a model on one GPU serves
+// a handful of them at once at best. Anything past this is better refused
+// than queued (#3666).
+const defaultMaxInflight = 4
 
 var allowedPaths = map[string]bool{
 	"/api/generate": true,
@@ -36,14 +43,17 @@ func main() {
 	listen := envOr("LISTEN_ADDR", ":11434")
 	maxBody := envIntOr("MAX_BODY_BYTES", 65536)
 	upstreamTimeout := time.Duration(envIntOr("UPSTREAM_TIMEOUT_SECONDS", 8)) * time.Second
+	// #3666: bounded concurrency towards Ollama. 0 or negative disables the
+	// cap (the pre-#3666 behaviour).
+	maxInflight := envIntOr("MAX_INFLIGHT", defaultMaxInflight)
 
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		log.Fatalf("galah-llm-broker: invalid OLLAMA_URL %q: %s", target, err)
 	}
 
-	log.Printf("galah-llm-broker: listening on %s, forwarding to %s (max body %d bytes, upstream timeout %s)", listen, target, maxBody, upstreamTimeout)
-	log.Fatal(http.ListenAndServe(listen, newHandler(targetURL, int64(maxBody), upstreamTimeout)))
+	log.Printf("galah-llm-broker: listening on %s, forwarding to %s (max body %d bytes, upstream timeout %s, max in-flight %d)", listen, target, maxBody, upstreamTimeout, maxInflight)
+	log.Fatal(http.ListenAndServe(listen, newHandler(targetURL, int64(maxBody), upstreamTimeout, maxInflight)))
 }
 
 // newHandler builds the proxy main() serves. It lives outside main() so
@@ -56,15 +66,49 @@ func main() {
 // (#3448; see injection.go). Classification is read-only: body is forwarded
 // as the exact bytes galah sent, and neither the status nor the body this
 // handler relays is influenced by what the classifier found.
-func newHandler(target *url.URL, maxBody int64, upstreamTimeout time.Duration) http.Handler {
+//
+// maxInflight bounds how many requests are being forwarded to Ollama at
+// once (#3666). Ollama queues what it cannot run yet, and a client that
+// gives up does not shorten that queue: requests sat behind a benchmark for
+// over ten hours. So when every slot is taken the next request is answered
+// at once with 503 instead of joining the queue. A slot is held from
+// admission until the handler returns, and the upstream request carries the
+// inbound request's context, so a client that disconnects cancels the
+// upstream call and frees its slot immediately. maxInflight <= 0 disables
+// the cap.
+func newHandler(target *url.URL, maxBody int64, upstreamTimeout time.Duration, maxInflight int) http.Handler {
 	client := &http.Client{Timeout: upstreamTimeout}
 	injection := injectionShapesFromEnv()
+	var slots chan struct{}
+	if maxInflight > 0 {
+		slots = make(chan struct{}, maxInflight)
+	}
+	var rejected atomic.Int64
+	var lastLog atomic.Int64
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !allowedPaths[r.URL.Path] {
 			http.NotFound(w, r)
 			return
+		}
+
+		if slots != nil {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			default:
+				n := rejected.Add(1)
+				// An attacker can drive this path, so log at most once a
+				// second, with the number refused since the last line.
+				now := time.Now().Unix()
+				if last := lastLog.Load(); last != now && lastLog.CompareAndSwap(last, now) {
+					log.Printf("galah-llm-broker: saturated, refusing with 503 (all %d slots in flight, %d refused so far)", cap(slots), n)
+				}
+				w.Header().Set("Retry-After", "5")
+				http.Error(w, "llm backend saturated", http.StatusServiceUnavailable)
+				return
+			}
 		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, maxBody)

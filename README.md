@@ -123,6 +123,7 @@ for where those fit.
 | [docs/CI-CD.md](docs/CI-CD.md) | Repository automation, deployment environments, runner setup |
 | [docs/CONTAINER-UPDATES.md](docs/CONTAINER-UPDATES.md) | How to check pinned images for updates, assess compatibility, verify empirically, and pin by digest |
 | [docs/TESTING.md](docs/TESTING.md) | The three testing tiers -- CI, live feature smoke tests, and the full clean-reinstall release gate -- and how to repeat each one |
+| [docs/HOMESERVER-VAR-RECOVERY.md](docs/HOMESERVER-VAR-RECOVERY.md) | Runbook for a homeserver whose `/var` was lost — diagnose, re-create the filesystem, restore the essentials archive, rebuild Arcane/Keycloak/ELK/stacks/runners, recover Swarm quorum, verify; includes the #3708 incident record |
 | [docs/STACK-REBUILD.md](docs/STACK-REBUILD.md) | Runbook for a full deliberate reset — stop order, what's preserved vs wiped, and the ordering/permission pitfalls to avoid |
 | [deploy-profiles/](deploy-profiles/) | Named deployment shapes (full / ICS-only / web-only) — which of the 26 split home stacks run for a given deployment, plus a validator catching cross-stack drift before deploy |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | `factory-reset.sh` — one entry point for "back up, optionally wipe/reset, restart" on the same host |

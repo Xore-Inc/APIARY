@@ -12,13 +12,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::audit::AuditEvent;
-use crate::payload_paths::resolve_payload_path;
+use crate::host_fs::{host, Root};
+use crate::payload_paths::resolve_payload;
 use crate::sandbox_submit::create_request_marker;
 use crate::AppState;
-
-pub fn github_analysis_request_dir() -> String {
-    std::env::var("GITHUB_ANALYSIS_REQUEST_DIR").unwrap_or_default()
-}
 
 #[derive(Deserialize)]
 pub struct SubmitBody {
@@ -57,7 +54,18 @@ fn audit(state: &AppState, body: &SubmitBody, hash: &str, result: &str) {
     ),
     security(("serviceToken" = [])),
 )]
-pub async fn submit(State(state): State<AppState>, Json(body): Json<SubmitBody>) -> (StatusCode, Json<Value>) {
+pub async fn submit(
+    State(state): State<AppState>,
+    binding: crate::trust::ActorBinding,
+    Json(mut body): Json<SubmitBody>,
+) -> (StatusCode, Json<Value>) {
+    match binding.bind_pair(&body.actor_subject, &body.actor_username) {
+        Ok(pair) => (body.actor_subject, body.actor_username) = pair,
+        // Unreachable behind the trust middleware, which refuses a mutation
+        // without an assertion before this runs; kept so the field can
+        // never be believed without one.
+        Err(refusal) => return (StatusCode::UNAUTHORIZED, Json(json!({"error": refusal.0}))),
+    }
     let hash = body.hash.to_lowercase();
     if !crate::payload_paths::is_valid_hash(&hash) {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid payload hash"})));
@@ -69,22 +77,21 @@ pub async fn submit(State(state): State<AppState>, Json(body): Json<SubmitBody>)
             Json(json!({"error": "confirmation required: this publishes the sample externally"})),
         );
     }
-    if resolve_payload_path(&hash).is_err() {
+    if resolve_payload(&hash).is_err() {
         audit(&state, &body, &hash, "not_found");
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "captured payload not found"})),
         );
     }
-    let dir = github_analysis_request_dir();
-    if dir.is_empty() {
+    if !host().configured(Root::GithubAnalysisRequests) {
         audit(&state, &body, &hash, "not_configured");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "GitHub analysis publishing is not configured on this host"})),
         );
     }
-    match create_request_marker(&dir, &hash) {
+    match create_request_marker(Root::GithubAnalysisRequests, &hash) {
         Ok(()) => {
             audit(&state, &body, &hash, "queued");
             (StatusCode::OK, Json(json!({"queued": true})))

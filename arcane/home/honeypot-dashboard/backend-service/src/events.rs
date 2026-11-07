@@ -92,7 +92,7 @@ pub struct EventsQuery {
     pub org: Option<String>,
     /// Provider class (source.as.type).
     pub provider: Option<String>,
-    /// IDS alert signature (suricata.eve.alert.signature).
+    /// IDS alert signature, exact match (suricata.eve.alert.signature.keyword).
     pub sig: Option<String>,
     /// Detection category (suricata alert category or honeypot.category).
     pub cat: Option<String>,
@@ -245,6 +245,33 @@ pub struct EventRow {
     pub src_ip: String,
     pub country: String,
     pub port: String,
+    /// Source port of the attacker's connection, from `source.port`, or the
+    /// Suricata alert's own `src_port` when that is all the document has.
+    ///
+    /// Absent when no document carries one, and absent when the row has no
+    /// attacker address to attach it to: a fleet-address row's port belongs
+    /// to the tunnel peer, not to anyone the analyst should be looking at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src_port: Option<u16>,
+    /// City from `source.geo.city_name`. Absent when the address did not
+    /// resolve to a city; the country code is always on the row separately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    /// Normalized severity: "high", "medium" or "low". Absent when the event
+    /// carries no rating, which is most events: the honeypots write none of
+    /// their own. See `severity_from_source` for the mapping. It is never
+    /// defaulted to a value for an unrated event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<&'static str>,
+    /// Normalized event kind: "connection", "login", "command", "download",
+    /// "http" or "alert". Absent when the producer's own event name does not
+    /// map onto one of these. See `kind_from_source` for the mapping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    /// MITRE ATT&CK technique ids the rule that fired assigned to this event,
+    /// e.g. "T1190". Empty (and omitted) when no rule assigned one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub techniques: Vec<String>,
     pub proto: String,
     pub detail: String,
     pub session: String,
@@ -458,6 +485,100 @@ fn since_to_range(since: &Option<String>) -> String {
     }
 }
 
+/// Normalized severity, from a rating the producer actually wrote.
+///
+/// - Suricata `suricata.eve.alert.severity`: 1 -> "high", 2 -> "medium",
+///   3 -> "low". This is Suricata's own convention, where 1 is the most
+///   severe. Any other number is unrated.
+/// - DNP3 control functions: the `ics_severity` already computed from
+///   `honeypot.app_function` ("critical" or "high"), mapped unchanged.
+///
+/// event_detail.rs labels the same numbers critical/major/minor for the
+/// detail text; the row uses high/medium/low because that is the vocabulary
+/// the dashboard's severity badge and filter expect.
+///
+/// The honeypot sensors write no rating of their own (no `event.severity`,
+/// no `honeypot.severity` in the index), so their rows are unrated.
+pub(crate) fn severity_from_source(src: &Value, pivots: &EventPivots) -> Option<&'static str> {
+    if let Some(rating) = src["suricata"]["eve"]["alert"]["severity"].as_u64() {
+        return match rating {
+            1 => Some("high"),
+            2 => Some("medium"),
+            3 => Some("low"),
+            _ => None,
+        };
+    }
+    match pivots.ics_severity.as_str() {
+        "critical" => Some("critical"),
+        "high" => Some("high"),
+        _ => None,
+    }
+}
+
+/// Normalized event kind, from the producer's own event name.
+///
+/// Only the vocabularies checked against the index are mapped. Anything else
+/// is absent, not guessed from the free text of the event:
+/// - `honeypot.eventid` (cowrie): `cowrie.session.connect` -> connection;
+///   `cowrie.login.*` -> login; `cowrie.command.*` -> command;
+///   `cowrie.session.file_download*` -> download.
+/// - `honeypot.event` (multipot): `connect` -> connection;
+///   `auth_attempt` and `login` -> login; `command` -> command;
+///   `http_request` -> http.
+/// - `event.category` on Suricata alert documents (always "alert") -> alert.
+/// - `event.category` on Zeek documents, which holds the Zeek log name:
+///   `conn` -> connection, `http` -> http, `files` -> download (files.log
+///   records each file transferred).
+///
+/// The honeypot docs' `event.category` is deliberately not read here. It is
+/// the attack class ("scan", "login-probe", ...), not an event kind.
+pub(crate) fn kind_from_source(src: &Value) -> Option<&'static str> {
+    let hp = &src["honeypot"];
+    match hp["eventid"].as_str().unwrap_or("") {
+        "cowrie.session.connect" => return Some("connection"),
+        "cowrie.login.failed" | "cowrie.login.success" => return Some("login"),
+        "cowrie.command.input" | "cowrie.command.success" | "cowrie.command.failed" => return Some("command"),
+        "cowrie.session.file_download" | "cowrie.session.file_download.failed" => return Some("download"),
+        _ => {}
+    }
+    match hp["event"].as_str().unwrap_or("") {
+        "connect" => return Some("connection"),
+        "auth_attempt" | "login" => return Some("login"),
+        "command" => return Some("command"),
+        "http_request" => return Some("http"),
+        _ => {}
+    }
+    match src["event"]["category"].as_str().unwrap_or("") {
+        "alert" => Some("alert"),
+        "conn" => Some("connection"),
+        "http" => Some("http"),
+        "files" => Some("download"),
+        _ => None,
+    }
+}
+
+/// MITRE ATT&CK technique ids from the Suricata rule that fired, read from
+/// `suricata.eve.alert.metadata.mitre_technique_id` (an array in eve.json).
+///
+/// `threat.technique.id` is the ECS home for this, and it is written by no
+/// producer in the index, so it is not read.
+pub(crate) fn techniques_from_source(src: &Value) -> Vec<String> {
+    match &src["suricata"]["eve"]["alert"]["metadata"]["mitre_technique_id"] {
+        Value::Array(ids) => ids.iter().filter_map(Value::as_str).filter(|id| !id.is_empty()).map(String::from).collect(),
+        Value::String(id) if !id.is_empty() => vec![id.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// `source.port`, or the Suricata alert's own `src_port` when the document
+/// has no promoted one. Zero and out-of-range values are absent.
+pub(crate) fn src_port_from_source(src: &Value) -> Option<u16> {
+    [&src["source"]["port"], &src["suricata"]["eve"]["src_port"]]
+        .into_iter()
+        .filter_map(Value::as_u64)
+        .find_map(|port| u16::try_from(port).ok().filter(|port| *port > 0))
+}
+
 /// One list/stream row from a normalized ECS `_source` (shared with the
 /// SSE live stream so both emit identical shapes).
 pub fn row_from_source(src: &Value) -> EventRow {
@@ -487,6 +608,12 @@ pub fn row_from_source(src: &Value) -> EventRow {
         .map(num_or_str)
         .find(|s| !s.is_empty())
         .unwrap_or_default();
+    // #3555: the new fields read the same scrubbed `src`, and `pivots` is
+    // computed once because severity needs its ics_severity.
+    let pivots = pivots_from_source(src);
+    // #1873: never our own address, and dionaea's nested peer when
+    // the promoted field is empty. See attacker_ip.
+    let src_ip = attacker_ip(src);
     EventRow {
         src_ip_claimed: {
             let claimed = text(&src["honeypot"]["src_ip_claimed"]);
@@ -497,10 +624,13 @@ pub fn row_from_source(src: &Value) -> EventRow {
         id: String::new(),
         time: text(&src["@timestamp"]),
         sensor: sensor.clone(),
-        // #1873: never our own address, and dionaea's nested peer when
-        // the promoted field is empty. See attacker_ip.
-        src_ip: attacker_ip(src),
+        src_port: if src_ip.is_empty() { None } else { src_port_from_source(src) },
+        src_ip,
         country: text(&src["source"]["geo"]["country_iso_code"]),
+        city: Some(text(&src["source"]["geo"]["city_name"])).filter(|city| !city.is_empty()),
+        severity: severity_from_source(src, &pivots),
+        kind: kind_from_source(src),
+        techniques: techniques_from_source(src),
         port,
         proto,
         // #1611 workstream A: per-sensor rich detail rendering, ported
@@ -510,7 +640,7 @@ pub fn row_from_source(src: &Value) -> EventRow {
             let s1 = text(&src["honeypot"]["session"]);
             if s1.is_empty() { text(&src["session"]["id"]) } else { s1 }
         },
-        pivots: pivots_from_source(src),
+        pivots,
         record: src.clone(),
     }
 }
@@ -653,7 +783,11 @@ pub fn build_filters(q: &EventsQuery) -> Vec<Value> {
         filters.push(json!({"term": {"source.as.type": provider}}));
     }
     if let Some(sig) = q.sig.as_deref().filter(|v| !v.is_empty()) {
-        filters.push(json!({"term": {"suricata.eve.alert.signature": sig}}));
+        // #3570: the field is `text` (analysed), so a `term` on it can never
+        // match a whole signature. Exact match on the `.keyword` subfield; the
+        // value always comes from the signatures facet (itself a terms agg on
+        // `.keyword`), so exact -- not partial/match_phrase -- is the contract.
+        filters.push(json!({"term": {"suricata.eve.alert.signature.keyword": sig}}));
     }
     if let Some(cat) = q.cat.as_deref().filter(|v| !v.is_empty()) {
         filters.push(any_of(&["suricata.eve.alert.category", "honeypot.category"], cat));
@@ -865,6 +999,28 @@ mod session_scope_tests {
             assert!(rendered.contains(field), "the session clause must match {field}: {rendered}");
         }
         assert!(rendered.contains("\"minimum_should_match\":1"), "{rendered}");
+    }
+
+    #[test]
+    fn sig_filter_is_an_exact_term_on_the_keyword_subfield() {
+        // #3570: a term on the analysed text field never matches a full signature.
+        let q: EventsQuery = serde_json::from_value(json!({"sig": "ET SCAN Example Scan"})).unwrap();
+        let filters = build_filters(&q);
+        assert!(
+            filters.contains(&json!({"term": {"suricata.eve.alert.signature.keyword": "ET SCAN Example Scan"}})),
+            "{filters:?}"
+        );
+        assert!(
+            !filters.iter().any(|f| f["term"].get("suricata.eve.alert.signature").is_some()),
+            "{filters:?}"
+        );
+    }
+
+    #[test]
+    fn no_sig_clause_is_emitted_when_sig_is_empty() {
+        let q: EventsQuery = serde_json::from_value(json!({"sig": ""})).unwrap();
+        let rendered = build_filters(&q).iter().map(|f| f.to_string()).collect::<String>();
+        assert!(!rendered.contains("alert.signature"), "{rendered}");
     }
 
     #[test]
@@ -1145,5 +1301,194 @@ mod session_scope_tests {
             "05d129712d910c85a45c74ef9f1b825068ddc953e417ba75781e58fa40625eeb",
             "the hash covers the redacted captured prefix"
         );
+    }
+}
+
+#[cfg(test)]
+mod row_field_tests {
+    //! #3555: the fields the dashboard used to fill with placeholders. Each
+    //! value is read from a `_source` shaped like the documents the index
+    //! holds (see the PR body for the field-presence counts); addresses are
+    //! documentation ranges, as in the rest of this file.
+    use super::*;
+
+    /// A Suricata alert as eve.json lands in `suricata-v2-alert-*`.
+    fn suricata_alert(severity: u64, technique: Value) -> Value {
+        json!({
+            "@timestamp": "2026-10-08T12:00:00.000Z",
+            "event": {"sensor": "suricata", "category": "alert"},
+            "source": {"ip": "203.0.113.7", "geo": {"country_iso_code": "DE", "city_name": "Frankfurt am Main"}},
+            "destination": {"port": 80, "ip": "198.51.100.9"},
+            "suricata": {"eve": {
+                "event_type": "alert",
+                "src_ip": "203.0.113.7",
+                "alert": {
+                    "severity": severity,
+                    "signature": "ET WEB_SPECIFIC_APPS example signature",
+                    "category": "Web Application Attack",
+                    "metadata": {"mitre_technique_id": technique}
+                }
+            }}
+        })
+    }
+
+    #[test]
+    fn a_suricata_alert_carries_its_own_severity_and_techniques() {
+        let row = row_from_source(&suricata_alert(1, json!(["T1190"])));
+        assert_eq!(row.severity, Some("high"));
+        assert_eq!(row.kind, Some("alert"));
+        assert_eq!(row.techniques, vec!["T1190".to_string()]);
+        assert_eq!(row.city.as_deref(), Some("Frankfurt am Main"));
+    }
+
+    #[test]
+    fn suricata_severity_1_2_3_map_to_high_medium_low() {
+        assert_eq!(row_from_source(&suricata_alert(2, json!(null))).severity, Some("medium"));
+        assert_eq!(row_from_source(&suricata_alert(3, json!(null))).severity, Some("low"));
+        // Any other number is not a rating this mapping knows, so it is unrated.
+        assert_eq!(row_from_source(&suricata_alert(0, json!(null))).severity, None);
+        assert_eq!(row_from_source(&suricata_alert(9, json!(null))).severity, None);
+    }
+
+    #[test]
+    fn techniques_are_a_list_and_the_array_form_keeps_every_id() {
+        let many = row_from_source(&suricata_alert(2, json!(["T1190", "T1059"])));
+        assert_eq!(many.techniques, vec!["T1190".to_string(), "T1059".to_string()]);
+        let single_string = row_from_source(&suricata_alert(2, json!("T0846")));
+        assert_eq!(single_string.techniques, vec!["T0846".to_string()]);
+    }
+
+    #[test]
+    fn the_suricata_src_port_is_used_when_the_document_has_no_promoted_one() {
+        let mut alert = suricata_alert(2, json!(null));
+        alert["suricata"]["eve"]["src_port"] = json!(34976);
+        assert_eq!(row_from_source(&alert).src_port, Some(34976));
+
+        // source.port wins when a document carries both.
+        alert["source"]["port"] = json!(51515);
+        assert_eq!(row_from_source(&alert).src_port, Some(51515));
+    }
+
+    #[test]
+    fn a_cowrie_login_maps_to_login_and_carries_its_source_port() {
+        let cowrie = json!({
+            "@timestamp": "2026-09-27T08:15:00.000Z",
+            "event": {"sensor": "cowrie"},
+            "source": {"ip": "198.51.100.9", "port": 41822, "geo": {"city_name": "Shanghai"}},
+            "honeypot": {"eventid": "cowrie.login.failed", "username": "root", "password": "toor"}
+        });
+        let row = row_from_source(&cowrie);
+        assert_eq!(row.kind, Some("login"));
+        assert_eq!(row.src_port, Some(41822));
+        assert_eq!(row.city.as_deref(), Some("Shanghai"));
+        // Cowrie writes no rating, so it stays unrated.
+        assert_eq!(row.severity, None);
+        assert!(row.techniques.is_empty());
+    }
+
+    #[test]
+    fn the_cowrie_and_multipot_vocabularies_map_to_their_kinds() {
+        let kind_of = |eventid: &str| {
+            row_from_source(&json!({"event": {"sensor": "cowrie"}, "honeypot": {"eventid": eventid}})).kind
+        };
+        assert_eq!(kind_of("cowrie.session.connect"), Some("connection"));
+        assert_eq!(kind_of("cowrie.command.input"), Some("command"));
+        assert_eq!(kind_of("cowrie.session.file_download"), Some("download"));
+        assert_eq!(kind_of("cowrie.telnet.option"), None, "an unmapped eventid is absent, not guessed");
+
+        let multipot = |event: &str| {
+            row_from_source(&json!({"event": {"sensor": "multipot"}, "honeypot": {"event": event}})).kind
+        };
+        assert_eq!(multipot("connect"), Some("connection"));
+        assert_eq!(multipot("auth_attempt"), Some("login"));
+        assert_eq!(multipot("http_request"), Some("http"));
+        assert_eq!(multipot("handshake"), None);
+    }
+
+    #[test]
+    fn a_zeek_log_name_maps_to_its_kind_and_a_honeypot_attack_class_does_not() {
+        let zeek = json!({"event": {"sensor": "zeek", "category": "conn"}, "source": {"ip": "198.51.100.9", "port": 52000}});
+        assert_eq!(row_from_source(&zeek).kind, Some("connection"));
+        assert_eq!(row_from_source(&zeek).src_port, Some(52000));
+
+        // honeypot event.category is the attack class, not an event kind.
+        let attack_class = json!({
+            "event": {"sensor": "http-honeypot", "category": "login-probe"},
+            "source": {"ip": "198.51.100.9"},
+            "honeypot": {"path": "/wp-login.php"}
+        });
+        let row = row_from_source(&attack_class);
+        assert_eq!(row.kind, None, "login-probe must not become a login kind");
+    }
+
+    #[test]
+    fn a_dnp3_control_function_is_critical_from_its_ics_rating() {
+        let dnp3 = json!({
+            "event": {"sensor": "dnp3"},
+            "source": {"ip": "198.51.100.9"},
+            "honeypot": {"app_function": "direct_operate", "proto": "dnp3"}
+        });
+        assert_eq!(row_from_source(&dnp3).severity, Some("critical"));
+        let benign = json!({
+            "event": {"sensor": "dnp3"},
+            "source": {"ip": "198.51.100.9"},
+            "honeypot": {"app_function": "read", "proto": "dnp3"}
+        });
+        assert_eq!(row_from_source(&benign).severity, None, "a read has no rating");
+    }
+
+    #[test]
+    fn a_fleet_address_row_gets_no_source_port() {
+        // The tunnel peer's port belongs to the tunnel, not to an attacker.
+        let fleet = json!({
+            "event": {"sensor": "http-honeypot"},
+            "source": {"ip": "10.8.0.1", "port": 35518},
+            "honeypot": {"src_ip": "10.8.0.1"}
+        });
+        assert_eq!(row_from_source(&fleet).src_port, None);
+    }
+
+    #[test]
+    fn a_row_with_no_rating_or_technique_or_city_omits_those_keys() {
+        let bare = json!({
+            "event": {"sensor": "http-honeypot", "category": "scan"},
+            "source": {"ip": "198.51.100.9"},
+            "honeypot": {"path": "/"}
+        });
+        let row = row_from_source(&bare);
+        assert_eq!(row.severity, None);
+        assert_eq!(row.kind, None);
+        assert!(row.techniques.is_empty());
+        assert_eq!(row.city, None);
+        assert_eq!(row.src_port, None);
+
+        let rendered = serde_json::to_value(&row).unwrap();
+        for absent in ["severity", "kind", "techniques", "city", "src_port"] {
+            assert!(rendered.get(absent).is_none(), "{absent} must be omitted, not null: {rendered}");
+        }
+    }
+
+    #[test]
+    fn a_rated_row_serializes_the_new_fields_in_the_wire_shape() {
+        let rendered = serde_json::to_value(row_from_source(&suricata_alert(1, json!(["T1190"])))).unwrap();
+        assert_eq!(rendered["severity"], "high");
+        assert_eq!(rendered["kind"], "alert");
+        assert_eq!(rendered["techniques"], json!(["T1190"]));
+        assert_eq!(rendered["city"], "Frankfurt am Main");
+    }
+
+    #[test]
+    fn the_hit_builder_and_the_source_builder_agree() {
+        // The live stream and the list both use row_from_hit (#1962); the new
+        // fields must come out identical from either.
+        let src = suricata_alert(3, json!(["T0846"]));
+        let hit = json!({"_id": "abc", "_source": src});
+        let from_hit = row_from_hit(&hit);
+        let from_source = row_from_source(&src);
+        assert_eq!(from_hit.severity, from_source.severity);
+        assert_eq!(from_hit.kind, from_source.kind);
+        assert_eq!(from_hit.techniques, from_source.techniques);
+        assert_eq!(from_hit.city, from_source.city);
+        assert_eq!(from_hit.src_port, from_source.src_port);
     }
 }

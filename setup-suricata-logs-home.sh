@@ -101,7 +101,10 @@ RestartSec=15s
 TimeoutStartSec=2min
 
 [Install]
-WantedBy=multi-user.target
+# wg0 can be stopped and started independently of the host boot. Requires=
+# stops this service when wg0 goes down; this WantedBy starts it again when
+# wg0 returns, remounting VPS logs and refreshing their container bind mounts.
+WantedBy=multi-user.target ${wireguard_unit}
 EOF
 
 systemctl daemon-reload

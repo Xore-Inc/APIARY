@@ -27,7 +27,6 @@
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::OnceLock;
 
 /// Matches payload_analysis.go's analysisReadCap: entropy/magic/IOC/rule
@@ -64,15 +63,8 @@ pub struct StaticAnalysis {
 /// (this reads local disk directly, same posture reconcile_run's own
 /// loadXResultsLocal calls already take — see this crate's module doc
 /// comment on workbench_orchestrator.rs).
-pub fn read_bounded(path: &Path) -> std::io::Result<(Vec<u8>, u64)> {
-    use std::io::Read;
-    let meta = std::fs::metadata(path)?;
-    let real_size = meta.len();
-    let read_len = real_size.min(ANALYSIS_READ_CAP) as usize;
-    let mut file = std::fs::File::open(path)?;
-    let mut buf = vec![0u8; read_len];
-    file.read_exact(&mut buf)?;
-    Ok((buf, real_size))
+pub fn read_bounded(payload: &crate::host_fs::PayloadRef) -> std::io::Result<(Vec<u8>, u64)> {
+    crate::host_fs::host().read_payload(payload, ANALYSIS_READ_CAP)
 }
 
 /// shannonEntropy: bits/byte of information density over `data`.

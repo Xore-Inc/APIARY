@@ -44,9 +44,45 @@ jobs:
     with:
       ci_homeserver_prs: ${{ vars.CI_HOMESERVER_PRS || '' }}
 
+  # #3597: which of the `scoped: true` rows a pull request has to build.
+  # The matrix now holds one row per compose build context (~50 images) and
+  # only about nine runners exist, so a PR that touches one context must not
+  # queue every image. This job diffs the PR against its base and hands the
+  # build job the list of scoped images to build; everything outside a
+  # pull_request builds in full. Fail-safe by construction: an unreadable diff
+  # or a change to this workflow selects every row. A skipped row still
+  # occupies a runner for the few seconds its checkout takes, but runs no
+  # buildx setup and no build. The older, unscoped rows are not affected.
+  scope:
+    name: Scope image builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      images: ${{ steps.scope.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The diff needs the PR's base commit, which a depth-1 checkout
+          # does not have.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Select the scoped rows to build
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q pyyaml
+          python3 scripts/check-swarm-images.py scope --event "$EVENT" --base "$BASE_SHA"
+
   build:
     name: ${{ matrix.image }}${{ needs.ci-target.outputs.homeserver != 'true' && ' (GitHub-hosted)' || '' }}
-    needs: [ci-target]
+    needs: [ci-target, scope]
     runs-on: ${{ needs.ci-target.outputs.homeserver == 'true' && fromJSON('["self-hosted", "linux", "x64", "honeypot-ci"]') || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: ${{ needs.ci-target.outputs.homeserver == 'true' && 120 || 360 }}
     permissions:
@@ -135,6 +171,130 @@ jobs:
             context: arcane/home/honeypot-dionaea/tftp-relay
           - image: vps-portbridge
             context: vps/portbridge
+          # ---------------------------------------------------------------
+          # #3597 (epic #3587): every other compose `build:` context in the
+          # repository. Swarm ignores `build:` and a worker node cannot pull a
+          # local tag, so each stack has to run `ghcr.io/<owner>/honeypot-<image>`
+          # by digest; the rows above only covered part of the tree.
+          #
+          # `scoped: true` -- on a pull_request these rows build only when the
+          # `scope` job finds a changed path inside their context (or this
+          # file changed). On main, tags and workflow_dispatch they all build
+          # and push, which is what the digest manifest job reads. The older
+          # rows above are deliberately not scoped and build every time.
+          # `dockerfile:` is relative to the context, exactly as in compose.
+          # `also_contexts:` names byte-identical copies that compose builds
+          # from a second path; scripts/check-swarm-images.py proves the copy
+          # has not drifted. That script also proves, on every PR, that each
+          # row builds what its compose `build:` block builds (Dockerfile,
+          # target, build args) and that no compose context lacks a row.
+          # ---------------------------------------------------------------
+          - image: attacker-identity-worker
+            context: arcane/home/honeypot-attacker-identity-worker/attacker-identity-worker
+            scoped: true
+          - image: auth-events-worker
+            context: auth-events-worker
+            scoped: true
+          - image: beelzebub
+            context: arcane/home/honeypot-beelzebub/beelzebub
+            scoped: true
+          - image: canarytokens
+            context: arcane/home/honeypot-canarytokens/canarytokens
+            scoped: true
+          - image: canarytokens-adapter
+            context: arcane/home/honeypot-canarytokens/canarytokens-adapter
+            scoped: true
+          - image: canarytokens-http-router
+            context: arcane/home/honeypot-canarytokens/canarytokens-http-router
+            scoped: true
+          - image: correlator-worker
+            context: arcane/home/honeypot-correlator-worker/correlator-worker
+            scoped: true
+          - image: cowrie
+            context: arcane/home/honeypot-cowrie/cowrie
+            scoped: true
+          - image: elasticpot
+            context: arcane/home/honeypot-elasticpot/elasticpot
+            scoped: true
+          - image: galah
+            context: arcane/home/honeypot-galah/galah
+            scoped: true
+          - image: galah-llm-broker
+            context: arcane/home/honeypot-galah/galah-llm-broker
+            scoped: true
+          - image: ghidra
+            context: analysis/ghidra/service
+            scoped: true
+          - image: ghidra-statictools
+            context: analysis/ghidra/statictools
+            scoped: true
+          - image: ghosts-api
+            context: sandbox/ghosts
+            dockerfile: Dockerfile.api-prep
+            scoped: true
+          - image: ghosts-client
+            context: sandbox/ghosts
+            dockerfile: Dockerfile.client-prep
+            scoped: true
+          - image: hellpot
+            context: arcane/home/honeypot-hellpot/hellpot
+            scoped: true
+          - image: honeyfs-implant
+            context: arcane/home/honeypot-cowrie/honeyfs-implant
+            scoped: true
+          - image: inetsim
+            context: sandbox/windows/gateway/inetsim
+            scoped: true
+          - image: mailoney
+            context: arcane/home/honeypot-mailoney/mailoney
+            scoped: true
+          - image: ml-worker
+            context: ml-worker
+            scoped: true
+          - image: payload-inventory-worker
+            context: arcane/home/honeypot-payload-inventory-worker/payload-inventory-worker
+            scoped: true
+          - image: reporter
+            context: arcane/home/honeypot-utilities/reporter
+            scoped: true
+          - image: sentrypeer
+            context: arcane/home/honeypot-sentrypeer/sentrypeer
+            scoped: true
+          - image: services-adapter
+            context: arcane/home/honeypot-dashboard/services-adapter
+            scoped: true
+          - image: snare
+            context: arcane/home/honeypot-tanner/snare
+            also_contexts: arcane/home/honeypot-init/snare
+            scoped: true
+          - image: tanner
+            context: arcane/home/honeypot-tanner/tanner/tanner
+            scoped: true
+          - image: tanner-phpox
+            context: arcane/home/honeypot-tanner/tanner/phpox
+            scoped: true
+          - image: tanner-redis
+            context: arcane/home/honeypot-tanner/tanner/redis
+            scoped: true
+          - image: tanner-sandbox
+            context: arcane/home/honeypot-tanner/tanner/sandbox
+            scoped: true
+          - image: vault-worker
+            context: vault-worker
+            scoped: true
+          - image: vps-huginn-sidecar
+            context: vps/huginn-sidecar
+            scoped: true
+          - image: vps-p0f
+            context: vps/p0f
+            scoped: true
+          - image: vps-zeek
+            context: vps/zeek
+            dockerfile: Containerfile
+            scoped: true
+          - image: yara-scanner
+            context: arcane/home/honeypot-payload-analysis/analysis/yara
+            scoped: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -265,6 +425,10 @@ jobs:
           fi
           echo "config=$cfg" >>"$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # #3597: a scoped row the PR did not touch skips buildx setup and the
+        # build below. Always true for the unscoped rows and for every event
+        # that is not a pull_request (the scope job lists them all there).
+        if: matrix.scoped != true || contains(fromJSON(needs.scope.outputs.images), matrix.image)
         with:
           # Concurrent matrix rows share the single self-hosted runner
           # instance; without an explicit stop+rm at job end, a builder
@@ -311,7 +475,7 @@ jobs:
       # occasionally missing, it was being actively deleted between runs.
       # On the homeserver executor (the common case -- see ci-target above)
       # there is a persistent local disk right there, so export to
-      # type=local under /var/buildx-cache/<image> instead: it never
+      # type=local under /var/buildx-cache/<runner>/<image> instead: it never
       # touches the GHA quota, never crosses the network, and that box has
       # 7.0 TB free on /var (measured 2026-09-02). The GitHub-hosted
       # fallback path has no persistent disk between runs, so it keeps
@@ -322,28 +486,28 @@ jobs:
       - name: Pick cache backend
         id: cache
         run: |
-          # scripts/install-homeserver.sh's provision-buildx-cache step owns
-          # creating /var/buildx-cache as github-ci-runner (/var itself
+          # scripts/github-ci-runner/provision-buildx-cache.sh (#3606) owns
+          # creating /var/buildx-cache for the runner users (/var itself
           # is root:root 0755, so this step cannot create it). Degrade to
           # type=gha rather than `bash -e`-failing all 18 matrix rows if
           # that step has not run on this box yet -- losing the local cache
           # is a slow build, failing here is a Containers outage.
-          dir="/var/buildx-cache/${{ matrix.image }}"
-          # 2026-09-06: the box runs seven runner users, all in the
-          # github-ci-runner group, and any of them can take this row. With
-          # the default umask 022 the first one to build an image left
-          # <image> at 2755 -- group-owned but not group-writable -- so the
-          # next runner's mkdir inside it got EACCES and the row silently
-          # degraded to the type=gha cache #2822 moved off. 002 makes the
-          # dir 2775, writable by every runner.
+          # A runner executes one job at a time, so its own cache cannot be
+          # pruned while another job exports the same image (#3605).
+          dir="/var/buildx-cache/$RUNNER_NAME/${{ matrix.image }}"
+          # Keep the runner's directories group-writable for cache repair
+          # and future runner-account changes on this host.
           umask 002
           if [ "${{ needs.ci-target.outputs.homeserver }}" = "true" ] \
              && mkdir -p "$dir" 2>/dev/null && [ -w "$dir" ]; then
-            echo "from=type=local,src=$dir" >> "$GITHUB_OUTPUT"
-            echo "to=type=local,dest=$dir,mode=max" >> "$GITHUB_OUTPUT"
+            {
+              echo "from=type=local,src=$dir"
+              echo "to=type=local,dest=$dir,mode=max"
+              echo "dir=$dir"
+            } >> "$GITHUB_OUTPUT"
           else
             if [ "${{ needs.ci-target.outputs.homeserver }}" = "true" ]; then
-              echo "::warning::$dir is not writable by $(id -un) -- falling back to type=gha. Run scripts/install-homeserver.sh's provision-buildx-cache step (#2822)."
+              echo "::warning::$dir is not usable by $(id -un) on $RUNNER_NAME (groups: $(id -Gn)) -- falling back to type=gha. Run scripts/github-ci-runner/provision-buildx-cache.sh as root on this host (#3606)."
             fi
             echo "from=type=gha,scope=${{ matrix.image }}" >> "$GITHUB_OUTPUT"
             echo "to=type=gha,mode=max,scope=${{ matrix.image }}" >> "$GITHUB_OUTPUT"
@@ -394,8 +558,13 @@ jobs:
         # manifest digest, to key the dashboard rows' SBOM to the exact image
         # rather than to a tag that can be moved underneath it.
         id: build
+        if: matrix.scoped != true || contains(fromJSON(needs.scope.outputs.images), matrix.image)
         with:
           context: ${{ matrix.context }}
+          # #3597: compose's `dockerfile:` is relative to the context, this
+          # input to the workspace. Empty for the rows that use ./Dockerfile,
+          # which build-push-action treats as "not given".
+          file: ${{ matrix.dockerfile && format('{0}/{1}', matrix.context, matrix.dockerfile) || '' }}
           push: ${{ github.event_name != 'pull_request' }}
           # #3316: the boot-smoke below needs an image it can `docker run`,
           # and the two ways to get one are mutually exclusive here -- a
@@ -458,9 +627,10 @@ jobs:
         # type=local has no eviction of any kind -- run unconditionally
         # (always(), not just on success) so a failed build still gets
         # the chance to trim a cache dir it may have partially written.
-        # No-ops instantly on the GitHub-hosted fallback (script check).
-        if: always() && needs.ci-target.outputs.homeserver == 'true'
-        run: scripts/prune-buildx-cache.sh "/var/buildx-cache/${{ matrix.image }}"
+        if: always() && steps.cache.outputs.dir != ''
+        env:
+          CACHE_DIR: ${{ steps.cache.outputs.dir }}
+        run: scripts/prune-buildx-cache.sh "$CACHE_DIR"
 
       # ---------------------------------------------------------------------
       # #3316: start the exact image this row just built, wait for its own
@@ -561,9 +731,11 @@ jobs:
           # override's warning. Throwaway and loopback-only; generated so
           # the value is obviously not a credential in the tree.
           token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          # #3700: run-scoped names (both smokes), so concurrent runs on one
+          # self-hosted runner never trip the script's refuse-to-reuse guard.
           scripts/boot-smoke-image.sh \
             --image-id "$IMAGE_ID" \
-            --name ci-bootsmoke-backend-service \
+            --name "ci-bootsmoke-backend-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --container-port 8081 \
             --health-timeout 120 \
             --stub-es-env ELASTICSEARCH_URL \
@@ -592,7 +764,7 @@ jobs:
           # deliberately needs no backend.
           scripts/boot-smoke-image.sh \
             --image-id "$IMAGE_ID" \
-            --name ci-bootsmoke-dashboard-next \
+            --name "ci-bootsmoke-dashboard-next-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --container-port 8080 \
             --health-timeout 120 \
             --env "SERVICE_TOKEN=$token" \
@@ -695,11 +867,6 @@ jobs:
           # than being clamped.
           retention-days: 90
 
-      - name: "Why a pull_request row has no SBOM (#3321)"
-        if: matrix.sbom == true && github.event_name == 'pull_request'
-        run: |
-          echo "::notice title=No SBOM on a pull_request::containers.yml builds with push=false and load=false on a pull request, so this row produced no image and therefore no digest to key an inventory to. The SBOM for this change is produced when it reaches main -- where the image is actually pushed, and where the retained artifact matches the deployed digest."
-
   # #3311: the one required status check for this workflow. Matrix row names
   # carry a "(GitHub-hosted)" suffix on fallback days, so no row is a stable
   # context for main's ruleset; this job is. always() so a failed router or
@@ -723,3 +890,52 @@ jobs:
             echo "::error::ci-target=$ROUTER build=$BUILD"
             exit 1
           fi
+
+  # #3597: the digest manifest phase 3 (#3590) pins swarm stacks from.
+  # Matrix rows cannot hand a value to a later job (the last row to write an
+  # output wins, and .github/ has no download-artifact), so this job asks the
+  # registry instead: every row pushes `:sha-<short>`, a tag that names this
+  # exact commit, and `imagetools inspect` returns the digest `docker pull
+  # repo@digest` resolves -- the index digest for a multi-platform push, the
+  # same value build-push-action reports as `digest`. Runs on every event
+  # that pushes, so the manifest also exists for tags and manual runs.
+  digest-manifest:
+    name: Image digest manifest
+    needs: [build]
+    if: github.event_name != 'pull_request' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve every pushed image to its digest
+        env:
+          OWNER: ${{ github.repository_owner }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q pyyaml
+          mkdir -p "$RUNNER_TEMP/digests"
+          python3 scripts/check-swarm-images.py manifest \
+            --owner "$OWNER" --sha "$COMMIT" \
+            --out "$RUNNER_TEMP/digests/image-digests.json"
+      - name: Upload the digest manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digests
+          path: ${{ runner.temp }}/digests/image-digests.json
+          if-no-files-found: error
+          # Rollback needs the PREVIOUS manifest; 90 is the longest GitHub
+          # allows, the same choice the SBOM artifacts make.
+          retention-days: 90

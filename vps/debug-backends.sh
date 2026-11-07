@@ -117,6 +117,14 @@ else
   warn "RevDeck (10.8.0.2:19500) CLOSED — behind the 'revdeck' compose profile, not started by default"
 fi
 
+# Unsloth Studio (#3689) — arcane/home/unsloth, published on UNSLOTH_BIND:8899
+echo -e "  Checking unsloth-studio 10.8.0.2:8899..."
+if tcp_open $WG 8899; then
+  probe $WG 8899 "Unsloth Studio"
+else
+  warn "Unsloth Studio (10.8.0.2:8899) CLOSED — arcane/home/unsloth is not deployed on the homeserver"
+fi
+
 # ============================================================
 info "Diagnosing 502s: TCP-open-but-HTTP-broken"
 # ============================================================

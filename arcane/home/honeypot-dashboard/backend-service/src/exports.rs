@@ -194,8 +194,10 @@ fn events_csv_row(row: &crate::events::EventRow) -> Vec<String> {
         row.src_ip.clone(),
         row.country.clone(),
         text(&row.record["source"]["geo"]["city_name"]),
-        number(&row.record["source"]["as"]["number"]),
-        text(&row.record["source"]["as"]["organization"]["name"]),
+        // #3704: the ingest writes `source.as.asn` / `organization_name`,
+        // not the ECS `number` / `organization.name` spelling.
+        number(&row.record["source"]["as"]["asn"]),
+        text(&row.record["source"]["as"]["organization_name"]),
         row.proto.clone(),
         row.port.clone(),
         text(&hp["username"]),
@@ -595,6 +597,19 @@ mod tests {
         assert_eq!(cells[at("password")], "", "a pre-scrub value reached a cell");
         assert_eq!(cells[at("credential_status")], "extracted");
         assert_eq!(cells[at("auth_outcome")], "simulated");
+    }
+
+    #[test]
+    fn the_as_columns_read_the_fields_the_ingest_writes() {
+        // #3704: field names as `_field_caps` reports them on honeypot-v2.
+        let mut src = stored_login();
+        src["source"] = json!({
+            "as": {"asn": 14061, "organization_name": "DIGITALOCEAN-ASN"}
+        });
+        let cells = events_csv_row(&row_from_source(&src));
+        let at = |name: &str| EVENTS_CSV_COLUMNS.iter().position(|c| *c == name).unwrap();
+        assert_eq!(cells[at("asn")], "14061");
+        assert_eq!(cells[at("organization")], "DIGITALOCEAN-ASN");
     }
 
     #[test]

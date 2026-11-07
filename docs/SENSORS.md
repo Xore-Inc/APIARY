@@ -117,6 +117,7 @@ at 25 MiB with three files, independently from sensor event files under
 | EveBox (Suricata events) | `evebox.<domain>` | `evebox` :5636 |
 | Arkime (packet sessions) | `arkime.<domain>` | `arkime-viewer` :8005 |
 | Rev·Deck (Ghidra AI chat) | `rev.<domain>` | `revdeck` :5000 (separate `analysis/ghidra/` stack, `revdeck` profile — see [analysis/ghidra/revdeck/README.md](analysis/ghidra/revdeck/README.md)) |
+| Unsloth Studio (model training UI, #3689) | `unsloth.<domain>` | `hp-unsloth-studio` :8000, published on `UNSLOTH_BIND`:8899 (`arcane/home/unsloth`). **Not currently deployed on the homeserver** — the VPS gateway authenticates but upstream requests fail until Studio is brought back. |
 
 Each is bridged to the VPS by its own `socat-hp-*` service (one socat per
 service, the reliable/consistent way) and routed by
@@ -225,9 +226,11 @@ Web UI: `http://<HP_BIND>:19080` (`arkime.<domain>` via Traefik).
 >   connection along with the upstream source port it will arrive on; ship that
 >   dir to the home stack (same mount pattern as Suricata, but **without
 >   `x-systemd.automount`** — autofs triggers return EPERM to container
->   processes) and the dashboard joins it by source port. The join reaches back
->   one log rotation; connections older than that are reported as
->   **Unattributed** on `/source-health` rather than blamed on the tunnel peer.
+>   processes) and the enrichment worker joins it by source port and
+>   connection start time at ingest. The mount must not use
+>   `default_permissions`, or the worker (uid 65534) cannot read the log and
+>   attribution silently stops (#3573). Join rule, outcomes and the history
+>   backfill: [TUNNEL-ATTRIBUTION.md](TUNNEL-ATTRIBUTION.md).
 >
 > Suricata already sees real IPs (it sniffs the public interface on the VPS).
 > Net result: the live dashboard can pivot on a single attacker IP across every

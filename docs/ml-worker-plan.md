@@ -99,7 +99,7 @@ ground-truth labels. [web:275][web:283]
 > (`cowrie-*`, `dionaea-*`, `honeypot-network-*`, `conpot-*`,
 > `http-honeypot-*`) never matched anything on the live homeserver — see
 > the "v0.1 audit verdict" callout above. `worker.py`'s real,
-> currently-deployed `SOURCE_INDICES` are the two rows below.
+> currently-deployed `SOURCE_INDICES` are the three rows below.
 
 The worker ingests from three unified, versioned index patterns
 (`ml-worker/worker.py`'s `SOURCE_INDICES`):
@@ -650,7 +650,8 @@ operator disposes of the alert.)
 
 **Implemented, current** as its own route,
 `arcane/home/honeypot-dashboard/frontend-next/src/routes/ml-anomalies.tsx`
-(sidebar: Monitor group, next to Alerts) -- not an overview-page panel, for
+(sidebar: Monitor group — the same group as Overview, *not* Alerts, which
+sits under Operations) -- not an overview-page panel, for
 the same reason as the original Go implementation: alerts have their own
 acknowledge/reopen workflow that doesn't apply to anomaly scores, and mixing
 the two on one page risked implying scores could be acted on the same way.
@@ -781,7 +782,7 @@ without labels, and what a genuinely broken retrain would actually break:
    recent traffic anomalous when the outgoing one called 1% is almost
    certainly reacting to a data/feature bug, not a real shift in attacker
    behavior — and a real, gradual shift is exactly what re-running this gate
-   every `RETRAIN_INTERVAL` is supposed to keep up with, so rejecting one
+   every scheduled retrain (`RETRAIN_SLOTS_UTC`) is supposed to keep up with, so rejecting one
    cycle costs nothing but the wait for the next.
 3. **No prior model exists yet** (first-ever retrain): the gate degrades to
    check 1 only — there is nothing to compare against, and refusing the
@@ -814,8 +815,8 @@ if wanted.
   and `/models/lstm_ae_{ts}.pt`, with `current_*` symlinks repointed to the
   new version — this part of the original draft was already implemented.
   What was missing: **nothing pruned old versions**, so `/models/` grew two
-  new files per model per `RETRAIN_INTERVAL` forever (roughly 8/day at the
-  6h default, unbounded over the container's lifetime).
+  new files per model per retrain forever (roughly 8/day with the four default
+  `RETRAIN_SLOTS_UTC` slots, unbounded over the container's lifetime).
 - `models/lifecycle.py` (new) adds `prune_old_versions(model_dir, prefix,
   keep=MAX_RETAINED_VERSIONS)` — `MAX_RETAINED_VERSIONS=3`, matching the
   original draft's "last 3 versions retained for rollback." Runs after every

@@ -376,6 +376,11 @@ struct PdfReportWriter {
     ops: Vec<Op>,
     page_started: bool,
     y: f64,
+    /// Layout probe (#3524): ops on the page when the current element began,
+    /// and whether its first page break left that page untouched.
+    watch_ops: usize,
+    watch_start: (usize, f64),
+    break_untouched: Option<bool>,
 }
 
 impl PdfReportWriter {
@@ -403,7 +408,16 @@ impl PdfReportWriter {
             ops: Vec::new(),
             page_started: false,
             y: 0.0,
+            watch_ops: 0,
+            watch_start: (0, 0.0),
+            break_untouched: None,
         }
+    }
+
+    fn begin_element(&mut self) {
+        self.watch_ops = self.ops.len();
+        self.watch_start = (self.page_count(), self.y);
+        self.break_untouched = None;
     }
 
     fn push(&mut self, op: Op) {
@@ -411,6 +425,9 @@ impl PdfReportWriter {
     }
 
     fn new_page(&mut self) {
+        if self.break_untouched.is_none() {
+            self.break_untouched = Some(self.ops.len() == self.watch_ops);
+        }
         if self.page_started {
             self.pages.push(std::mem::take(&mut self.ops));
         }
@@ -848,6 +865,11 @@ impl PdfReportWriter {
 
     /// Finishes the current page, appends the page-number footer to every
     /// page now that the total count is known, and serializes the document.
+    /// Pages laid out so far, counting the one being drawn.
+    fn page_count(&self) -> usize {
+        self.pages.len() + usize::from(self.page_started)
+    }
+
     fn finish(mut self) -> Vec<u8> {
         if self.page_started {
             self.pages.push(std::mem::take(&mut self.ops));
@@ -956,10 +978,62 @@ pub fn render_report_pdf(
     elements: &[String],
     appendix_limit: i64,
 ) -> Vec<u8> {
-    let branding = branding.with_defaults();
-    let mut writer = PdfReportWriter::new(theme, branding);
+    let mut writer = PdfReportWriter::new(theme, branding.with_defaults());
+    draw_report_elements(&mut writer, data, elements, appendix_limit, |_, _| {});
+    writer.finish()
+}
+
+/// Where one selected element landed in the laid-out document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementPlacement {
+    pub id: String,
+    /// Pages the element touches; 0 when it draws nothing (an empty table
+    /// is skipped by the renderer).
+    pub pages: usize,
+}
+
+/// The page count and per-element placement the PDF for this dataset would
+/// have (#3524). Runs the very same drawing code as `render_report_pdf`
+/// (`draw_report_elements`), then stops before serialising, so a preview's
+/// page numbers cannot drift from the generated document's.
+pub fn report_layout(
+    data: &ReportData,
+    theme: PdfTheme,
+    branding: PdfBranding,
+    elements: &[String],
+    appendix_limit: i64,
+) -> (usize, Vec<ElementPlacement>) {
+    let mut writer = PdfReportWriter::new(theme, branding.with_defaults());
+    let mut placements = Vec::new();
+    draw_report_elements(&mut writer, data, elements, appendix_limit, |id, w| {
+        let before = w.watch_start;
+        let after = (w.page_count(), w.y);
+        let pages = if after == before {
+            0
+        } else {
+            // Pages from where the element began to where it ended; when it
+            // broke to a fresh page before drawing anything, the page it
+            // started on is not one of its own.
+            let started_on_fresh_page = w.break_untouched == Some(true);
+            (after.0 - before.0 + 1).saturating_sub(usize::from(started_on_fresh_page)).max(1)
+        };
+        placements.push(ElementPlacement { id: id.to_string(), pages });
+    });
+    (writer.page_count(), placements)
+}
+
+/// The one element loop both the PDF and its layout run through.
+/// `after_element` is called after each element with its id.
+fn draw_report_elements(
+    writer: &mut PdfReportWriter,
+    data: &ReportData,
+    elements: &[String],
+    appendix_limit: i64,
+    mut after_element: impl FnMut(&str, &PdfReportWriter),
+) {
     writer.new_page();
     for element in normalize_report_elements(elements) {
+        writer.begin_element();
         match element.as_str() {
             ELEMENT_COVER => writer.cover(data),
             ELEMENT_METRICS => {
@@ -988,8 +1062,8 @@ pub fn render_report_pdf(
             ELEMENT_PARAMETERS => writer.parameters(data),
             _ => {}
         }
+        after_element(&element, writer);
     }
-    writer.finish()
 }
 
 // ---------------------------------------------------------------------------

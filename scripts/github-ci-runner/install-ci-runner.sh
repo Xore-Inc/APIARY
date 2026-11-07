@@ -261,6 +261,12 @@ if ! id "$RUNNER_USER" >/dev/null 2>&1; then
 fi
 install -d -m 0755 -o "$RUNNER_USER" -g "$RUNNER_USER" "$RUNNER_HOME"
 
+# #3606: join the shared buildx-cache group and make sure /var/buildx-cache
+# exists and is writable by every runner user, so Containers uses type=local
+# on this executor instead of the gha fallback. Idempotent; set
+# BUILDX_CACHE_TARGET=/path to keep the cache on another volume (precision).
+"$here/github-ci-runner/provision-buildx-cache.sh"
+
 # SELinux: files under /var are labelled var_t, and systemd's init_t cannot
 # exec a var_t file -- the unit fails 203/EXEC with no AVC logged, the same
 # rule that broke backup-honeypot.service. The runner's own executables
@@ -402,6 +408,8 @@ fi
 #     (daemon disabled -- only the binary is wanted).
 #   nodejs/npm: the dashboard OIDC suites run the BFF build against the
 #     node 22 the suites pin.
+#   gcc: Cargo's Linux linker and the Go race detector both require a C
+#     compiler. The build-only precision runners need it too.
 #   the shellcheck binary: the shell-syntax scripts-and-compose row
 #     prefers an existing binary and only apt-installs where it was
 #     already required. (This comment block is inside that row's scan
@@ -434,7 +442,7 @@ case "$PKG_FAMILY" in
 debian)
   apt-get update -qq
   apt-get install -y -qq \
-    redis-server nodejs npm shellcheck \
+    redis-server nodejs npm shellcheck gcc \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
     libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 \
     libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 \
@@ -458,7 +466,7 @@ rhel)
   #         a fork of Redis 7.2 and speaks the same protocol, which is all the
   #         frontend-next browser fixture wants from it.
   dnf install -y \
-    valkey nodejs nodejs-npm ShellCheck \
+    valkey nodejs nodejs-npm ShellCheck gcc \
     alsa-lib at-spi2-atk atk at-spi2-core \
     cairo cups-libs dbus-libs libdrm mesa-libgbm glib2 \
     nspr nss pango libX11 libxcb libXcomposite \
@@ -577,6 +585,22 @@ install -d -m 0755 -o root -g root "$unit_dropin_dir"
 cat > "$unit_dropin_dir/fix-work-ownership.conf" <<EOF
 [Service]
 ExecStartPre=+/opt/github-ci-runner-helpers/fix-work-ownership.sh $RUNNER_USER $RUNNER_HOME/_work
+EOF
+
+# Fork-PR admission control that the pull request cannot edit. The
+# workflow-level gate (ci-router.yml and the callers' runs-on expressions) is
+# part of the PR's own revision, so a fork can rewrite it or add a direct
+# self-hosted job. This root-owned job-started hook runs before every job's
+# steps (and therefore before any checkout of PR content) and refuses
+# pull-request-family events whose head repository is not the base
+# repository. It is wired through the root-owned systemd drop-in rather than
+# the runner-user-writable $RUNNER_HOME/.env so that a job cannot unset it.
+install -m 0755 -o root -g root \
+  "$here/github-ci-runner/job-started-hook.sh" \
+  /opt/github-ci-runner-helpers/job-started-hook.sh
+cat > "$unit_dropin_dir/job-started-hook.conf" <<EOF
+[Service]
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/github-ci-runner-helpers/job-started-hook.sh
 EOF
 
 # #3105: /var/buildx-cache is shared across every runner instance's user so

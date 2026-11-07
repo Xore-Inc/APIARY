@@ -96,7 +96,8 @@ UNIT|honeypot-dionaea|hp-dionaea,hp-tftp-relay|tcp:21|Largest single decoy (369M
 UNIT|honeypot-galah|hp-galah,hp-galah-llm-broker|tcp:8888|hp-galah proxies its LLM calls through hp-galah-llm-broker. Pausing the broker alone makes galah's own decoy paths fail in a way that looks like a broken decoy rather than a stand-down.
 UNIT|honeypot-canarytokens|hp-canarytokens-http-router,hp-canarytokens-frontend,hp-canarytokens-adapter,hp-canarytokens-switchboard,hp-canarytokens-redis|tcp:19427|Internal dependency chain router->adapter->switchboard->redis. Partial pause leaves the switchboard blocked on a frozen redis. Pause front to back, resume back to front.
 NEVER|honeypot-elk|hp-elasticsearch,hp-filebeat,hp-zeek-proxy,hp-arkime-capture,hp-arkime-viewer,hp-kibana,hp-evebox,hp-pcap-sync,hp-extracted-file-importer|-|The capture pipeline. Pausing arkime-capture, zeek-proxy or pcap-sync stops packet capture at the point of arrival, which is silent data loss, and pausing elasticsearch stalls every sensor's event write. Not a decoy; it is what makes the decoys worth running. Highest single allocation on the host (elasticsearch ~10.6GiB) and the least safe to interrupt.
-NEVER|honeypot-dashboard|hp-dashboard-next,hp-dashboard-oidc-sessions,hp-apiary-worker,hp-apiary-worker-enrichment,hp-apiary-worker-importer,hp-apiary-worker-payload-inventory,hp-apiary-backend-mounted,hp-services-adapter|-|The operator surface and the ES write consumers. Pausing the workers buffers Elasticsearch bulk queues and the dashboard stops answering -- so you cannot observe the stand-down you are performing, which defeats the point of recording it.
+NEVER|honeypot-dashboard|hp-dashboard-next,hp-dashboard-oidc-sessions,hp-apiary-backend-mounted|-|The operator surface. A paused dashboard stops answering, so you cannot observe the stand-down you are performing -- which defeats the point of recording it.
+NEVER|honeypot-backend-workers|hp-apiary-worker,hp-apiary-worker-enrichment,hp-apiary-worker-importer,hp-apiary-worker-payload-inventory,hp-services-adapter|-|The ES write consumers and the service-control adapter (#3575). Pausing the workers buffers Elasticsearch bulk queues, and a paused adapter makes every service action hang.
 NEVER|honeypot-dashboard-backend|hp-apiary-backend|-|Auth and API surface. A paused backend fails every dashboard and CLI call with a hang, not a clean error.
 NEVER|honeypot-keycloak|hp-keycloak,hp-keycloak-postgres|-|Identity tier. Dashboard, arcane and the OIDC login tests all authenticate through it; pausing it breaks logins, not just decoys.
 NEVER|honeypot-arcane|hp-arcane|-|GitOps control plane. This is the container that would RE-CREATE a paused decoy on its next sync, so pausing it is arguably necessary -- but it is also the thing that reconciles the fleet, and a control plane held frozen across a long leg cannot report or repair drift. Deliberately excluded: reconcile first, pause decoys, do not freeze the orchestrator.
@@ -281,6 +282,16 @@ cmd_pause() {
 
   command -v docker >/dev/null 2>&1 || die "docker not on PATH"
   docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon"
+
+  # Swarm stacks (#3590) are not paused here. Swarm sees a frozen task's
+  # healthcheck time out, marks the task unhealthy and replaces it -- the same
+  # silent un-pause autoheal causes. They are scaled to 0 through Arcane by
+  # ops/swarm/stackctl.py pause, which also frees their RAM.
+  for stack in "$@"; do
+    if docker service ls -q --filter "label=com.docker.stack.namespace=$stack" 2>/dev/null | grep -q .; then
+      die "stack '$stack' runs on Docker Swarm; pause it with: ops/swarm/stackctl.py pause $stack (scale to 0, see ops/swarm/README.md)"
+    fi
+  done
 
   [ ! -s "$INVENTORY" ] || die "a pause is already recorded in $INVENTORY -- resume it first (reverse order), or remove the file if you are certain nothing is paused."
 

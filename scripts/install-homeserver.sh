@@ -441,8 +441,16 @@ step_docker_daemon_config() {
   # floor here, not a formality: buildkit GC now starts pruning once /var
   # free space drops within about 31GB of that floor, not after the disk is
   # already critical.
+  # no-new-privileges (#3593, Xore's decision on #3587, 2026-10-31): swarm
+  # services cannot set `security_opt`, so the sensor stacks get the
+  # hardening their Compose files set per service only from the daemon. The
+  # VPS has had it daemon-wide since its installer was written. Containers
+  # that need it off say so explicitly (`security_opt:
+  # [no-new-privileges:false]`: hp-tanner-docker's nested daemon). Applying
+  # this needs a dockerd restart, which restarts every container here.
   cat >/etc/docker/daemon.json <<'EOF'
 {
+    "no-new-privileges": true,
     "log-driver": "local",
     "log-opts": {
         "max-file": "3",
@@ -1467,7 +1475,7 @@ step_create_shared_resources() {
 
 step_provision_buildx_cache() {
   # #2822: .github/workflows/containers.yml exports every image's layer
-  # cache to type=local under /var/buildx-cache/<image> when the build
+  # cache to type=local under /var/buildx-cache/<runner>/<image> when the build
   # lands on this box's self-hosted runners, because the type=gha cache was
   # measured ~2x over GitHub's 10 GB per-repository ceiling and therefore
   # being LRU-evicted while in use.
@@ -1492,57 +1500,14 @@ step_provision_buildx_cache() {
   # actions.runner.Xore-APIARY.supermicro-ci-* unit) and only
   # github-ci-runner was in the github-ci-runner group, so a Containers row
   # that landed on supermicro-ci-2 got EACCES from the workflow's own
-  # `mkdir -p /var/buildx-cache/<image>` and silently degraded to
+  # `mkdir -p /var/buildx-cache/<runner>/<image>` and silently degraded to
   # type=gha -- the exact quota-evicted cache #2822 moved off. Joining them
   # here (rather than by hand) is what makes a #1609 rebuild reproduce it.
-  local cache_dir=/var/buildx-cache
-  local runner_user=github-ci-runner
-
-  if ! id -u "$runner_user" >/dev/null 2>&1; then
-    echo "  $runner_user does not exist yet -- creating $cache_dir root-owned;"
-    echo "  re-run this step after the CI runners are installed."
-    install -d -m 0755 "$cache_dir"
-    return 0
-  fi
-
-  install -d -m 2775 -o "$runner_user" -g "$runner_user" "$cache_dir"
-
-  # Empty on a fresh install, where the extra instances do not exist yet --
-  # install-ci-runner.sh is a manual runbook step that runs later. The loops
-  # below then simply do nothing extra, which is the pre-existing behaviour.
-  local extra_users=()
-  mapfile -t extra_users < <(getent passwd | cut -d: -f1 | grep -E '^github-ci-runner-[0-9]+$' | sort)
-
-  local u
-  for u in "${extra_users[@]}"; do
-    if id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx "$runner_user"; then
-      continue
-    fi
-    usermod -aG "$runner_user" "$u"
-    echo "  added $u to the $runner_user group"
-  done
-
-  # Group membership alone is not enough for subdirectories that already
-  # exist: the workflow creates /var/buildx-cache/<image> with the runner's
-  # default umask 022, so a dir made by one runner before the grant existed
-  # is 2755 -- group-owned but not group-writable, and the next runner's
-  # mkdir/prune inside it still fails. Repair what is there; the workflow
-  # sets umask 002 for the ones it creates from now on.
-  chown -R "$runner_user:$runner_user" "$cache_dir"
-  chmod -R g+rwX "$cache_dir"
-
-  # Prove it, rather than assuming install(1) implies the runner can write:
-  # the check that was missing is the whole reason this step exists. Every
-  # runner user is checked, because one unlisted user is exactly how the
-  # 2026-09-06 fallback went unnoticed.
-  for u in "$runner_user" "${extra_users[@]}"; do
-    if ! runuser -u "$u" -- test -w "$cache_dir"; then
-      echo "  ERROR: $cache_dir is not writable by $u" >&2
-      ls -ld "$cache_dir" >&2
-      return 1
-    fi
-  done
-  echo "  $cache_dir writable by $runner_user ${extra_users[*]} (verified)"
+  # #3606: the group, membership, setgid directory, default ACL, repair and
+  # per-user write proof live in one idempotent helper that precision's
+  # install-ci-runner.sh also runs, so both executors are provisioned the same
+  # way and a re-run on a correct host changes nothing.
+  "$REPO_DIR/scripts/github-ci-runner/provision-buildx-cache.sh"
 }
 
 step_provision_image_sbom() {
@@ -2134,7 +2099,14 @@ step_sshfs_mounts() {
     dirs+=("$dir")
   done
 
-  local opts="_netdev,ro,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=/root/.ssh/strato_vps,port=2222,allow_other,default_permissions,StrictHostKeyChecking=accept-new"
+  # #3573: no default_permissions. With it, the kernel enforces the files'
+  # VPS-side modes locally -- portbridge.json is root:root 0640 -- so the
+  # ip-enrichment worker (uid 65534) got EACCES and left every tunnelled
+  # event unattributed. #1677 removed it from the live fstab once; the
+  # 2026-09 rebuild put it back from here. Access is still gated by the
+  # read-only mount and the root SSH key; allow_other only lets local
+  # readers through.
+  local opts="_netdev,ro,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=/root/.ssh/strato_vps,port=2222,allow_other,StrictHostKeyChecking=accept-new"
   # The comment block below is written once; the per-directory lines follow.
   grep -q "read-only VPS log mounts" /etc/fstab || cat >>/etc/fstab <<EOF
 
@@ -2159,11 +2131,38 @@ EOF
       echo "root@${VPS_WG_ADDRESS}:/opt/stacks/apiary/logs/$name $dir fuse.sshfs $opts 0 0" >>/etc/fstab
   done
 
+  # #3573: lines written by an older run of this step still carry
+  # default_permissions, and the append above never rewrites an existing
+  # line. Strip it from those entries and remount them so the change takes.
+  local remount=()
+  for dir in "${dirs[@]}"; do
+    if grep -E "[[:space:]]${dir}[[:space:]]+fuse\.sshfs[[:space:]].*default_permissions" /etc/fstab >/dev/null; then
+      sed -i -E "\#[[:space:]]${dir}[[:space:]]+fuse\.sshfs[[:space:]]# { s/,default_permissions//; s/default_permissions,// }" /etc/fstab
+      remount+=("$dir")
+    fi
+  done
+  if ((${#remount[@]})); then
+    systemctl daemon-reload 2>/dev/null || true
+    for dir in "${remount[@]}"; do
+      umount "$dir" 2>/dev/null || umount -l "$dir" 2>/dev/null || true
+    done
+  fi
+
   local failed=0
   for dir in "${dirs[@]}"; do
     mountpoint -q "$dir" || mount "$dir" || failed=1
     mountpoint -q "$dir" || { echo "sshfs mount failed: $dir" >&2; failed=1; }
   done
+
+  # #3573: the check that would have caught the regression. The worker that
+  # joins tunnelled events to portbridge's log runs as nobody (65534); if it
+  # cannot read the log, attribution stops with no error anywhere else.
+  local pb_log
+  pb_log="$(readlink -f "$REPO_DIR/logs/portbridge")/portbridge.json"
+  if [[ -e "$pb_log" ]] && ! setpriv --reuid=65534 --regid=65534 --clear-groups head -c 1 "$pb_log" >/dev/null 2>&1; then
+    echo "portbridge log is not readable as uid 65534 ($pb_log): tunnel attribution would silently stop -- check the sshfs options in /etc/fstab (#3573)" >&2
+    failed=1
+  fi
   return "$failed"
 }
 
@@ -2650,7 +2649,7 @@ step_verify_exited() {
 }
 
 step_verify_elasticsearch_events() {
-  docker run --rm --network honeynet curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777 -sf \
+  docker run --rm --network honeynet curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac -sf \
     http://elasticsearch:9200/honeypot-v2-*/_count >/dev/null
 }
 

@@ -5,6 +5,7 @@ keycloak
 init
 elk
 dashboard
+backend-workers
 utilities
 payload-analysis
 conpot

@@ -21,8 +21,15 @@ practical guide those didn't cover.
 
 **Decision: outbound is allowed by default, per honeypot, unless that
 honeypot has no design reason to need it.** This matches what this stack
-already did before this doc existed (no honeypot's network has ever set
-`internal: true`) and mirrors T-Pot's own stated reasoning: "For some
+already did before this doc existed — no *decoy's* per-stack network has ever
+set `internal: true`, and it needs not: a sensor has to be reachable to be
+attacked. (Scoped deliberately: three `arcane/home/` stacks do mark a network
+`internal: true` — `honeypot-keycloak`'s `keycloak-data`,
+`honeypot-dashboard`'s `oidc-session`, and `honeypot-elk`'s
+`honeypot-llm-data` — but all three are management-plane networks for services
+that want no egress, not sensor networks. The same unscoped sentence is repeated
+as a comment in `honeypot-cowrie/compose.yml`'s `networks:` block.) It also
+mirrors T-Pot's own stated reasoning: "For some
 honeypots to reach full functionality (i.e. Cowrie or Log4Pot) outgoing
 connections are necessary as well, in order for them to download the
 attacker's malware."

@@ -4,18 +4,54 @@
 //! sensor observes for that same connection) — the same join
 //! dashboard/classify.go's buildViaMap/viaLookup does read-time, done here
 //! at ingest time instead.
+//!
+//! #3573: `resolve` is the join every enricher uses for portbridge. It
+//! answers with one of three outcomes (attributed / ambiguous / unmatched)
+//! instead of a best guess, and it is mirrored rule-for-rule by
+//! scripts/backfill-tunnel-attribution.py so live attribution and the
+//! historical backfill can never disagree about what counts as a match.
 
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use super::tail::read_new_lines;
 
+/// Which transport a portbridge rule (or a sensor line) used.
+///
+/// TCP and UDP ephemeral ports are separate namespaces on the VPS: a TCP dial
+/// and a UDP session can hold the same local port number at the same time,
+/// so a sensor line that says which one it saw must not join against the
+/// other. `Unknown` matches either and is what a line that does not say gets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Transport {
+    Tcp,
+    Udp,
+    #[default]
+    Unknown,
+}
+
+impl Transport {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "tcp" => Transport::Tcp,
+            "udp" => Transport::Udp,
+            _ => Transport::Unknown,
+        }
+    }
+
+    fn compatible(self, other: Transport) -> bool {
+        self == Transport::Unknown || other == Transport::Unknown || self == other
+    }
+}
+
 /// One portbridge connection, as the join needs to see it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViaEntry {
     /// The real client address portbridge accepted the connection from.
     pub ip: String,
@@ -32,9 +68,12 @@ pub struct ViaEntry {
     /// destination port can: a connection to mssql on 1433 did not come
     /// from a dial to telnet on 23, whatever the clock says.
     pub target_port: i64,
+    /// #3573: portbridge's `proto` for the rule that carried the connection.
+    pub transport: Transport,
 }
 
-/// via_port -> the recent connections that used it, oldest first.
+/// via_port -> the recent connections that used it, oldest first, plus the
+/// newest dial time read so far.
 ///
 /// #1771: this was `via_port -> ip`, keeping only the newest connection per
 /// port, and the join took whatever was there. Ephemeral ports are reused
@@ -45,15 +84,51 @@ pub struct ViaEntry {
 /// exactly like a right one. One conpot connection was split across two
 /// unrelated IPs this way.
 ///
-/// Keeping a short history per port lets `lookup` pick the connection that
+/// Keeping a short history per port lets the join pick the connection that
 /// was actually open when the sensor line was written, instead of the most
 /// recent one to touch the port.
-pub type ViaMap = HashMap<i64, Vec<ViaEntry>>;
+///
+/// #3573: `newest_at` is how far the map has read. A join is only final once
+/// the map has read past the end of the line's window -- before that, a
+/// second dial on the same port that would make the answer ambiguous may
+/// simply not have been read yet.
+#[derive(Clone, Debug, Default)]
+pub struct ViaMap {
+    ports: HashMap<i64, Vec<ViaEntry>>,
+    newest_at: i64,
+}
+
+impl ViaMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The newest portbridge dial time this map has read (epoch seconds).
+    pub fn newest_at(&self) -> i64 {
+        self.newest_at
+    }
+}
+
+impl Deref for ViaMap {
+    type Target = HashMap<i64, Vec<ViaEntry>>;
+    fn deref(&self) -> &Self::Target {
+        &self.ports
+    }
+}
+
+impl DerefMut for ViaMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ports
+    }
+}
 
 /// How many connections to remember per via_port. The key space is bounded
-/// by the port number range, so this bounds the whole map; four is well
-/// past the observed reuse depth within any one sensor's line lifetime.
-const HISTORY: usize = 4;
+/// by the port number range, so this bounds the whole map. #3573 raised it
+/// from four: `resolve` has to *see* a competing dial to call a join
+/// ambiguous, and an evicted competitor would turn ambiguity back into a
+/// confident answer. Measured peak reuse is about five dials per port per six
+/// hours, so eight still covers the longest window `resolve` uses.
+const HISTORY: usize = 8;
 
 /// How far before a sensor line a portbridge entry may have been dialled and
 /// still plausibly describe it. Generous on purpose: a cowrie session can
@@ -67,7 +142,44 @@ const MAX_AGE_SECONDS: i64 = 6 * 3600;
 /// portbridge logs at dial time, strictly before the honeypot can see the
 /// connection, so an entry stamped meaningfully *after* the line cannot be
 /// that line's origin -- that is the check doing the real work here.
-const CLOCK_SKEW_SECONDS: i64 = 2;
+pub const CLOCK_SKEW_SECONDS: i64 = 2;
+
+/// #3573: how long before a connection's first sensor line portbridge's dial
+/// may be stamped.
+///
+/// Measured on 10,000 cowrie `session.connect` events against portbridge-v2
+/// (2026-09-26): the sensor stamp minus the dial stamp was 0s for 27%, 1s
+/// for 69% and 2s for 4% -- portbridge truncates to whole seconds and logs
+/// just after the dial completes. Nothing legitimate fell outside 0..2s;
+/// everything outside was background reuse of the port by unrelated
+/// connections, at about one per second per 10,000 lookups. Four seconds
+/// keeps a margin without widening the window into that background.
+pub const DIAL_LEAD_SECONDS: i64 = 4;
+
+/// #3573: how long a UDP session may run before a line of it is no longer
+/// joined against its opening dial when the sensor gives no session
+/// identifier to anchor on.
+///
+/// UDP is different from TCP here. portbridge binds one wildcard socket per
+/// client session, so while a session is alive no other session can hold
+/// its local port -- for any target -- and a session only ends after two
+/// minutes of silence. The newest dial on the port before the line is
+/// therefore the line's own session, however long it has been running. The
+/// cap only bounds how much a gap in the log could ever cost.
+pub const UDP_SESSION_MAX_AGE_SECONDS: i64 = 3600;
+
+/// #3573: how far back a rival client is looked for when a TCP line does not
+/// say which port portbridge dialled.
+///
+/// With the target known, a late line of a long connection is safe: while the
+/// connection is open nothing else can dial that target from the same port,
+/// so a rival in the window cannot exist. Without it, a line written minutes
+/// into a connection can meet an unrelated dial to another service that
+/// reused the port a second earlier, and the narrow window would name that
+/// stranger. Requiring the port to have been quiet for ten minutes before the
+/// line turns that case into AMBIGUOUS. Only sensors that log no listen port
+/// pay for it (beelzebub, TCP sentrypeer).
+pub const RIVAL_LOOKBACK_SECONDS: i64 = 600;
 
 pub fn read_portbridge_lines(path: &Path, m: &mut ViaMap) {
     let Ok(file) = File::open(path) else { return };
@@ -92,12 +204,18 @@ pub fn parse_portbridge_line(line: &[u8], m: &mut ViaMap) {
             .and_then(|t| t.rsplit_once(':'))
             .and_then(|(_, port)| port.parse().ok())
             .unwrap_or(0),
+        transport: e.get("proto").and_then(Value::as_str).map(Transport::parse).unwrap_or_default(),
     };
+    if entry.at > m.newest_at {
+        m.newest_at = entry.at;
+    }
     let slot = m.entry(via_port as i64).or_default();
     // portbridge ships each connection once; the duplicate-shipping bug that
     // made every line arrive twice (#1776) would otherwise fill the history
-    // with copies of one connection and push real ones out.
-    if slot.last() == Some(&entry) {
+    // with copies of one connection and push real ones out. #3573: checked
+    // against the whole slot, not just its last entry, because re-reading a
+    // freshly rotated segment replays lines the live tail already took.
+    if slot.contains(&entry) {
         return;
     }
     slot.push(entry);
@@ -114,6 +232,11 @@ fn parse_time(value: &str) -> Option<i64> {
 /// The address that was behind `via_port` when a sensor line timestamped
 /// `line_at` (epoch seconds; 0 when the line carried no usable timestamp)
 /// was written.
+///
+/// #3573: only the TFTP relay's session map still joins through this, since
+/// its entries carry no timestamp at all. Every portbridge join goes through
+/// `resolve`, which refuses to pick between candidates instead of taking the
+/// newest one inside a six-hour window.
 ///
 /// Returns None rather than a best guess: an unattributed event is honest,
 /// a confidently wrong attacker is not.
@@ -175,6 +298,160 @@ fn plausible(entry: &ViaEntry, line_at: i64) -> bool {
     line_at - entry.at <= MAX_AGE_SECONDS
 }
 
+/// What one join against portbridge's log concluded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Join<'a> {
+    /// Exactly one client could have produced the line.
+    Attributed(&'a str),
+    /// More than one client could have, so none is named. Counted, never
+    /// guessed (#3573).
+    Ambiguous,
+    /// No dial on this port fits the line.
+    Unmatched,
+}
+
+impl Join<'_> {
+    /// The value a line carries in `tunnel_attribution` for this outcome.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Join::Attributed(_) => "portbridge",
+            Join::Ambiguous => "ambiguous",
+            Join::Unmatched => "unmatched",
+        }
+    }
+}
+
+/// One question for `resolve`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JoinQuery {
+    /// The sensor-observed source port, which is portbridge's via_port.
+    pub via_port: i64,
+    /// When the connection started, as epoch seconds: the first line the
+    /// sensor wrote for this session if it names one, otherwise this line's
+    /// own time. 0 when the sensor gave no usable time.
+    pub at: i64,
+    /// The port portbridge dialled (its `target` port), when the sensor's own
+    /// listen port is known to equal it; 0 when it is not.
+    pub want_port: i64,
+    pub transport: Transport,
+}
+
+/// #3573: the portbridge join, answering only when the answer is certain.
+///
+/// The window is `[at - lead, at + CLOCK_SKEW_SECONDS]`, where `at` is the
+/// connection's start and `lead` is DIAL_LEAD_SECONDS -- except for a known
+/// UDP line, whose lead is UDP_SESSION_MAX_AGE_SECONDS (see that constant
+/// for why a UDP session can be joined long after it opened and a TCP one
+/// cannot).
+///
+/// * TCP / unknown transport: every candidate in the window must name the
+///   same client. Two different clients means two connections shared the
+///   port within seconds, and nothing on the line says which is which.
+/// * UDP: the newest candidate is the line's own session. It is still
+///   ambiguous if another client's dial sits in the narrow band around the
+///   line itself, since then the clocks cannot order the two.
+///
+/// A line with no usable time only joins against entries that have none
+/// either -- test fixtures, and nothing portbridge writes. A timed portbridge
+/// entry is never matched to an untimed line: without a time there is no
+/// window, and without a window every dial ever made on the port qualifies.
+pub fn resolve(m: &ViaMap, q: JoinQuery) -> Join<'_> {
+    if q.via_port == 0 {
+        return Join::Unmatched;
+    }
+    let Some(slot) = m.get(&q.via_port) else { return Join::Unmatched };
+    let fits = |entry: &&ViaEntry| port_matches(entry, q.want_port) && entry.transport.compatible(q.transport);
+
+    let candidates: Vec<&ViaEntry> = if q.at == 0 {
+        slot.iter().filter(|e| e.at == 0).filter(fits).collect()
+    } else {
+        let lead = if q.transport == Transport::Udp { UDP_SESSION_MAX_AGE_SECONDS } else { DIAL_LEAD_SECONDS };
+        slot.iter()
+            .filter(|e| e.at != 0 && e.at >= q.at - lead && e.at <= q.at + CLOCK_SKEW_SECONDS)
+            .filter(fits)
+            .collect()
+    };
+    let Some(newest) = candidates.iter().max_by_key(|e| e.at) else { return Join::Unmatched };
+
+    let rivals = |pred: &dyn Fn(&ViaEntry) -> bool| candidates.iter().any(|e| e.ip != newest.ip && pred(e));
+    let ambiguous = if q.transport == Transport::Udp && q.at != 0 {
+        // Only a rival close enough to the line that the clocks cannot order
+        // it against the newest dial makes a UDP join ambiguous.
+        rivals(&|e: &ViaEntry| e.at >= q.at - DIAL_LEAD_SECONDS || e.at == newest.at)
+    } else if q.want_port == 0 && q.at != 0 {
+        rivals(&|_| true)
+            || slot.iter().filter(fits).any(|e| {
+                e.ip != newest.ip && e.at != 0 && e.at >= q.at - RIVAL_LOOKBACK_SECONDS && e.at <= q.at + CLOCK_SKEW_SECONDS
+            })
+    } else {
+        rivals(&|_| true)
+    };
+    if ambiguous {
+        Join::Ambiguous
+    } else {
+        Join::Attributed(newest.ip.as_str())
+    }
+}
+
+/// Whether `resolve`'s answer for a line at `at` can no longer change: the
+/// map has read past the end of the line's window, so no dial that would
+/// make it ambiguous is still to come. An untimed line is always settled.
+pub fn settled(m: &ViaMap, at: i64) -> bool {
+    at == 0 || m.newest_at() >= at + CLOCK_SKEW_SECONDS
+}
+
+/// #3573: whether the worker can currently read portbridge's log.
+///
+/// The join failed silently for weeks because of exactly this: the log sits
+/// on an sshfs mount whose `default_permissions` made the kernel enforce the
+/// file's root:root 0640 against the worker's `nobody`, and the read error
+/// was dropped. Every tunnel line then timed out unattributed while the
+/// worker reported nothing but "timed_out" counts. The stats line now prints
+/// this flag, and the transition is logged at error level.
+static PORTBRIDGE_READABLE: AtomicBool = AtomicBool::new(true);
+
+pub fn portbridge_readable() -> bool {
+    PORTBRIDGE_READABLE.load(Ordering::Relaxed)
+}
+
+fn note_readability(path: &Path, result: Result<(), &std::io::Error>) {
+    match result {
+        Ok(()) => {
+            if !PORTBRIDGE_READABLE.swap(true, Ordering::Relaxed) {
+                tracing::info!(path = %path.display(), "ip-enrichment: portbridge log readable again; tunnel joins resume");
+            }
+        }
+        Err(error) => {
+            if PORTBRIDGE_READABLE.swap(false, Ordering::Relaxed) {
+                tracing::error!(
+                    path = %path.display(),
+                    %error,
+                    "ip-enrichment: cannot read the portbridge log -- every tunnel-peer event will stay unattributed until this is fixed (#3573; check the sshfs mount options and the file mode)"
+                );
+            }
+        }
+    }
+}
+
+/// The most recently rotated `portbridge.json.<stamp>` segment.
+///
+/// portbridge rotates by renaming to a UTC timestamp suffix (main.go's
+/// connLogger.rotate), not to `.1` -- the fixed name this used to read never
+/// exists, so after a worker restart the previous segment's dials were
+/// missing from the map. Rename preserves mtime, so the newest segment is
+/// the one written last.
+fn previous_generation(dir: &Path) -> Option<(PathBuf, SystemTime, u64)> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("portbridge.json."))
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            Some((entry.path(), meta.modified().ok()?, meta.len()))
+        })
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
+}
+
 /// Maintains the via_port -> src_ip map incrementally across `refresh()`
 /// calls instead of re-reading both portbridge generations (up to ~10MiB
 /// combined) from scratch every tick forever — a real production incident
@@ -182,8 +459,8 @@ fn plausible(entry: &ViaEntry, line_at: i64) -> bool {
 /// with the live file's size across a container's uptime, throttling the
 /// process (>95% of CFS scheduling periods) badly enough to push the
 /// highest-volume sensor's join attempts outside PENDING_TIMEOUT almost
-/// entirely after ~2 days up. portbridge.json.1 (the previous, static
-/// generation) is only re-parsed when it actually changes (mtime+size);
+/// entirely after ~2 days up. The newest rotated `portbridge.json.<stamp>`
+/// (the previous, static generation) is only re-parsed when it changes;
 /// portbridge.json (the live, growing file) is tailed for new bytes only.
 /// via_port's key space is a port number, so the accumulated map is
 /// inherently bounded regardless of log volume or uptime — entries are
@@ -208,22 +485,24 @@ impl ViaMapBuilder {
     /// never handed out directly, so a caller publishing it behind an
     /// `Arc`/`RwLock` never observes an in-progress mutation.
     pub fn refresh(&mut self) -> ViaMap {
-        let gen_path = self.portbridge_dir.join("portbridge.json.1");
-        if let Ok(meta) = fs::metadata(&gen_path) {
-            let mtime = meta.modified().ok();
-            if mtime != self.gen_mtime || meta.len() != self.gen_size {
+        if let Some((gen_path, mtime, size)) = previous_generation(&self.portbridge_dir) {
+            if Some(mtime) != self.gen_mtime || size != self.gen_size {
                 read_portbridge_lines(&gen_path, &mut self.map);
-                self.gen_mtime = mtime;
-                self.gen_size = meta.len();
+                self.gen_mtime = Some(mtime);
+                self.gen_size = size;
             }
         }
 
         let live_path = self.portbridge_dir.join("portbridge.json");
-        if let Ok((lines, new_offset)) = read_new_lines(&live_path, self.live_offset) {
-            for line in &lines {
-                parse_portbridge_line(line, &mut self.map);
+        match read_new_lines(&live_path, self.live_offset) {
+            Ok((lines, new_offset)) => {
+                note_readability(&live_path, Ok(()));
+                for line in &lines {
+                    parse_portbridge_line(line, &mut self.map);
+                }
+                self.live_offset = new_offset;
             }
-            self.live_offset = new_offset;
+            Err(error) => note_readability(&live_path, Err(&error)),
         }
 
         self.map.clone()
@@ -354,7 +633,7 @@ mod tests {
     // ---- #1917: the destination port separates a reused ephemeral port ----
 
     fn entry(ip: &str, at: i64, target_port: i64) -> ViaEntry {
-        ViaEntry { ip: ip.to_string(), at, target_port }
+        ViaEntry { ip: ip.to_string(), at, target_port, ..Default::default() }
     }
 
     /// The measured case, with the real numbers from the live logs.
@@ -431,5 +710,181 @@ mod tests {
         let slot = m.get(&54674).expect("entry recorded");
         assert_eq!(slot[0].target_port, 1433, "from `target`, not from `port`");
         assert_eq!(slot[0].ip, "151.243.11.8");
+    }
+
+    // ---- #3573: resolve -- one answer, or an honest refusal ----
+
+    fn timed(ip: &str, at: i64, target_port: i64, transport: Transport) -> ViaEntry {
+        ViaEntry { ip: ip.to_string(), at, target_port, transport }
+    }
+
+    fn tcp(port: i64, at: i64) -> JoinQuery {
+        JoinQuery { via_port: port, at, want_port: 0, transport: Transport::Tcp }
+    }
+
+    #[test]
+    fn the_dial_that_opened_the_connection_is_attributed() {
+        // The measured shape: portbridge stamps whole seconds just after the
+        // dial, the sensor stamps the accept 0-2s later.
+        let mut m = ViaMap::new();
+        m.insert(48132, vec![timed("203.0.113.20", T, 19023, Transport::Tcp)]);
+        assert_eq!(resolve(&m, tcp(48132, T + 1)), Join::Attributed("203.0.113.20"));
+        assert_eq!(resolve(&m, tcp(48132, T)), Join::Attributed("203.0.113.20"));
+    }
+
+    #[test]
+    fn a_dial_minutes_before_the_connection_is_not_its_origin() {
+        // The old six-hour window took this. It is another connection that
+        // happened to use the same port earlier; the right dial is missing.
+        let mut m = ViaMap::new();
+        m.insert(48132, vec![timed("203.0.113.20", T - 600, 19023, Transport::Tcp)]);
+        assert_eq!(resolve(&m, tcp(48132, T)), Join::Unmatched);
+    }
+
+    #[test]
+    fn two_clients_on_one_port_within_seconds_is_ambiguous_not_newest_wins() {
+        let mut m = ViaMap::new();
+        m.insert(
+            48132,
+            vec![timed("203.0.113.20", T - 1, 19023, Transport::Tcp), timed("198.51.100.30", T, 445, Transport::Tcp)],
+        );
+        assert_eq!(resolve(&m, tcp(48132, T + 1)), Join::Ambiguous);
+    }
+
+    #[test]
+    fn the_same_client_twice_is_not_a_rival() {
+        let mut m = ViaMap::new();
+        m.insert(
+            48132,
+            vec![timed("203.0.113.20", T - 1, 19023, Transport::Tcp), timed("203.0.113.20", T, 19022, Transport::Tcp)],
+        );
+        assert_eq!(resolve(&m, tcp(48132, T + 1)), Join::Attributed("203.0.113.20"));
+    }
+
+    #[test]
+    fn a_known_target_port_removes_a_rival_on_another_service() {
+        let mut m = ViaMap::new();
+        m.insert(
+            48132,
+            vec![timed("203.0.113.20", T, 23, Transport::Tcp), timed("198.51.100.30", T, 1433, Transport::Tcp)],
+        );
+        let q = JoinQuery { want_port: 1433, ..tcp(48132, T + 1) };
+        assert_eq!(resolve(&m, q), Join::Attributed("198.51.100.30"));
+    }
+
+    #[test]
+    fn a_wrong_target_port_can_only_cost_a_match() {
+        // The right dial filtered away leaves nothing, not somebody else.
+        let mut m = ViaMap::new();
+        m.insert(48132, vec![timed("203.0.113.20", T, 23, Transport::Tcp)]);
+        let q = JoinQuery { want_port: 1433, ..tcp(48132, T + 1) };
+        assert_eq!(resolve(&m, q), Join::Unmatched);
+    }
+
+    #[test]
+    fn tcp_and_udp_ports_are_separate_namespaces() {
+        let mut m = ViaMap::new();
+        m.insert(40000, vec![timed("203.0.113.20", T, 161, Transport::Udp)]);
+        assert_eq!(resolve(&m, tcp(40000, T + 1)), Join::Unmatched);
+        let unknown = JoinQuery { transport: Transport::Unknown, ..tcp(40000, T + 1) };
+        assert_eq!(resolve(&m, unknown), Join::Attributed("203.0.113.20"), "a line that does not say matches either");
+    }
+
+    fn udp(port: i64, at: i64) -> JoinQuery {
+        JoinQuery { via_port: port, at, want_port: 0, transport: Transport::Udp }
+    }
+
+    #[test]
+    fn a_long_udp_session_resolves_to_its_opening_dial() {
+        // conpot's SNMP floods: one session, one via_port, thousands of
+        // datagrams over half an hour.
+        let mut m = ViaMap::new();
+        m.insert(
+            40000,
+            vec![timed("198.51.100.30", T - 3000, 161, Transport::Udp), timed("203.0.113.20", T - 1800, 161, Transport::Udp)],
+        );
+        assert_eq!(resolve(&m, udp(40000, T)), Join::Attributed("203.0.113.20"));
+    }
+
+    #[test]
+    fn a_udp_dial_too_close_to_the_line_to_order_is_ambiguous() {
+        let mut m = ViaMap::new();
+        m.insert(
+            40000,
+            vec![timed("198.51.100.30", T - 1, 161, Transport::Udp), timed("203.0.113.20", T + 1, 161, Transport::Udp)],
+        );
+        assert_eq!(resolve(&m, udp(40000, T)), Join::Ambiguous);
+    }
+
+    #[test]
+    fn a_udp_session_older_than_the_cap_is_not_joined() {
+        let mut m = ViaMap::new();
+        m.insert(40000, vec![timed("203.0.113.20", T - UDP_SESSION_MAX_AGE_SECONDS - 1, 161, Transport::Udp)]);
+        assert_eq!(resolve(&m, udp(40000, T)), Join::Unmatched);
+    }
+
+    #[test]
+    fn an_untimed_line_never_matches_a_timed_dial() {
+        let mut m = ViaMap::new();
+        m.insert(48132, vec![timed("203.0.113.20", T, 23, Transport::Tcp)]);
+        assert_eq!(resolve(&m, tcp(48132, 0)), Join::Unmatched);
+    }
+
+    #[test]
+    fn an_answer_is_settled_only_once_the_map_has_read_past_the_window() {
+        let mut m = ViaMap::new();
+        parse_portbridge_line(
+            br#"{"sensor":"portbridge","src_ip":"203.0.113.20","via_port":48132,"proto":"tcp","target":"10.8.0.2:19023","time":"2026-08-23T14:07:47Z"}"#,
+            &mut m,
+        );
+        assert_eq!(m.newest_at(), T);
+        assert!(!settled(&m, T + 1), "a rival dial up to two seconds later may not be read yet");
+        parse_portbridge_line(
+            br#"{"sensor":"portbridge","src_ip":"198.51.100.30","via_port":1,"time":"2026-08-23T14:07:51Z"}"#,
+            &mut m,
+        );
+        assert!(settled(&m, T + 1));
+        assert_eq!(m[&48132][0].transport, Transport::Tcp, "proto is read off the line");
+    }
+
+    #[test]
+    fn the_builder_reads_the_stamped_rotation_segment_and_reports_an_unreadable_log() {
+        let dir = std::env::temp_dir().join(format!("viamap-builder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("portbridge.json.20261009-120000"),
+            b"{\"sensor\":\"portbridge\",\"src_ip\":\"203.0.113.20\",\"via_port\":4000,\"time\":\"2026-08-23T14:07:47Z\"}\n",
+        )
+        .unwrap();
+        // A directory where the log should be fails the read the way an
+        // EACCES did live, without depending on who runs the test.
+        std::fs::create_dir_all(dir.join("portbridge.json")).unwrap();
+
+        let mut builder = ViaMapBuilder::new(dir.clone());
+        assert!(!portbridge_readable(), "an unreadable live log is reported, not swallowed");
+        let m = builder.refresh();
+        assert_eq!(m[&4000][0].ip, "203.0.113.20", "the rotated segment is read under its real name");
+
+        std::fs::remove_dir_all(dir.join("portbridge.json")).unwrap();
+        std::fs::write(dir.join("portbridge.json"), b"").unwrap();
+        builder.refresh();
+        assert!(portbridge_readable(), "and the recovery is noticed");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn without_a_target_port_an_earlier_rival_on_the_port_makes_it_ambiguous() {
+        // A line written minutes into a connection whose port was dialled
+        // again a second before the line, for another service: the narrow
+        // window alone would name the stranger.
+        let mut m = ViaMap::new();
+        m.insert(
+            48132,
+            vec![timed("203.0.113.20", T - 300, 389, Transport::Tcp), timed("198.51.100.30", T - 1, 445, Transport::Tcp)],
+        );
+        assert_eq!(resolve(&m, tcp(48132, T)), Join::Ambiguous);
+        let told = JoinQuery { want_port: 445, ..tcp(48132, T) };
+        assert_eq!(resolve(&m, told), Join::Attributed("198.51.100.30"), "a known target needs no look-back");
     }
 }

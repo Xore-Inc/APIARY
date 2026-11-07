@@ -42,7 +42,17 @@
 #   scripts/backup-essentials.sh --dry-run  # collect, report size, discard
 #   scripts/backup-essentials.sh --list     # list what each destination holds
 #   scripts/backup-essentials.sh --check    # exit non-zero if the newest archive
-#                                            # anywhere is missing or >MAX_AGE_HOURS old
+#                                            # anywhere is missing or >MAX_AGE_HOURS old,
+#                                            # or the installed copy of this script is
+#                                            # older than the checkout (#3709)
+#
+# Exit status (#3709): 0 only when every REQUIRED item was collected and the
+# archive reached all three destinations. The required items are the
+# installer answers file, the es-operator-state export, the Keycloak dump,
+# the stack .env files and the WireGuard keys; a missing one, or a
+# destination that could not be written, makes the run exit 1 with an
+# ERROR line naming it -- the archive is still written to whatever is
+# reachable, because a partial backup beats none, but the unit goes red.
 #
 # Env:
 #   HOMESERVER_SSH   ssh target for the homeserver      (default: homeserver)
@@ -55,6 +65,8 @@
 #   BACKUP_ENCRYPT   1 = gpg-encrypt the archive        (default: 1)
 #   PASSPHRASE_FILE  gpg symmetric passphrase           (default: /etc/apiary-backup.pass)
 #   MAX_AGE_HOURS    --check staleness threshold        (default: 48)
+#   INSTALL_STAMP    sha256 stamp install-backup-essentials.sh wrote for this
+#                    installed copy                     (default: <this script>.src-sha256)
 #
 # Restore: docs/BACKUP-ESSENTIALS.md, a copy of which rides inside every
 # archive under repo/docs/ along with the rest of the runbooks. The archive is
@@ -74,6 +86,8 @@ RETENTION=${RETENTION:-30}
 BACKUP_ENCRYPT=${BACKUP_ENCRYPT:-1}
 PASSPHRASE_FILE=${PASSPHRASE_FILE:-/etc/apiary-backup.pass}
 MAX_AGE_HOURS=${MAX_AGE_HOURS:-48}
+SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
+INSTALL_STAMP=${INSTALL_STAMP:-$SELF.src-sha256}
 
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15)
 
@@ -92,6 +106,32 @@ done
 
 log()  { printf '[backup-essentials] %s\n' "$*" >&2; }
 fail() { printf '[backup-essentials] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# --- installed-copy staleness (#3709) ---------------------------------------
+#
+# The systemd unit runs a copy in /usr/local/libexec (SELinux blocks exec from
+# /home), so a `git pull` changes nothing the timer runs until the installer is
+# re-run. That went unnoticed for six weeks: the copy running on the backup
+# host predated the es-operator-state export, and every archive since silently
+# lacked the dashboard operator state (incident #3708). install-backup-essentials.sh
+# stamps the sha256 of the checkout script it copied; compare it with the
+# checkout's current one. Sets installed_stale=1 and says so loudly. Silent
+# only when running the checkout copy in place or when there is no checkout.
+installed_stale=0
+check_installed_copy() {
+  local src=$REPO_DIR/scripts/backup-essentials.sh have want
+  [ -f "$src" ] || return 0
+  [ "$SELF" = "$(readlink -f -- "$src")" ] && return 0
+  want=$(sha256sum -- "$src" | cut -d' ' -f1)
+  have=$(cut -d' ' -f1 "$INSTALL_STAMP" 2>/dev/null || true)
+  if [ -z "$have" ]; then
+    installed_stale=1
+    log "WARNING: installed copy $SELF has no install stamp ($INSTALL_STAMP) -- it predates stamping and is probably stale; re-run: sudo $REPO_DIR/scripts/install-backup-essentials.sh"
+  elif [ "$have" != "$want" ]; then
+    installed_stale=1
+    log "WARNING: installed copy $SELF is older than the checkout $src -- re-run: sudo $REPO_DIR/scripts/install-backup-essentials.sh"
+  fi
+}
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 base="apiary-essentials-$stamp"
@@ -117,6 +157,7 @@ fi
 # across all three destinations and fails loudly if it is missing or stale.
 
 if [ "$check_only" -eq 1 ]; then
+  check_installed_copy
   newest=0
   for dir in "$DEST_LOCAL_USB" "$DEST_LOCAL_DISK"; do
     while IFS= read -r t; do
@@ -134,11 +175,14 @@ if [ "$check_only" -eq 1 ]; then
   age_h=$(( ($(date +%s) - newest) / 3600 ))
   [ "$age_h" -le "$MAX_AGE_HOURS" ] \
     || fail "newest essentials archive is ${age_h}h old (> ${MAX_AGE_HOURS}h) — check apiary-backup-essentials.timer"
+  [ "$installed_stale" -eq 0 ] || fail "installed copy of this script is stale (see WARNING above) -- the timer is not running the code in the checkout"
   log "newest essentials archive is ${age_h}h old — OK"
   exit 0
 fi
 
 # --- preflight --------------------------------------------------------------
+
+check_installed_copy
 
 for host in "$HOMESERVER_SSH" "$VPS_SSH"; do
   ssh "${SSH_OPTS[@]}" "$host" true 2>/dev/null \
@@ -215,16 +259,30 @@ fi
 # filesystem -- exactly what a reinstall wipes -- so a rebuild that starts
 # from a wiped disk has no way to reconstruct it. Collected under sudo
 # because it is 0600 and owned by the operator, not root.
+#
+# Where the answers file really lives (#3709): the installer takes --config
+# <path>, so there is no canonical home. install.sh --profile home defaults to
+# /etc/apiary/install-home.conf; the live homeserver keeps its copies in
+# /root/apiary-install/ and /home/<user>/install/. The old glob
+# (/root/ and /home/*/ directly) matched none of them, so every archive since
+# the file was moved lacked it. Every plausible location is collected, under a
+# name derived from the full source path so two copies can never collide, with
+# mtimes kept so the newest is identifiable on restore. *.bak-* siblings are
+# deliberately not matched.
 mkdir -p "$stage/installer"
-for conf in /root/install-homeserver.conf /home/*/install-homeserver.conf; do
+for conf in /etc/apiary/install-home.conf \
+            /root/install-homeserver.conf /root/apiary-install/install-homeserver.conf \
+            /home/*/install-homeserver.conf /home/*/install/install-homeserver.conf; do
   [ -f "$conf" ] || continue
-  cp -- "$conf" "$stage/installer/$(basename "$(dirname "$conf")")-$(basename "$conf")"
+  dest=$(printf '%s' "${conf#/}" | tr '/' '_')
+  cp -p -- "$conf" "$stage/installer/$dest"
+  chmod 600 "$stage/installer/$dest"
 done
 if [ "$(find "$stage/installer" -type f | wc -l)" -gt 0 ]; then
   echo "  installer: $(find "$stage/installer" -type f | wc -l) answers file(s)"
 else
   rmdir "$stage/installer"
-  echo "  installer: no install-homeserver.conf found -- a restore will need one written by hand"
+  echo "  installer: NO install-homeserver.conf found -- REQUIRED item missing, a restore will need one written by hand" >&2
 fi
 
 # Technitium DNS (replaced Pi-hole 2026-09-03): hand-maintained config only.
@@ -261,6 +319,8 @@ if docker inspect hp-keycloak-postgres >/dev/null 2>&1; then
     rm -f "$stage/keycloak/keycloak.sql.gz"
     echo "  keycloak: pg_dump FAILED — container up but dump did not complete" >&2
   fi
+else
+  echo "  keycloak: hp-keycloak-postgres is not running -- no identity dump in this archive" >&2
 fi
 
 # The dashboard's operator-authored Elasticsearch documents (#3323).
@@ -382,6 +442,31 @@ mkdir -p "$stage/manifest"
 tar -C "$stage" -cf - . >&3
 REMOTE
 
+# --- required items (#3709) --------------------------------------------------
+#
+# Checked here, on the staged tree, rather than trusted from the remote side's
+# own diagnostics: those were all "echo and carry on", which is how an archive
+# with no installer conf and no operator state was written, logged as
+# success, and sat in three places until the restore in #3708 needed them. A
+# missing item does not stop the archive being written (the other contents
+# are still worth having) but is collected into `missing`, named in the run's
+# output, recorded in MANIFEST.txt, and turns the exit status non-zero.
+
+missing=()
+nonempty_dir() { [ -d "$1" ] && [ -n "$(find "$1" -type f -size +0 -print -quit 2>/dev/null)" ]; }
+hs=$staging/homeserver
+nonempty_dir "$hs/installer"        || missing+=("installer answers file (homeserver/installer/)")
+[ -s "$hs/es-operator-state/MANIFEST.txt" ] \
+                                    || missing+=("dashboard operator-state export (homeserver/es-operator-state/)")
+[ -s "$hs/keycloak/keycloak.sql.gz" ] \
+                                    || missing+=("Keycloak dump (homeserver/keycloak/keycloak.sql.gz)")
+[ -n "$(find "$hs/env" -name '*.env' -size +0 -print -quit 2>/dev/null)" ] \
+                                    || missing+=("stack .env files (homeserver/env/)")
+nonempty_dir "$hs/wireguard"        || missing+=("WireGuard keys (homeserver/wireguard/)")
+for item in "${missing[@]+"${missing[@]}"}"; do
+  [ -n "$item" ] && log "ERROR: REQUIRED item missing: $item"
+done
+
 # --- runbooks ---------------------------------------------------------------
 #
 # The archive carries the repo's own documentation and operational scripts.
@@ -423,6 +508,7 @@ APIARY essentials backup
 created    $(date -u +%FT%TZ)
 by         $(id -un)@$(hostname)
 stamp      $stamp
+status     $([ "${#missing[@]}" -eq 0 ] && echo complete || echo "INCOMPLETE -- missing: $(IFS=';'; echo "${missing[*]}")")
 
 This archive holds only what is needed to rebuild the stack: secrets, keys,
 certificates, the Keycloak identity database, operator-edited config, small
@@ -472,6 +558,7 @@ if [ "$dry_run" -eq 1 ]; then
   log "dry run — collected tree:"
   ( cd "$staging" && du -ah --max-depth=2 . | sort -k2 ) >&2
   log "archive would be $(du -h "$archive" | cut -f1); nothing written to any destination"
+  [ "${#missing[@]}" -eq 0 ] || fail "dry run: ${#missing[@]} required item(s) missing (listed above)"
   exit 0
 fi
 
@@ -491,11 +578,17 @@ log "packaged $artifact ($(du -h "$archive" | cut -f1))"
 # --- fan out ----------------------------------------------------------------
 #
 # Every destination is verified by checksum after the copy, then pruned. A
-# destination that is unavailable (USB unplugged, server unreachable) is a
-# warning, not a failure — losing one of three copies should not stop the
-# other two from being written. Losing all three does fail the run.
+# destination that is unavailable (USB unplugged, not writable, server
+# unreachable) does not stop the others from being written -- but since #3709
+# it is no longer a quiet warning either: it is counted in `failed` and the
+# run exits non-zero at the end. The 2026-10-17 run skipped the workstation
+# USB as "not writable" and still exited 0, so that archive reached 2 of 3
+# targets with nothing anywhere saying so. Losing all three fails at once.
+# The mountpoint checks stay: they are what stops an unattended run writing
+# into an empty directory on the root filesystem.
 
 written=0
+failed=0
 
 # A plaintext note beside the encrypted archives. The runbooks are inside the
 # archive, which is exactly the wrong side of the encryption if what you have
@@ -567,6 +660,10 @@ copy_local() {
     /run/media/*|/media/*|/mnt/*)
       local mnt=$dir
       while [ "$mnt" != "/" ] && ! mountpoint -q "$mnt"; do mnt=$(dirname "$mnt"); done
+      # /run is a tmpfs mountpoint on every systemd host, so climbing to it
+      # (an unplugged drive: /run/media/<user>/<label> absent) used to count as
+      # "mounted" and the mkdir below wrote into RAM. Those are not USB mounts.
+      case $mnt in /|/run|/run/media|/media|/mnt) mnt=/ ;; esac
       if [ "$mnt" = "/" ]; then
         log "WARNING: $label ($dir) is not on a mounted filesystem — skipping"
         return 1
@@ -584,8 +681,8 @@ copy_local() {
   return 0
 }
 
-copy_local "local USB"       "$DEST_LOCAL_USB"  && written=$((written + 1))
-copy_local "local disk"      "$DEST_LOCAL_DISK" && written=$((written + 1))
+if copy_local "local USB" "$DEST_LOCAL_USB"; then written=$((written + 1)); else failed=$((failed + 1)); fi
+if copy_local "local disk" "$DEST_LOCAL_DISK"; then written=$((written + 1)); else failed=$((failed + 1)); fi
 
 # The server USB was reformatted from Ventoy/exfat to a single ext4 partition
 # on 2026-08-23 (label APIARY-BACKUP). ext4 keeps ownership and permission
@@ -612,13 +709,29 @@ if ssh "${SSH_OPTS[@]}" "$HOMESERVER_SSH" "mountpoint -q '$server_usb_mount'" 2>
     written=$((written + 1))
   else
     log "WARNING: server USB copy failed — skipping"
+    failed=$((failed + 1))
     ssh "${SSH_OPTS[@]}" "$HOMESERVER_SSH" \
       "rm -f '$DEST_SERVER_USB/$artifact' '$DEST_SERVER_USB/$artifact.sha256'" 2>/dev/null || true
   fi
 else
   log "WARNING: $server_usb_mount is not mounted on $HOMESERVER_SSH — skipping"
+  failed=$((failed + 1))
 fi
 
 [ "$written" -gt 0 ] || fail "no destination could be written — nothing was backed up"
 
 log "done — $artifact stored in $written of 3 locations"
+
+status=0
+if [ "$failed" -gt 0 ]; then
+  log "ERROR: $failed destination(s) FAILED -- $artifact is NOT in all three locations (see WARNING lines above)"
+  status=1
+fi
+if [ "${#missing[@]}" -gt 0 ]; then
+  log "ERROR: archive is INCOMPLETE -- ${#missing[@]} required item(s) missing (see ERROR lines above)"
+  status=1
+fi
+if [ "$installed_stale" -eq 1 ]; then
+  log "WARNING: this run used a STALE installed copy of the script (see above); re-run scripts/install-backup-essentials.sh"
+fi
+exit "$status"

@@ -35,6 +35,13 @@ paths-ignore:
   - sandbox/ghosts/vendor/ghosts-src/Ghosts.Api/wwwroot/lib
   - arcane/home/honeypot-cowrie/honeyfs-implant/main.go
   - branding/design-lab
+  - docs/diagrams/*.html
+  # #3588: docs/diagrams/*.html are generated archify viewers (the same
+  # viewer runtime inlined into each file next to the diagram data). They
+  # are static documentation, not shipped, not served by any route, opened
+  # only directly in a browser. CodeQL js/remote-property-injection findings
+  # sit inside that generated runtime and recur in every regenerated file;
+  # documentation-artifact noise, same class as the playground exclusion.
   # #1763: branding/design-lab/ is the preserved 2026-08-17 design-lab record
   # (restored from preserve-design-lab-1763 branch) and the single home for it
   # since #3310 retired the duplicate copy this exclusion used to name.

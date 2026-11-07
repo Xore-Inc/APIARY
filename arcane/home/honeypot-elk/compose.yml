@@ -45,7 +45,7 @@ x-runtime-defaults: &runtime-defaults
 services:
   elasticsearch:
     <<: *runtime-defaults
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.3@sha256:f456578fc2a620a8a4f4c21d070fff1f6070345adb2be5e5626b65be72aea350
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5@sha256:13b4a40bb095774f5fda635e45fd5677cc6a26565e42b24997b0c72b88e75984
     container_name: hp-elasticsearch
     restart: unless-stopped
     environment:
@@ -132,7 +132,7 @@ services:
           memory: 12G
   kibana:
     <<: *runtime-defaults
-    image: docker.elastic.co/kibana/kibana:9.5.3@sha256:4530cd98c529bc913ae364067f0233ab6cfb9a560644480b365b45f74a18dbf3
+    image: docker.elastic.co/kibana/kibana:9.5.5@sha256:13b72ce7222c36e4213229004ae62a87aeb32fd372ebfa6fb38f7a3285fdbb78
     container_name: hp-kibana
     restart: unless-stopped
     environment:
@@ -162,7 +162,7 @@ services:
           memory: 2G
   filebeat:
     <<: *runtime-defaults
-    image: docker.elastic.co/beats/filebeat:9.5.3@sha256:ea135eb5b97f2f4cbcf519464b922c5f794e6ebc2dd93822d4ac0be74ef0e29f
+    image: docker.elastic.co/beats/filebeat:9.5.5@sha256:4b2042fcbeb781800bc7271d400f764bb7d670310dfd4fe03ade53d6c7ab78aa
     container_name: hp-filebeat
     restart: unless-stopped
     user: root
@@ -250,7 +250,7 @@ services:
   # overlap is with our composable template's pattern, not EveBox's.
   evebox:
     <<: *runtime-defaults
-    image: jasonish/evebox:latest@sha256:34be7618354071a19d2f16d7ebcde6556a960f414ed957a1e82495c42f152b6c
+    image: jasonish/evebox:latest@sha256:265d41b5a81f78ecc9262727234be1d249f4e6b00a920656685b915ca8ad9bcb
     container_name: hp-evebox
     restart: unless-stopped
     command:
@@ -359,7 +359,7 @@ services:
   # stale, instead of it silently sitting broken again.
   pcap-sync:
     <<: *runtime-defaults
-    image: busybox:latest@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
     container_name: hp-pcap-sync
     restart: unless-stopped
     # #127: waits on the marker directly instead of depends_on-ing
@@ -535,7 +535,7 @@ services:
   # needed for the chmod once root no longer owns the path post-chown).
   arkime-pcap-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
+    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
     container_name: hp-arkime-pcap-init
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
@@ -557,7 +557,7 @@ services:
     # the exact deadlock this container hit live -- "Waiting for reader
     # slot N to drain, finishWaiting=255" repeating forever until manually
     # restarted. v6.8.0 is the latest stable release and includes it.
-    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
+    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
     container_name: hp-arkime-capture
     restart: unless-stopped
     # Offline import mode: -R watches the locally synced pcap dir (see
@@ -700,7 +700,7 @@ services:
     <<: *runtime-defaults
     # #1497: pinned for the same reason as arkime-capture above -- keep
     # both in lockstep, same image either way.
-    image: ghcr.io/arkime/arkime/arkime:v6.8.0@sha256:196d5e70b7e2f030c658403f1359ae2497e9df87100aff0e6b012aa2d5469f0d
+    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
     container_name: hp-arkime-viewer
     restart: unless-stopped
     # #126: waits on the marker directly instead of depends_on-ing
@@ -784,7 +784,7 @@ services:
   # Networkless except for Elasticsearch: it reads two local paths and posts.
   # It never fetches anything, and it never executes what it reads.
   extracted-file-importer:
-    image: docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+    image: docker.io/library/python:3.15-alpine@sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb
     container_name: hp-extracted-file-importer
     restart: unless-stopped
     read_only: true

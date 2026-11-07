@@ -58,8 +58,8 @@
 //!    description is dropped here rather than published as a second,
 //!    differently-worded summary of the same route.
 //! 5. **The document-level literals** -- `info`'s title, version, summary
-//!    and description, `servers`, the `serviceToken` security scheme, and
-//!    the tag list. `OpenApiRouter::default()` starts empty on purpose
+//!    and description, `servers`, the `serviceToken`, `exportToken` and
+//!    `actorAssertion` security schemes (#3577), and the tag list. `OpenApiRouter::default()` starts empty on purpose
 //!    (`new()` would fill `info` in from utoipa's own Cargo.toml), and
 //!    `utoipa`'s `Info` does not model `summary` at all. These are prose
 //!    about the service, not facts about any one route, so they stay here
@@ -68,6 +68,12 @@
 //! 6. **`parameters: []` on an operation that takes none.** `utoipa`
 //!    omits the key, and "omitted" and "none" are different answers to a
 //!    consumer walking the document.
+//! 7. **The actor assertion.** Like the 401, `require_service_token` reads
+//!    `x-actor-assertion` on every BFF route before any handler runs, so
+//!    every operation that accepts `serviceToken` is given the alternative
+//!    `serviceToken` + `actorAssertion` here rather than in 140
+//!    annotations. The export credential is the opposite case: it reaches
+//!    one route, so that route's own annotation lists `exportToken`.
 //!
 //! Every one of the four document-level facts the fuzz job checks -- the
 //! auth tier, the request parameters, the declared statuses, and the
@@ -144,6 +150,9 @@ fn render(document: &mut Value) {
     let info = root.entry("info").or_insert_with(|| json!({})).as_object_mut().expect("info is an object");
     info.insert("title".to_string(), json!("APIARY dashboard backend-service"));
     info.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
+    // The contract version a consumer pins against; the package version
+    // above moves on every release and says nothing about compatibility.
+    info.insert("x-api-version".to_string(), json!(crate::API_VERSION));
     // `info.summary` is OpenAPI 3.1 and utoipa's `Info` does not model it,
     // so it cannot be set on the model at all.
     info.insert("summary".to_string(), json!(INFO_SUMMARY));
@@ -167,12 +176,49 @@ fn render(document: &mut Value) {
                     "in": "header",
                     "name": "X-Service-Token",
                     "description":
-                        "The shared secret the Nitro BFF presents on \
-                         every /api/v1 call (SERVICE_TOKEN; lib.rs's \
-                         require_service_token, #2183). Compared in \
-                         constant time, and a wrong or missing value \
-                         is a 401 before the route is even resolved. \
+                        "The BFF credential: the secret the dashboard BFF \
+                         presents on every /api/v1 call (SERVICE_TOKEN, or \
+                         SERVICE_TOKEN_PREVIOUS inside its rotation window; \
+                         lib.rs's require_service_token, #2183, #3577). \
+                         Compared in constant time, and a wrong or missing \
+                         value is a 401 before the route is even resolved. \
                          Browsers never reach this service directly."
+                },
+                "exportToken": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-Export-Token",
+                    "description":
+                        "The export-only credential (EXPORT_TOKEN, #3577) the \
+                         VPS blocklist pull presents. It reaches exactly one \
+                         operation, GET /api/v1/ip-block-export, which lists \
+                         it as an alternative to serviceToken; every other \
+                         /api/v1 operation answers 403 to it, whatever else \
+                         the request carries. Only counted in this header, \
+                         never as X-Service-Token."
+                },
+                "actorAssertion": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-Actor-Assertion",
+                    "description":
+                        "The operator behind a BFF request (#3577): a compact \
+                         JWS, alg EdDSA, signed with an Ed25519 key that is \
+                         not the service token. Claims sub, username, role \
+                         (admin or viewer), aud=apiary-backend, iat and exp \
+                         (at most 300 s apart, 30 s clock skew), and htm/htu, \
+                         the method and path it was minted for. Never \
+                         sufficient on its own: it rides alongside \
+                         serviceToken. Whether it is required depends on \
+                         ACTOR_ASSERTION_MODE: off (the default) ignores it; \
+                         log verifies it and only logs; enforce requires a \
+                         valid one on every mutation and on any request that \
+                         names an actor (X-Actor-Username, X-Actor-Role, or \
+                         an actor field in the query or body), answers 401 \
+                         without one and 403 to a verified viewer on an \
+                         admin mutation, and replaces every client-named \
+                         actor field with the asserted identity. See \
+                         docs/BACKEND-TRUST-BOUNDARY.md."
                 }
             }
         }),
@@ -268,6 +314,20 @@ fn render(document: &mut Value) {
                 }
             }
 
+            // (7) The actor assertion `require_service_token` reads beside
+            // the BFF credential: every operation that takes serviceToken
+            // also takes serviceToken plus actorAssertion. An alternative,
+            // not a second requirement, because the default mode does not
+            // ask for one; the scheme's description says when it must.
+            if let Some(alternatives) = operation.get_mut("security").and_then(Value::as_array_mut) {
+                let with_assertion = json!({"serviceToken": [], "actorAssertion": []});
+                if alternatives.iter().any(|alternative| alternative.get("serviceToken").is_some())
+                    && !alternatives.contains(&with_assertion)
+                {
+                    alternatives.push(with_assertion);
+                }
+            }
+
             // (1) The 401 `require_service_token` raises, which no handler
             // can see. Merged into whatever the handler declared, never
             // over it: on the Workbench's routes both media types are
@@ -302,10 +362,13 @@ const INFO_SUMMARY: &str = "The dashboard's Rust service tier: Elasticsearch-bac
 const INFO_DESCRIPTION: &str = "\
 The /api surface of `backend-service/` (`apiary-backend`), the Rust service \
 tier of the APIARY dashboard's modernization port (#1608). It is not a \
-public API: the Nitro BFF in `frontend-next/` is the only intended caller \
-and presents a shared service token on every /api/v1 route. /healthz and \
-/metrics are the two exceptions, open on purpose for the container \
-healthcheck and the #1972 metrics scrape.
+public API: the dashboard BFF is the only intended caller and presents \
+the service token on every /api/v1 route, with a signed actor assertion \
+for the operator behind the call (#3577). The VPS blocklist pull holds an \
+export-only credential that reaches GET /api/v1/ip-block-export and \
+nothing else. /healthz, /livez, /readyz and /metrics are the exceptions, \
+open on purpose for the container healthcheck and the #1972 metrics \
+scrape.
 
 Response bodies are deliberately left unconstrained here. The handlers \
 return `Json<Value>` or a per-surface struct that nothing in this crate \
@@ -350,7 +413,8 @@ fn document_tag_list(document: &Value) -> Value {
 /// The 401's description. The middleware answers before a route is
 /// resolved, so this is the one status text `render` has to supply.
 fn unauthorized_description() -> &'static str {
-    "No valid service token (or, on the Workbench, no actor identity)."
+    "No accepted credential, or (under ACTOR_ASSERTION_MODE=enforce) a missing or \
+     invalid actor assertion; on the Workbench, also no actor identity."
 }
 
 /// The tag an operation is filed under. Derived from the path so the
@@ -548,6 +612,16 @@ mod tests {
     /// with no responses, or a secured operation that forgot its 401 all
     /// pass the two gates above -- and then leave a fuzzer doing nothing
     /// useful against it.
+    /// The contract version is published twice -- in the document a consumer
+    /// pins and on the liveness probe it reads at runtime -- and both come
+    /// from `API_VERSION`, so a dashboard comparing them is comparing one fact.
+    #[tokio::test]
+    async fn api_version_is_published_in_the_document_and_on_liveness() {
+        assert_eq!(document()["info"]["x-api-version"], json!(crate::API_VERSION));
+        let live = serde_json::to_value(crate::livez().await.0).expect("liveness serializes");
+        assert_eq!(live["api_version"], json!(crate::API_VERSION));
+    }
+
     #[test]
     fn document_is_well_formed() {
         let document = document();
@@ -558,6 +632,15 @@ mod tests {
         assert_eq!(
             document["components"]["securitySchemes"]["serviceToken"]["name"],
             json!("X-Service-Token"),
+        );
+        // #3577: the export-only credential and the actor assertion.
+        assert_eq!(
+            document["components"]["securitySchemes"]["exportToken"]["name"],
+            json!("X-Export-Token"),
+        );
+        assert_eq!(
+            document["components"]["securitySchemes"]["actorAssertion"]["name"],
+            json!("X-Actor-Assertion"),
         );
 
         let paths = document["paths"].as_object().expect("paths is an object");
@@ -603,6 +686,27 @@ mod tests {
                      routes outside the service-token tier (this crate's require_service_token)"
                 );
                 if secured {
+                    // #3577: the BFF credential everywhere, with or without
+                    // an assertion beside it; the export credential on its
+                    // one route only (trust::EXPORT_ROUTE).
+                    let alternatives = operation["security"].as_array().expect("security is a list");
+                    assert!(
+                        alternatives.contains(&json!({"serviceToken": []}))
+                            && alternatives.contains(&json!({"serviceToken": [], "actorAssertion": []})),
+                        "{method} {path}: security must offer serviceToken alone and with actorAssertion: {alternatives:?}"
+                    );
+                    let export = alternatives.contains(&json!({"exportToken": []}));
+                    assert_eq!(
+                        export,
+                        method == "get" && path == crate::trust::EXPORT_ROUTE,
+                        "{method} {path}: the export credential reaches GET {} and nothing else",
+                        crate::trust::EXPORT_ROUTE,
+                    );
+                    assert!(
+                        alternatives.iter().all(|alternative| alternative.get("actorAssertion").is_none()
+                            || alternative.get("serviceToken").is_some()),
+                        "{method} {path}: an actor assertion is never accepted without the service token"
+                    );
                     let unauthorized = &responses["401"];
                     assert!(
                         unauthorized["content"]["text/plain"]["schema"]

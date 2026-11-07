@@ -1,0 +1,103 @@
+name: Ubuntu 26.04 trial
+
+# #3608: ubuntu-latest moves to Ubuntu 26.04 from 2026-10-19. Non-blocking
+# trial of the hosted-only legs that depend on the image itself (apt
+# packages, preinstalled shellcheck/docker, playwright system libraries,
+# bare python3). Every job is continue-on-error and nothing gates on it:
+# a red job here is a finding to pin the matching quality.yml job to
+# ubuntu-24.04, not a merge blocker.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ubuntu-26-trial.yml
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ubuntu-26-trial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts-image-tools:
+    name: Scripts on 26.04 (shellcheck, hadolint, bare python3, docker)
+    runs-on: ubuntu-26.04
+    continue-on-error: true
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Image toolchain versions
+        run: |
+          cat /etc/os-release | head -3
+          python3 --version
+          shellcheck --version | head -2 || true
+          docker version --format '{{.Server.Version}}' || true
+          docker compose version || true
+          docker buildx version || true
+      - name: Shell syntax and high-severity ShellCheck
+        run: |
+          command -v shellcheck >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          shell_scripts=()
+          while IFS= read -r -d '' f; do
+            read -r shebang < "$f" || true
+            case "$shebang" in
+              '#!'*/sh|'#!'*/bash|'#!'*env\ sh|'#!'*env\ bash) shell_scripts+=("$f") ;;
+            esac
+          done < <(find . -name '*.sh' -type f -print0)
+          if [ "${#shell_scripts[@]}" -gt 0 ]; then
+            printf '%s\0' "${shell_scripts[@]}" | xargs -0 -n1 bash -n
+            printf '%s\0' "${shell_scripts[@]}" | xargs -0 shellcheck --severity=error
+          fi
+      - name: Dockerfile lint (hadolint)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/hadolint"
+          curl -fsSL -o "$bin" https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-linux-x86_64
+          echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  $bin" | sha256sum -c -
+          chmod +x "$bin"
+          git ls-files -z | grep -zE '(^|/)Dockerfile[^/]*$' | xargs -0 "$bin" --config .hadolint.yaml
+      - name: Bare python3 script suites
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -q pytest pyyaml
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          python3 scripts/check-ci-runner-capabilities.py
+          python3 branding/scripts/check_theme_sync.py
+
+  frontend-browser:
+    name: Dashboard-next browser suite on 26.04
+    runs-on: ubuntu-26.04
+    continue-on-error: true
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Node major from the image
+        id: node-runtime
+        run: ./scripts/node-runtime-major.sh arcane/home/honeypot-dashboard/frontend-next/Dockerfile
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.node-runtime.outputs.node-version }}
+          cache: npm
+          cache-dependency-path: arcane/home/honeypot-dashboard/frontend-next/package-lock.json
+      - run: npm ci
+        working-directory: arcane/home/honeypot-dashboard/frontend-next
+      - run: npm run build
+        working-directory: arcane/home/honeypot-dashboard/frontend-next
+      - run: npx playwright install --with-deps chromium
+        working-directory: arcane/home/honeypot-dashboard/frontend-next
+      - run: command -v redis-server >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y redis-server; }
+      - run: npm run test:browser
+        working-directory: arcane/home/honeypot-dashboard/frontend-next
+        env:
+          CI_ARTIFACTS_DIR: ${{ github.workspace }}/.ci-artifacts

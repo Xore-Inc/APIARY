@@ -489,6 +489,27 @@ So the honest summary of what a pause buys you: CPU scheduling, and the
 *appearance* of a dark decoy. On a CPU-starved leg that is real. On a
 RAM-starved leg it is close to nothing.
 
+### Where `autoheal=true` actually does something (#3578)
+
+The label restarts nothing by itself. It is read by an autoheal container
+(`willfarrell/autoheal`) that polls the Docker daemon it is attached to, so it
+only covers containers on that one host:
+
+| Host | Autoheal | State |
+|---|---|---|
+| homeserver | `hp-autoheal`, defined in `arcane/home/honeypot-utilities/compose.yml` | Not running at the 2026-10-10 check: the container was removed, so every `autoheal=true` label on the host was inert (#3585, #3658). Recreate it only after the dionaea health check is fixed, or it will restart dionaea in a loop. |
+| VPS | `autoheal` in `vps/docker-compose.yml`, behind a docker-socket-proxy (#2762) | Part of the VPS compose project. |
+| precision | none | Labels on a service deployed there do nothing until an autoheal or a swarm `restart_policy` exists there (#3583). |
+
+A new label on a host without an autoheal container gives a service that stays
+`unhealthy` forever, so check `docker ps --filter name=autoheal` on that host
+before relying on it. Autoheal also only reacts to the container's own health
+status: a service whose check fails because a remote dependency is down will be
+restarted too, so keep health checks local to the container.
+
+The longer-term plan replaces the label with swarm `restart_policy` once the
+hosts form one swarm (#3587, #3585); until then autoheal is per host.
+
 ### Why `hp-autoheal` is paused first and resumed last
 
 This is the part that will bite you if you improvise. Every decoy on this
@@ -569,7 +590,8 @@ partial set — it takes the named stacks whole, in dependency order.
 | Stack | Containers | Reason |
 | --- | --- | --- |
 | `honeypot-elk` | `hp-elasticsearch`, `hp-filebeat`, `hp-zeek-proxy`, `hp-arkime-capture`, `hp-arkime-viewer`, `hp-kibana`, `hp-evebox`, `hp-pcap-sync`, `hp-extracted-file-importer` | The capture pipeline. Freezing `arkime-capture`/`zeek-proxy`/`pcap-sync` stops packet capture at the point of arrival — silent data loss. Freezing `hp-elasticsearch` stalls every sensor's event write. Not a decoy; it is what makes the decoys worth running. Highest single allocation on the host (~10.6 GiB) and the least safe to interrupt. |
-| `honeypot-dashboard` | `hp-dashboard-next`, `hp-dashboard-oidc-sessions`, `hp-apiary-worker`, `-worker-enrichment`, `-worker-importer`, `-worker-payload-inventory`, `hp-apiary-backend-mounted`, `hp-services-adapter` | The operator surface and the ES write consumers. Freezing the workers buffers Elasticsearch bulk queues, and a frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `honeypot-dashboard` | `hp-dashboard-next`, `hp-dashboard-oidc-sessions`, `hp-apiary-backend-mounted` | The operator surface. A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `honeypot-backend-workers` | `hp-apiary-worker`, `-worker-enrichment`, `-worker-importer`, `-worker-payload-inventory`, `hp-services-adapter` | The ES write consumers and the service-control adapter (#3575). Freezing the workers buffers Elasticsearch bulk queues; a frozen adapter makes every service action hang. |
 | `honeypot-dashboard-backend` | `hp-apiary-backend` | Auth and API surface. A frozen backend fails every dashboard and CLI call with a hang, not a clean error. |
 | `honeypot-keycloak` | `hp-keycloak`, `hp-keycloak-postgres` | Identity tier. Dashboard, Arcane and the OIDC login tests all authenticate through it. |
 | `honeypot-arcane` | `hp-arcane` | GitOps control plane — the container that would *re-create* a paused decoy on its next sync, so freezing it is arguably necessary. But it is also what reconciles the fleet, and a control plane held frozen across a long leg cannot report or repair drift. Reconcile first, pause decoys, do not freeze the orchestrator. |
@@ -680,3 +702,73 @@ mechanism is unchanged by #3135, and `honeypot-pause.sh` does not stop,
 start, or otherwise manage a worker. It only refuses to run while a cold-run
 pattern is live, so that ad-hoc pausing cannot become a second, competing
 record of which workers are down.
+
+### The Galah broker and a saturated Ollama (#3666)
+
+`honeypot-galah` is already pause-safe as a unit (`hp-galah` + `hp-galah-llm-broker`
+above). What the pause does not do is drain Ollama. Requests that galah already
+forwarded sit in Ollama's own queue, and a client that disconnects does not
+shorten it: in the incident behind #3666 Ollama logged three requests as `499` after
+10h42m, 10h48m and 27m, long after galah and the broker had logged `context
+canceled`. The broker's `UPSTREAM_TIMEOUT_SECONDS` cannot help for the same reason.
+
+Two complementary limits now keep honeypot traffic from queueing behind a benchmark:
+
+- **Broker, `MAX_INFLIGHT` (default 4, `GALAH_BROKER_MAX_INFLIGHT` in the compose
+  file; 0 disables).** When every slot is taken the broker answers `503`
+  immediately and logs `saturated, refusing with 503`. A cancelled client releases
+  its slot and cancels the upstream call. galah turns the 503 into a
+  `failedResponse`, which is indexed as an event with
+  `honeypot.response_outcome: llm_failed`, so the refusals are counted, not lost.
+- **Ollama, `OLLAMA_MAX_QUEUE`.** Ollama itself rejects requests beyond this queue
+  depth with a 503. Set it on the Ollama service when you start a benchmark leg;
+  it is not set by this repository's compose files, because Ollama is shared with
+  the leg and is not changed by the pause procedure.
+
+Procedure additions for a leg that holds the GPU:
+
+1. Before pausing, check that nothing is already queued: `docker logs --since 10m
+   hp-galah-llm-broker | grep -c saturated` and the Ollama log for pending
+   requests. A queue that already exists is not emptied by pausing galah.
+2. Pause `honeypot-galah` as a whole stack (`scripts/honeypot-pause.sh pause
+   honeypot-galah`); the broker is in the unit. If galah is left running during a
+   leg instead, rely on the two limits above and expect `llm_failed` events.
+3. For the swarm form of the broker (`galah-broker`, #3591/#3639), the stack file
+   needs the same `MAX_INFLIGHT` environment variable and its own
+   `apiary.pause` labels; `ops/swarm/stackctl.py pause` handles it as a unit.
+   `scripts/honeypot-pause.sh` needs no change for compose: its `honeypot-galah`
+   row already lists both containers.
+
+### Swarm stacks: scale to 0, not `docker pause` (#3590)
+
+Stacks that have moved to Docker Swarm (`swarm/stacks/<name>/`, epic #3587)
+are not paused by `honeypot-pause.sh`, which refuses them by name. A frozen
+swarm task fails its healthcheck and swarm replaces it, the same silent
+un-pause autoheal causes on compose. They are scaled to 0 through Arcane
+instead:
+
+```bash
+ops/swarm/stackctl.py pause <stack> [stack...]   # gate first, then scale to 0
+ops/swarm/stackctl.py pause-status               # what is recorded
+ops/swarm/stackctl.py resume                     # reverse order, verified, gate last
+```
+
+The differences from the compose procedure:
+- **Classification lives in the stack file.** Each service has `deploy.labels`
+  `apiary.pause: safe|unit|never` plus `apiary.pause.reason`. The default is
+  deny: a missing label fails the stack lint, and `pause` refuses the stack.
+  The pause unit is the whole stack, ordered by an optional
+  `apiary.pause.order`. `apiary.probe: tcp:PORT|http:PORT/path` is the resume probe.
+- **Scaling to 0 stops the tasks, so it frees RAM as well as CPU**, unlike `docker pause`.
+- **The gate is the stack's Arcane GitOps sync, not autoheal.** Every sync
+  run redeploys the stack file's replica count. `pause` turns the sync's
+  `autoSync` off first and `resume` restores it last. A run already in
+  flight is not stopped by that, and turning `autoSync` on starts one at
+  once (seen live), so `pause` keeps re-asserting 0 until the services stay
+  there for 45 s. `stackctl.py deploy` refuses a paused stack.
+- **Same interlock:** `pause` refuses while a cold-run pattern runs on the homeserver.
+
+Drain is the node-level alternative: `docker node update --availability drain
+NODE` moves every task off a node at once, including services classified
+`never`. Use it only for node maintenance ([ops/swarm runbook](../ops/swarm/README.md#runbook-node-maintenance-drain--work--active)),
+never as a way to make room for a benchmark leg.
