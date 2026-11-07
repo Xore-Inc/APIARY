@@ -25,7 +25,8 @@ public nested address.
 "Fleet" mirrors `backend-service/src/events.rs::is_fleet_address`: loopback
 (`127.0.0.0/8`, `::1`), unspecified, RFC1918, link-local, IPv6 unique-local and
 the deployment's own addresses (`ES_HOME_NET` at pipeline install time,
-`HONEYPOT_SELF_IPS` in the backend; keep the two lists equal). Read-time
+`HONEYPOT_SELF_IPS`, or the secret file `HONEYPOT_SELF_IPS_FILE`, in the
+backend; keep the two lists equal). Read-time
 (`attacker_ip`) and write-time therefore agree.
 
 Resulting fields:
