@@ -48,7 +48,9 @@ def config(**changes):
         session_lookback_seconds=3600,
         daily_report_hour=6,
         context_length=8192,
-        output_tokens=512,
+        # Exercise the worker's deployable ceiling. The sessions benchmark's
+        # 16000-token qualification budget is separate from this runtime cap.
+        output_tokens=2048,
         keep_alive="10m",
         payload_roots=(),
         log_level="INFO",
@@ -1122,11 +1124,15 @@ class OllamaContractTests(unittest.TestCase):
             (Path(__file__).resolve().parents[2] / "analysis/ghidra/models/approved-models.json").read_text()
         )
         approved = manifest["slots"]["sessions"]["runtime_request"]
+        # The benchmark's qualification request is deliberately larger than
+        # this worker's runtime cap. Keep the worker request within its own
+        # configured budget while checking the manifest boundary below.
+        qualified = manifest["slots"]["sessions"]["qualification_request"]
         self.assertFalse(request["allow_redirects"])
         self.assertEqual(request["json"]["think"], approved["thinking"])
         self.assertEqual(request["json"]["keep_alive"], approved["keep_alive"])
         self.assertEqual(request["json"]["options"]["num_ctx"], approved["context_tokens"])
-        self.assertEqual(request["json"]["options"]["num_predict"], approved["output_tokens"])
+        self.assertEqual(request["json"]["options"]["num_predict"], client.output_tokens)
         self.assertEqual(request["json"]["options"]["temperature"], approved["temperature"])
         self.assertEqual(request["json"]["options"]["seed"], approved["seed"])
         self.assertEqual(request["json"]["format"]["additionalProperties"], False)
@@ -1135,6 +1141,13 @@ class OllamaContractTests(unittest.TestCase):
         self.assertEqual(annotation.intent, "reconnaissance")
         self.assertEqual(telemetry["prompt_tokens"], 100)
         self.assertFalse(fake_session.trust_env)
+
+        # A benchmark-only qualification budget must not be accepted as an
+        # LLM worker deployment setting.
+        self.assertGreater(qualified["output_tokens"], client.output_tokens)
+        with patch.dict(os.environ, {"LLM_OUTPUT_TOKENS": str(qualified["output_tokens"])}):
+            with self.assertRaisesRegex(ValueError, "LLM_OUTPUT_TOKENS must be between"):
+                worker.Config.from_env()
 
     def test_embed_returns_the_configured_dimensionality(self):
         fake_response = MagicMock()

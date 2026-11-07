@@ -75,9 +75,9 @@ pub async fn analyzers(
     if !crate::payload_paths::is_valid_hash(&hash) {
         return Err(error(StatusCode::BAD_REQUEST, "invalid payload hash"));
     }
-    let path = crate::payload_paths::resolve_payload_path(&hash)
+    let payload = crate::payload_paths::resolve_payload(&hash)
         .map_err(|_| error(StatusCode::NOT_FOUND, "captured payload not found"))?;
-    let head = crate::payload_paths::read_payload_head(&path)
+    let head = crate::payload_paths::read_payload_head(&payload)
         .map_err(|_| error(StatusCode::NOT_FOUND, "captured payload is unreadable"))?;
     let classification = crate::payload_kind::classify_payload(&head);
     let registry = workbench_domain::registry(&classification);

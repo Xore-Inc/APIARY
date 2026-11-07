@@ -80,6 +80,10 @@ from typing import Any, Callable, Iterable
 BENCHMARKS_DIR = Path(__file__).resolve().parent
 CORPUS_DIR = BENCHMARKS_DIR / "corpus"
 
+sys.path.insert(0, str(BENCHMARKS_DIR))
+from harmony_policy import refuse_harmony_model_without_adaptation  # noqa: E402
+from transcripts import was_capped  # noqa: E402  (path set above so the sibling module resolves)
+
 POOL_SCHEMA_VERSION = "apiary-claim-pool-v1"
 
 VERDICT_TRUE = "true"
@@ -107,6 +111,12 @@ Return a single JSON object and nothing else:
   {"claims": [{"text": string, "kind": string}, ...]}
 
 kind is one of: behaviour, evidence, risk, next_step."""
+
+# The adjudicator's own output budget, named because it is now read twice: once
+# here when the request is built, and once by the harmony refusal below, which
+# has to name the number this body actually carries. 1024 is for a JSON claim
+# list, not a prose answer -- nothing here needs the 4096 analysis slots get.
+EXTRACTION_NUM_PREDICT = 1024
 
 
 class ClaimError(RuntimeError):
@@ -614,13 +624,23 @@ def main() -> int:
         applied = apply_rulings(pool, args.rulings)
         print(f"applied {applied} human rulings")
     else:
+        # The adjudicator is chosen here, so this is where it has to be
+        # refused: a gpt-oss tag sends back the #2233 signature -- empty
+        # content with the output budget spent on an analysis channel nobody
+        # reads -- which extract_claims() cannot tell from a model that found
+        # no claims, and which this producer has no adaptation to prevent.
+        # Checked before the closure below exists, so no request can be built.
+        refuse_harmony_model_without_adaptation(
+            args.adjudicator, producer="claims.py", num_predict=EXTRACTION_NUM_PREDICT)
+
         def chat(system: str, prompt: str) -> str:
             body = {
                 "model": args.adjudicator,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": prompt}],
                 "stream": False, "think": False, "format": "json",
-                "options": {"temperature": 0, "seed": 144, "num_ctx": 8192, "num_predict": 1024},
+                "options": {"temperature": 0, "seed": 144, "num_ctx": 8192,
+                            "num_predict": EXTRACTION_NUM_PREDICT},
             }
             payload = _post_json(f"{args.api_base.rstrip('/')}/api/chat", body, timeout=300)
             return payload.get("message", {}).get("content", "")
@@ -648,6 +668,22 @@ def main() -> int:
                 print(f"  skipping record missing {missing}: {json.dumps(record)[:120]!r}")
                 continue
             if record.get("outcome") != "ok" or not raw:
+                continue
+            # The stored `outcome` cannot be the last word here. It is only
+            # written by classify_outcome(), which did not exist when the 512
+            # cap cut 940 records across docs/benchmarks/runs/ -- every one of
+            # them is committed with `outcome: "ok"` and a `done_reason` of
+            # `length`. So the cap is re-derived from the evidence the record
+            # carries, through the same predicate every scorer uses.
+            #
+            # It has to be. A half-written answer decomposes into exactly the
+            # claims it happened to complete, and once merged those are
+            # indistinguishable from a finding: they are attributed to the
+            # model that was cut off, they can adjudicate a true claim `true`
+            # on its authority, and they lower every other model's precision
+            # against the frozen pool. Failing closed here is also what keeps a
+            # roster run's claim count honest about how many answers finished.
+            if was_capped(record.get("timing") or {}):
                 continue
             try:
                 claims = extract_claims(raw, case, chat=chat)

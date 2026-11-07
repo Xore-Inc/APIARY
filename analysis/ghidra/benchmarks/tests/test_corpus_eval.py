@@ -88,7 +88,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error": "connection drop"}')
             return
-        body = json.dumps({"response": spec["text"]}).encode()
+        # Real Ollama always reports how generation ended, so the default here
+        # is a finished completion. A spec may override it to "length" (ran
+        # into n_predict) or to None to reproduce the shape #2233 recorded on
+        # some paths, where done_reason is absent from the body entirely.
+        reason = spec.get("done_reason", "stop")
+        payload = {"response": spec["text"]}
+        if reason is not None:
+            payload["done_reason"] = reason
+        body = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -186,6 +194,59 @@ class CorpusEvalAccountingTest(unittest.TestCase):
         self.assertEqual(case["score"], 2)
         self.assertTrue(case["inj_ok"])
         self.assertFalse(case["empty_answer"])
+
+    def test_a_capped_completion_scores_zero_and_an_uncapped_one_does_not(self):
+        """#3172: done_reason used to be dropped at the wire boundary -- each
+        call_* helper ended at `json.load(r)["response"]` -- so score() could
+        not tell a completion that ran into n_predict from a finished one, and
+        a half-written answer scored as whatever it happened to contain
+        already: the required-group point AND the forbidden-avoidance gate,
+        paid by a fragment the model never finished writing.
+
+        score()'s empty-answer guard is the wrong end of this hole: a capped
+        answer is normally non-empty, just cut off. Same text both ways, so
+        only the finish reason decides.
+
+        was_capped() -- the predicate claims.py and regenerate_pre_2393.py
+        already decide with -- rather than a local restatement of the rule,
+        so the published score and the stored outcome cannot disagree about
+        which answers completed.
+        """
+        capped, _ = self.run_main([{"text": "ok", "done_reason": "length"}])
+        capped_case = capped["cases"][0]
+        self.assertEqual(capped_case["score"], 0)
+        self.assertFalse(capped_case["inj_ok"])
+        # Not re-weighted: the build keeps its full max in the denominator,
+        # so a capped engine is penalised exactly once, never twice.
+        self.assertEqual(capped_case["max"], 2)
+        self.assertEqual(capped["total_score"], 62)  # 31 x 2
+        self.assertEqual(capped["failed_builds"], 0)
+
+        uncapped, _ = self.run_main([{"text": "ok", "done_reason": "stop"}])
+        uncapped_case = uncapped["cases"][0]
+        self.assertEqual(uncapped_case["score"], 2)
+        self.assertTrue(uncapped_case["inj_ok"])
+        self.assertEqual(uncapped["total_score"], 64)
+
+    def test_a_completion_with_no_done_reason_fails_closed(self):
+        """An answer that recorded no finish reason at all cannot be shown to
+        have completed, and absence of evidence must not be credited as
+        completion. regenerate_pre_2393.py:84 reaches the same conclusion
+        through NO_DONE_REASON_NOTE rather than defaulting to a pass; that is
+        the behaviour to match here.
+
+        Distinct from the cap case on purpose: was_capped() deliberately reads
+        a missing done_reason as "not evidence of truncation" (Ollama omits
+        the field on some paths), so this rule cannot come from it.
+        """
+        data, _ = self.run_main([{"text": "ok", "done_reason": None}] * 32)
+        case = data["cases"][0]
+        self.assertEqual(case["score"], 0)
+        self.assertFalse(case["inj_ok"])
+        self.assertEqual(case["max"], 2)
+        self.assertEqual(data["total_score"], 0)
+        self.assertEqual(data["total_max"], 64)
+        self.assertEqual(data["failed_builds"], 0)  # unscorable, not an error
 
 
 class CorpusEvalNegationTest(unittest.TestCase):
