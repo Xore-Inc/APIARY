@@ -1,0 +1,118 @@
+# #3593 (phase 6): the Conpot Siemens S7-1500 persona hp-conpot-s7-1500 as a
+# sensor stack, pinned to the homeserver. Same container as the
+# conpot-s7-1500 service in arcane/home/honeypot-conpot/compose.yml, which
+# stays defined as the rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW flows to 2102/2502 unless
+#   they come from the VPS hub on wg0; the ports are listed in
+#   ops/firewall/hosts/homeserver-swarm-host-ports.txt. 2102/2502 are unique host ports
+#   and nothing else on the homeserver calls it (#3769).
+# - `security_opt` is not supported. Gate (#3593): non-root (conpot, 2000),
+#   cap_drop ALL, read_only, no setuid/setgid file in the image (checked on
+#   this digest 2026-11-07). /usr/bin/python3.12 carries the file capability
+#   cap_net_bind_service=ep, accepted by Xore on 2026-11-06: with the
+#   bounding set reduced to NET_BIND_SERVICE, exec cannot gain anything
+#   beyond the one capability the service is granted anyway.
+# - cap_add NET_BIND_SERVICE is required, not optional: exec of the
+#   file-capability python fails without it in the bounding set, and the
+#   template binds internal listeners regardless of the published port
+#   (measured in #133, see the compose file).
+# - Compose's tmpfs `uid=2000,gid=2000` option has no swarm equivalent; the
+#   tmpfs keeps Docker's default mode 1777 instead (the stack loader drops a
+#   `mode` key; tested 2026-11-07: conpot starts, the healthcheck passes,
+#   CapEff = NET_BIND_SERVICE only).
+# - autoheal does not act on swarm tasks; the restart policy and the
+#   healthcheck replace it.
+#
+# Reached from the VPS on public 2102/2502 (portbridge, PROXY header; the image's
+# gevent shim parses it).
+services:
+  conpot:
+    image: ghcr.io/xore-inc/honeypot-conpot@sha256:94cc0ab1a2995795bbc213dab593fb3523bbccf45c4f810c7b57ba8f76fad011
+    command:
+      - sh
+      - -c
+      - >
+        until [ -f /markers/log-init.done ]; do sleep 3; done;
+        exec /usr/bin/conpot --mibcache $$CONPOT_TMP --temp_dir $$CONPOT_TMP
+        --template $$CONPOT_TEMPLATE --logfile $$CONPOT_LOG --config $$CONPOT_CONFIG
+    ports:
+      - target: 102
+        published: 2102
+        protocol: tcp
+        mode: host
+      - target: 502
+        published: 2502
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/conpot-s7-1500
+        target: /var/log/conpot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+      # Docker's default tmpfs mode is 1777, writable for uid 2000.
+      - type: tmpfs
+        target: /tmp/conpot
+    environment:
+      CONPOT_CONFIG: /etc/conpot/conpot.cfg
+      CONPOT_TEMPLATE: s7_1500
+      CONPOT_LOG: /var/log/conpot/conpot.log
+      CONPOT_JSON_LOG: /var/log/conpot/conpot.json
+      CONPOT_TMP: /tmp/conpot
+      CONPOT_PROXY_PROTOCOL: "1"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "python3", "/usr/local/bin/conpot-healthcheck.py", "modbus"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 768M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 120s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 2102/2502.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 120s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone ICS persona, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.20.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"

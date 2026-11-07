@@ -9,3 +9,10 @@ tcp 19024
 tcp 19081
 tcp 8543
 tcp 10001
+tcp 2404
+tcp 1025
+tcp 50100
+tcp 1102
+tcp 1502
+tcp 2102
+tcp 2502
