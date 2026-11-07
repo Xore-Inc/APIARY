@@ -73,8 +73,24 @@ pub async fn sources(
     State(state): State<AppState>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<SourcesPage>, (StatusCode, String)> {
-    let size = (q.offset + q.size).min(1000);
-    let body = json!({
+    let size = (q.offset + q.size).min(SOURCES_CAP);
+    // #3756: the worker's snapshot of this same request at the cap, when a
+    // recent one exists; otherwise the live aggregation.
+    let result = match crate::page_rollup::read(&state, crate::page_rollup::SOURCES).await {
+        Some(snapshot) => snapshot,
+        None => state.es.search(sources_body(size)).await.map_err(bad_gateway)?,
+    };
+    Ok(Json(sources_page(&result, q.offset, size)))
+}
+
+/// The most rows `/api/v1/sources` lists; the terms aggregation asks for
+/// `offset + size` buckets up to this ceiling.
+pub(crate) const SOURCES_CAP: u64 = 1000;
+
+/// The request behind `/api/v1/sources` for `size` buckets. The worker's
+/// snapshot (`page_rollup`) sends it with `SOURCES_CAP`.
+pub(crate) fn sources_body(size: u64) -> Value {
+    json!({
         "size": 0,
         // #2145: the /ips top-attacker list; probes mostly drop out via the
         // source.ip aggs, but the exclusion makes that incidental protection
@@ -97,47 +113,51 @@ pub async fn sources(
                 }
             }
         }
-    });
-    let result = state.es.search(body).await.map_err(bad_gateway)?;
-    let total_unique = result["aggregations"]["unique"]["value"].as_u64().unwrap_or(0);
-    let rows = result["aggregations"]["ips"]["buckets"]
+    })
+}
+
+/// The page for `offset` out of an answer to `sources_body`. `size` is the
+/// bucket count the live request asks for: a snapshot holds `SOURCES_CAP`
+/// buckets, and only its first `size` are the live answer's buckets.
+fn sources_page(result: &Value, offset: u64, size: u64) -> SourcesPage {
+    let empty = Vec::new();
+    let buckets: Vec<&Value> = result["aggregations"]["ips"]["buckets"]
         .as_array()
-        .map(|buckets| {
-            buckets
-                .iter()
-                .skip(q.offset as usize)
-                .map(|bucket| SourceRow {
-                    ip: text(&bucket["key"]),
-                    country: bucket["country"]["buckets"]
-                        .as_array()
-                        .and_then(|c| c.first())
-                        .map(|c| text(&c["key"]))
-                        .unwrap_or_default(),
-                    events: bucket["doc_count"].as_u64().unwrap_or(0),
-                    logins: bucket["logins"]["doc_count"].as_u64().unwrap_or(0),
-                    sessions: bucket["sessions"]["value"].as_u64().unwrap_or(0),
-                    sensors: bucket["sensors"]["buckets"]
-                        .as_array()
-                        .map(|s| s.iter().map(|b| text(&b["key"])).collect())
-                        .unwrap_or_default(),
-                    first: text(&bucket["first"]["value_as_string"]),
-                    last: text(&bucket["last"]["value_as_string"]),
-                })
-                .collect()
+        .unwrap_or(&empty)
+        .iter()
+        .take(size as usize)
+        .collect();
+    let total_unique = result["aggregations"]["unique"]["value"].as_u64().unwrap_or(0);
+    let rows = buckets
+        .iter()
+        .skip(offset as usize)
+        .map(|bucket| SourceRow {
+            ip: text(&bucket["key"]),
+            country: bucket["country"]["buckets"]
+                .as_array()
+                .and_then(|c| c.first())
+                .map(|c| text(&c["key"]))
+                .unwrap_or_default(),
+            events: bucket["doc_count"].as_u64().unwrap_or(0),
+            logins: bucket["logins"]["doc_count"].as_u64().unwrap_or(0),
+            sessions: bucket["sessions"]["value"].as_u64().unwrap_or(0),
+            sensors: bucket["sensors"]["buckets"]
+                .as_array()
+                .map(|s| s.iter().map(|b| text(&b["key"])).collect())
+                .unwrap_or_default(),
+            first: text(&bucket["first"]["value_as_string"]),
+            last: text(&bucket["last"]["value_as_string"]),
         })
-        .unwrap_or_default();
+        .collect();
     // The cardinality agg counts the whole window while the terms agg
     // silently stops at its size ceiling; when they disagree, IPs exist
     // that no row shows (#2044).
-    let listed = result["aggregations"]["ips"]["buckets"]
-        .as_array()
-        .map(|buckets| buckets.len())
-        .unwrap_or(0);
-    Ok(Json(SourcesPage {
+    let listed = buckets.len();
+    SourcesPage {
         total_unique,
         truncated: total_unique > listed as u64,
         rows,
-    }))
+    }
 }
 
 fn bad_gateway(error: anyhow::Error) -> (StatusCode, String) {
@@ -214,4 +234,70 @@ pub async fn filter_values(State(state): State<AppState>) -> Result<Json<FilterV
     values.countries.sort();
     values.cities.sort();
     Ok(Json(values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An answer to `sources_body` with `n` buckets, the most active first.
+    fn answer(n: u64, unique: u64) -> Value {
+        let buckets: Vec<Value> = (0..n)
+            .map(|i| {
+                json!({
+                    "key": format!("203.0.113.{i}"),
+                    "doc_count": 1000 - i,
+                    "country": {"buckets": [{"key": "NL", "doc_count": 1}]},
+                    "sensors": {"buckets": [{"key": "cowrie", "doc_count": 1}, {"key": "zeek", "doc_count": 1}]},
+                    "logins": {"doc_count": i},
+                    "sessions": {"value": 2},
+                    "first": {"value_as_string": "2026-10-28T00:00:00.000Z"},
+                    "last": {"value_as_string": "2026-11-07T22:00:00.000Z"}
+                })
+            })
+            .collect();
+        json!({"aggregations": {"unique": {"value": unique}, "ips": {"buckets": buckets}}})
+    }
+
+    #[test]
+    fn a_page_reads_its_rows_out_of_the_buckets() {
+        let page = sources_page(&answer(3, 3), 1, 25);
+        assert_eq!((page.total_unique, page.truncated), (3, false));
+        let ips: Vec<&str> = page.rows.iter().map(|row| row.ip.as_str()).collect();
+        assert_eq!(ips, ["203.0.113.1", "203.0.113.2"]);
+        let row = &page.rows[0];
+        assert_eq!((row.events, row.logins, row.sessions, row.country.as_str()), (999, 1, 2, "NL"));
+        assert_eq!(row.sensors, ["cowrie", "zeek"]);
+        assert_eq!((row.first.as_str(), row.last.as_str()), ("2026-10-28T00:00:00.000Z", "2026-11-07T22:00:00.000Z"));
+    }
+
+    /// #3756: a snapshot holds the cap's 1000 buckets. A smaller request
+    /// reads only the buckets its own live query would have asked for, so
+    /// rows and `truncated` (#2044) come out as they would live.
+    #[test]
+    fn a_snapshot_at_the_cap_answers_a_smaller_page_like_the_live_query() {
+        let snapshot = answer(SOURCES_CAP, 4000);
+        let live = answer(30, 4000);
+        for (offset, size) in [(0, 25), (5, 25), (25, 5)] {
+            let wanted = (offset + size).min(SOURCES_CAP);
+            let from_snapshot = sources_page(&snapshot, offset, wanted);
+            let from_live = sources_page(&live, offset, wanted);
+            assert_eq!(
+                serde_json::to_value(&from_snapshot).unwrap(),
+                serde_json::to_value(&from_live).unwrap(),
+                "offset={offset} size={size}"
+            );
+            assert!(from_snapshot.truncated);
+        }
+        let all = sources_page(&snapshot, 0, SOURCES_CAP);
+        assert_eq!(all.rows.len(), 1000);
+        assert!(all.truncated);
+        assert!(!sources_page(&answer(SOURCES_CAP, 1000), 0, SOURCES_CAP).truncated);
+    }
+
+    #[test]
+    fn the_body_asks_for_the_requested_bucket_count() {
+        assert_eq!(sources_body(25)["aggs"]["ips"]["terms"]["size"], 25);
+        assert_eq!(sources_body(SOURCES_CAP)["aggs"]["ips"]["terms"]["size"], 1000);
+    }
 }

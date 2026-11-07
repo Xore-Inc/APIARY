@@ -92,6 +92,7 @@ pub const WRITE_TARGET_FAMILIES: &[&str] = &[
     "overview-rollup-v1",        // rollups
     "geo-rollup-v1",             // rollups
     "attack-rollup-v1",          // rollups
+    "page-rollup-v1",            // rollups (page_rollup)
     "gpu-job-queue",             // gpu_queue, vault_rag
     "agent-intrusion-campaigns", // agent_intrusion
     // es_importer's mirrors of the external analysis workers. Its own

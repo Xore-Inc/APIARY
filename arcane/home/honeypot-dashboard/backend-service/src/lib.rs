@@ -92,6 +92,7 @@ pub mod reports_api;
 pub mod reports_data;
 pub mod reports_store;
 pub mod reporter_stats;
+pub mod page_rollup;
 pub mod rollups;
 pub mod sandbox_submit;
 pub mod sensors;
