@@ -13,8 +13,10 @@
 # lines still go to the container log).
 # Prerequisites and the order of the move: README.md next to this file.
 x-backend-common: &backend-common
-  # Main build of 58dee4ce (#3785), digest manifest run 42257015500.
-  image: ghcr.io/xore-inc/honeypot-backend-service@sha256:5644160a41066e024caf77c30daa605f1a03941b7cc1f7cb3992b3695d1c45ff
+  # Main build of 069e5f3a (has #3790 HONEYPOT_SELF_IPS_FILE and #3806 page
+  # rollups), Containers run 42421930356, backend-service job. The same digest
+  # the homeserver workers run since 2026-11-08.
+  image: ghcr.io/xore-inc/honeypot-backend-service@sha256:0c7bf4cbdf9cfc1f9e0147eab408fb096c38d10c6076420065f8cbe387b2b245
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
