@@ -95,6 +95,8 @@ value files never enter git. Rotate by creating `_v(N+1)`, changing the stack
 file to reference it, merging, and deploying. Keep the old secret through the
 next version so a rollback can still start.
 
+The block `10.200.100.0/24`-`10.200.119.0/24` is reserved for the #3579 BFF split, outside the sequential subnet count: `.100` host-gateway (`host`), `.101` the D2 overlay `apiary-es` (alias `elasticsearch`), `.102` backend-api `bff` (the dashboard attaches).
+
 ```bash
 python3 scripts/check-swarm-stacks.py
 python3 scripts/check-swarm-images.py stacks
