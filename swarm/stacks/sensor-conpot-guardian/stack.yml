@@ -20,8 +20,9 @@
 #   template binds internal listeners regardless of the published port
 #   (measured in #133, see the compose file).
 # - Compose's tmpfs `uid=2000,gid=2000` option has no swarm equivalent; the
-#   tmpfs gets mode 1777 instead (tested 2026-11-07: conpot starts, the
-#   healthcheck passes, CapEff = NET_BIND_SERVICE only).
+#   tmpfs keeps Docker's default mode 1777 instead (the stack loader drops a
+#   `mode` key; tested 2026-11-07: conpot starts, the healthcheck passes,
+#   CapEff = NET_BIND_SERVICE only).
 # - autoheal does not act on swarm tasks; the restart policy and the
 #   healthcheck replace it.
 #
@@ -50,10 +51,9 @@ services:
         source: /opt/stacks/apiary/state/init-markers
         target: /markers
         read_only: true
+      # Docker's default tmpfs mode is 1777, writable for uid 2000.
       - type: tmpfs
         target: /tmp/conpot
-        tmpfs:
-          mode: 01777
     environment:
       CONPOT_CONFIG: /etc/conpot/conpot.cfg
       CONPOT_TEMPLATE: guardian_ast
