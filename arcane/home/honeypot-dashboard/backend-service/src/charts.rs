@@ -549,12 +549,18 @@ pub async fn tcp_stack_clusters(
 
 async fn fingerprint_bar(state: &AppState, indices: &[&str], body: Value, agg: &str) -> anyhow::Result<Bar> {
     let result = state.es.search_index(indices, body).await?;
+    Ok(bar_from(&result, agg))
+}
+
+/// The bar chart of the terms aggregation `agg` in a `_search` answer (or a
+/// `page_rollup` snapshot of one).
+fn bar_from(result: &Value, agg: &str) -> Bar {
     let mut bar = Bar { categories: Vec::new(), values: Vec::new() };
     for bucket in result["aggregations"][agg]["buckets"].as_array().into_iter().flatten() {
         bar.categories.push(bucket["key"].as_str().unwrap_or("").to_string());
         bar.values.push(bucket["doc_count"].as_u64().unwrap_or(0));
     }
-    Ok(bar)
+    bar
 }
 
 #[utoipa::path(
@@ -779,13 +785,27 @@ pub async fn ja4x_fingerprints(State(state): State<AppState>) -> Result<Json<Bar
 /// what you transmit — only by changing where you are. That makes it the
 /// strongest signal in the set for spotting one host behind several addresses,
 /// and the weakest for identifying *what* that host is.
+///
+/// #3756: `zeek` is a `flattened` field there, so this terms aggregation
+/// walks every key of every conn document (9-12 s a week). The worker keeps
+/// a snapshot of exactly this request (`page_rollup`), served while recent.
 pub async fn ja4l_fingerprints(State(state): State<AppState>) -> Result<Json<Bar>, (StatusCode, String)> {
-    let body = json!({
+    if let Some(snapshot) = crate::page_rollup::read(&state, crate::page_rollup::JA4L_FINGERPRINTS).await {
+        return Ok(Json(bar_from(&snapshot, "ja4l")));
+    }
+    fingerprint_bar(&state, JA4L_INDICES, ja4l_body(), "ja4l").await.map(Json).map_err(bad_gateway)
+}
+
+pub(crate) const JA4L_INDICES: &[&str] = &["zeek-v1-conn-*"];
+
+/// The request behind `/api/v1/charts/ja4l-fingerprints`, shared with its
+/// snapshot.
+pub(crate) fn ja4l_body() -> Value {
+    json!({
         "size": 0,
         "query": attacker_window(WEEK),
         "aggs": {"ja4l": {"terms": {"field": "zeek.ja4l", "size": 15}}}
-    });
-    fingerprint_bar(&state, &["zeek-v1-conn-*"], body, "ja4l").await.map(Json).map_err(bad_gateway)
+    })
 }
 
 #[utoipa::path(
