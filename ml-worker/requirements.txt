@@ -78,16 +78,16 @@ joblib==1.6.0
 # this directory -- added alongside this revert so Dependabot stops
 # proposing it a third time instead of just fixing it again by hand later.
 numpy==2.4.6
-pandas==3.0.6
+pandas==3.1.0
 
 # Deep learning (CPU-only PyTorch)
-torch==2.14.1+cpu
+torch==2.15.0+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Outlier detection (HBOS). Pulls in numba+llvmlite -- see the numpy pin
 # above; this is the version set actually verified to install together.
 pyod==3.6.7
-numba==0.68.0
+numba==0.68.1
 llvmlite==0.50.0
 
 # Redis pub/sub
