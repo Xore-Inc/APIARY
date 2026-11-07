@@ -1,0 +1,139 @@
+# #3582 (decision D1 on #3579): the host gateway. It is the apiary-backend
+# image in GATEWAY_MODE, pinned to the homeserver, and gives the HTTP services
+# that run on precision the host paths they cannot have there: the analyzer
+# spools and results, captured payload bytes, and the services-adapter socket.
+# It serves only /healthz, /livez and /host/v1 (docs/BACKEND-HOST-GATEWAY.md),
+# with its own token, and publishes no port. The overlay below is joined by
+# the gateway and, later, by the two HTTP services (backend-api, external
+# network `host-gateway_host`).
+services:
+  gateway:
+    # Main build of 58dee4ce (#3785, gateway mode), digest manifest run 42257015500.
+    image: ghcr.io/xore-inc/honeypot-backend-service@sha256:5644160a41066e024caf77c30daa605f1a03941b7cc1f7cb3992b3695d1c45ff
+    labels:
+      apiary.swarm.migration: host-gateway
+    environment:
+      GATEWAY_MODE: "1"
+      LISTEN_ADDR: 0.0.0.0:8083
+      HOST_GATEWAY_TOKEN_FILE: /run/secrets/host_gateway_token
+      TZ: Europe/Berlin
+      # The same container paths as backend-service-mounted (compose), so the
+      # spools and results keep their names on both sides of the move.
+      SANDBOX_REQUEST_DIR: /sandbox-requests
+      SANDBOX_RESULTS_DIR: /sandbox-results
+      WINDOWS_SANDBOX_REQUEST_DIR: /windows-sandbox-requests
+      WINDOWS_SANDBOX_RESULTS_DIR: /windows-sandbox-results
+      GHOSTS_SANDBOX_REQUEST_DIR: /ghosts-sandbox-requests
+      GHOSTS_SANDBOX_RESULTS_DIR: /ghosts-sandbox-results
+      GHIDRA_REQUEST_DIR: /ghidra-requests
+      GHIDRA_RESULTS_DIR: /ghidra-results
+      REVDECK_REQUEST_DIR: /revdeck-requests
+      REVDECK_RESULTS_DIR: /revdeck-results
+      GITHUB_ANALYSIS_REQUEST_DIR: /github-analysis-requests
+      PAYLOAD_DIRS: /dionaea-lib/binaries,/cowrie-downloads
+      SCRIPT_PAYLOAD_DIR: /state/script-payloads
+      SERVICES_ADAPTER_SOCKET: /run/services-adapter/control.sock
+      RUST_LOG: info
+    secrets:
+      - source: host_gateway_token
+        target: host_gateway_token
+        mode: 0400
+    volumes:
+      # Request spools: the only writable mounts (marker create and cancel).
+      - {type: bind, source: /var/lib/honeypot-sandbox/requests/pending, target: /sandbox-requests}
+      - {type: bind, source: /var/lib/honeypot-windows-sandbox/requests/pending, target: /windows-sandbox-requests}
+      - {type: bind, source: /var/lib/honeypot-ghosts-sandbox/requests/pending, target: /ghosts-sandbox-requests}
+      - {type: bind, source: /var/lib/honeypot-ghidra/requests/pending, target: /ghidra-requests}
+      - {type: bind, source: /var/lib/honeypot-revdeck/requests/pending, target: /revdeck-requests}
+      - {type: bind, source: /var/lib/honeypot-github/requests/pending, target: /github-analysis-requests}
+      # Results and payloads: read-only.
+      - {type: bind, source: /var/lib/honeypot-sandbox/export, target: /sandbox-results, read_only: true}
+      - {type: bind, source: /var/lib/honeypot-windows-sandbox/export, target: /windows-sandbox-results, read_only: true}
+      - {type: bind, source: /var/lib/honeypot-ghosts-sandbox/export, target: /ghosts-sandbox-results, read_only: true}
+      - {type: bind, source: /var/lib/honeypot-ghidra/results, target: /ghidra-results, read_only: true}
+      - {type: bind, source: /var/lib/honeypot-revdeck/results, target: /revdeck-results, read_only: true}
+      - {type: bind, source: /opt/stacks/apiary/logs/cowrie/downloads, target: /cowrie-downloads, read_only: true}
+      - {type: volume, source: dionaea-lib, target: /dionaea-lib, read_only: true}
+      # Script payloads stay here (D3); audit/config history move to precision.
+      - {type: volume, source: dashboard-state, target: /state, read_only: true}
+      # The adapter's socket directory, shared with hp-services-adapter.
+      - {type: volume, source: services-adapter-socket, target: /run/services-adapter}
+    networks:
+      host:
+        aliases: [host-gateway]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, curl, -sf, "http://127.0.0.1:8083/livez"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == manager
+          # The host paths exist only on the sensor/Elasticsearch host.
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: start-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "The precision HTTP services lose spools, payloads and the services adapter without it; pause it with backend-api"
+        apiary.probe: "http:8083/livez"
+
+secrets:
+  host_gateway_token:
+    # Created out of band on a manager, never in git:
+    #   ops/swarm/stackctl.py secret create host_gateway_token_v1 < value-file
+    # The HTTP services read the same secret (backend-api). It must differ
+    # from SERVICE_TOKEN and EXPORT_TOKEN; the gateway refuses to boot otherwise.
+    external: true
+    name: host_gateway_token_v1
+
+volumes:
+  # The existing Compose volumes on the homeserver, used in place.
+  dionaea-lib:
+    external: true
+    name: dionaea-lib
+  dashboard-state:
+    external: true
+    name: dashboard-state
+  services-adapter-socket:
+    external: true
+    name: services-adapter-socket
+
+networks:
+  host:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763) in the block reserved for the
+    # #3579 split (10.200.100-119.0/24, ops/swarm/README.md).
+    ipam:
+      config:
+        - subnet: 10.200.100.0/24
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
