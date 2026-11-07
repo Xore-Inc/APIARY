@@ -18,6 +18,9 @@
 //!                       tactic-transition/tactic-touch, so the ATT&CK
 //!                       coverage grid and kill-chain sankey stop re-running
 //!                       their terms/session-group aggregations per load.
+//!   page-rollup-v1      one doc per slow page (#3756: sources, ja4l
+//!                       fingerprints), the handler's own aggregation
+//!                       answer refreshed each cycle (`page_rollup.rs`).
 //!
 //! House rules this follows (the correlator/identity loops set them):
 //! deterministic ids, recompute-on-interval, rollups are disposable —
@@ -780,6 +783,8 @@ pub async fn run_cycle(state: &AppState) -> anyhow::Result<()> {
     if let Err(error) = write_geo_cycle(state).await {
         tracing::warn!(%error, "geo rollup refresh failed");
     }
+    // #3756: whole-page snapshots of the reads too slow to run per request.
+    crate::page_rollup::write_cycle(state).await;
     prune_old_buckets(state, now).await;
     Ok(())
 }
