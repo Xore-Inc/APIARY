@@ -39,9 +39,11 @@ Not carried over:
 
 ## Prerequisites (in this order)
 
-0. **Image:** the digest in `stack.yml` is a main build that contains #3790
-   (`HONEYPOT_SELF_IPS_FILE`). The 58dee4ce build predates it and would
-   ignore the secret, so re-pin before the first deploy.
+0. **Image:** `stack.yml` pins the main build of 069e5f3a, which contains
+   #3790 (`HONEYPOT_SELF_IPS_FILE`). Any later re-pin must stay at or after
+   it: an older build ignores the secret and ranks the fleet's own
+   addresses as attackers. Rollback reference: the digest in the previous
+   commit of `stack.yml`, after the same check.
 1. **D1:** stack `host-gateway` deployed and proven from a precision probe (its README).
 2. **D2:** the overlay `apiary-es` (`10.200.101.0/24`, encrypted, attachable)
    exists, and `hp-elasticsearch` is attached to it with alias

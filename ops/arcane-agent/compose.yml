@@ -13,6 +13,8 @@
 # compose.yml alongside, edit the image line only, `docker compose up -d`,
 # then check the environment shows online in Arcane. Only the agent
 # container restarts.
+# Rotating or revoking the agent token: docs/ARCANE-GIT-SYNC.md, "Edge agent
+# token: rotate and revoke".
 services:
   arcane-edge-agent:
     image: ghcr.io/getarcaneapp/arcane-headless:v2.17.0@sha256:fd96a4c53f1ff1b28f449d175923c91a856ab4fecedb5c779ade294b5bc58492
