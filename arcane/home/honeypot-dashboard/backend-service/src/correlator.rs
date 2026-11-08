@@ -6,7 +6,9 @@
 //! the same correlation itself on every render. Entirely Elasticsearch-
 //! native aggregations (`"size": 0`, no raw-document paging, no PIT/
 //! search_after needed at all -- unlike the sibling attacker-identity/
-//! agent-intrusion ports).
+//! agent-intrusion ports). Since #3810 the campaign aggregation runs in
+//! batches of CIDR groups so no single search can pass
+//! `search.max_buckets`.
 //!
 //! Ported from honeypot-correlator-worker/correlator-worker/
 //! (main.go/fetch.go/correlate.go/es.go). Pure ES, no host mounts, no
@@ -189,14 +191,44 @@ struct CampaignBucket {
     last: String,
 }
 
+// #3810: every terms sub-aggregation of one campaign group, by size. They
+// bound how many buckets a group can add to one search response, which is
+// what keeps a campaign request under `search.max_buckets` (below).
+const CAMPAIGN_SENSOR_TERMS: usize = 20;
+const CAMPAIGN_PORT_TERMS: usize = 20;
+const CAMPAIGN_CRED_PAIR_TERMS: usize = 50;
+const CAMPAIGN_PROVIDER_TERMS: usize = 10;
+
+/// Elasticsearch's default `search.max_buckets`. Raising it is a
+/// cluster-wide heap trade, so the correlator stays under it instead.
+const ES_MAX_BUCKETS: usize = 65_536;
+/// The most buckets one CIDR group can add: its own `ip_prefix` bucket plus
+/// every terms sub-aggregation filled to its size (metric sub-aggregations
+/// create no buckets).
+const CAMPAIGN_BUCKETS_PER_GROUP: usize =
+    1 + CAMPAIGN_SENSOR_TERMS + CAMPAIGN_PORT_TERMS + CAMPAIGN_CRED_PAIR_TERMS + CAMPAIGN_PROVIDER_TERMS;
+/// #3810: CIDR groups per campaign search. One search over the whole window
+/// grew with the number of active /24s and passed 65,536 buckets after
+/// 2026-10-28 (11,400 groups needing ~79,000 buckets on 2026-11-08), so
+/// every cycle failed. Batches of this many groups stay under the limit by
+/// construction, with 10% headroom, however many groups the window holds.
+const CAMPAIGN_GROUPS_PER_SEARCH: usize = (ES_MAX_BUCKETS * 9 / 10) / CAMPAIGN_BUCKETS_PER_GROUP;
+/// Page size of the composite aggregation that lists the window's source
+/// IPs; it is also that request's whole bucket count.
+const CAMPAIGN_IP_PAGE: usize = 10_000;
+// The bounds above, checked at compile time.
+const _: () = assert!(CAMPAIGN_GROUPS_PER_SEARCH * CAMPAIGN_BUCKETS_PER_GROUP < ES_MAX_BUCKETS);
+const _: () = assert!(CAMPAIGN_GROUPS_PER_SEARCH >= 500);
+const _: () = assert!(CAMPAIGN_IP_PAGE < ES_MAX_BUCKETS);
+
 fn campaign_sub_aggs() -> Value {
     json!({
         "unique_ips": {"cardinality": {"field": "source.ip"}},
-        "sensors": {"terms": {"field": "event.sensor", "size": 20}},
-        "ports": {"terms": {"field": "destination.port", "size": 20}},
+        "sensors": {"terms": {"field": "event.sensor", "size": CAMPAIGN_SENSOR_TERMS}},
+        "ports": {"terms": {"field": "destination.port", "size": CAMPAIGN_PORT_TERMS}},
         "cred_pairs": {
             "terms": {
-                "size": 50,
+                "size": CAMPAIGN_CRED_PAIR_TERMS,
                 "script": {
                     "source": "def u = doc.containsKey(params.uf) && !doc[params.uf].empty ? doc[params.uf].value : ''; def p = doc.containsKey(params.pf) && !doc[params.pf].empty ? doc[params.pf].value : ''; return u + ' / ' + p;",
                     "params": {"uf": "honeypot.canonical_user", "pf": "honeypot.canonical_pass"}
@@ -205,7 +237,7 @@ fn campaign_sub_aggs() -> Value {
         },
         "payloads": {"cardinality": {"field": "honeypot.canonical_shasum"}},
         "fingerprints": {"cardinality": {"field": "honeypot.canonical_fingerprint"}},
-        "providers": {"terms": {"field": "source.as.type", "size": 10}},
+        "providers": {"terms": {"field": "source.as.type", "size": CAMPAIGN_PROVIDER_TERMS}},
         // #2047 scan shape: the dest-side cardinalities the live ports
         // terms list only hints at, plus the protocol spread.
         "dst_ips_touched": {"cardinality": {"field": "destination.ip"}},
@@ -243,39 +275,161 @@ fn to_bucket(key: &str, prefix_length: i64, b: &Value) -> CampaignBucket {
     }
 }
 
-async fn fetch_campaign_aggregates(state: &AppState, since: chrono::DateTime<chrono::Utc>) -> anyhow::Result<Vec<CampaignBucket>> {
-    let sub_aggs = campaign_sub_aggs();
-    let body = json!({
+/// The campaign window's filter: the same event set as before #3810, now
+/// closed at `until` so the IP listing and the per-group batches below all
+/// read one fixed window rather than a moving edge.
+fn campaign_window_query(since: chrono::DateTime<chrono::Utc>, until: chrono::DateTime<chrono::Utc>, extra: Option<Value>) -> Value {
+    let mut filter = vec![
+        json!({"range": {"@timestamp": {"gte": since.to_rfc3339(), "lte": until.to_rfc3339()}}}),
+        json!({"exists": {"field": "source.ip"}}),
+    ];
+    filter.extend(extra);
+    // #2145: both aggregates materialize into attacker-facing stores
+    // (campaigns-v1 / attacker-clusters-v1); the fleet's own probes
+    // must not become CIDR/cluster members.
+    json!({"bool": {"filter": filter, "must_not": [crate::es::internal_probe_exclusion()]}})
+}
+
+/// One page of the window's distinct source IPs with their event counts.
+fn campaign_ip_page_body(since: chrono::DateTime<chrono::Utc>, until: chrono::DateTime<chrono::Utc>, after: Option<&Value>) -> Value {
+    let mut composite = json!({
+        "size": CAMPAIGN_IP_PAGE,
+        "sources": [{"ip": {"terms": {"field": "source.ip"}}}]
+    });
+    if let Some(after) = after {
+        composite["after"] = after.clone();
+    }
+    json!({
         "size": 0,
-        "query": {"bool": {"filter": [
-            {"range": {"@timestamp": {"gte": since.to_rfc3339()}}},
-            {"exists": {"field": "source.ip"}}
-        // #2145: both aggregates materialize into attacker-facing stores
-        // (campaigns-v1 / attacker-clusters-v1); the fleet's own probes
-        // must not become CIDR/cluster members.
-        ], "must_not": [crate::es::internal_probe_exclusion()]}},
-        "aggs": {
-            "cidrs_v4": {
-                "ip_prefix": {"field": "source.ip", "prefix_length": 24, "is_ipv6": false, "min_doc_count": 2},
-                "aggs": sub_aggs
-            },
-            "cidrs_v6": {
-                "ip_prefix": {"field": "source.ip", "prefix_length": 64, "is_ipv6": true, "min_doc_count": 2},
-                "aggs": sub_aggs
+        "query": campaign_window_query(since, until, None),
+        "aggs": {"ips": {"composite": composite}}
+    })
+}
+
+/// A campaign group: an IPv4 /24 or an IPv6 /64, keyed by its masked
+/// network address exactly as the `ip_prefix` aggregation keys it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct CampaignGroup {
+    v6: bool,
+    network: IpAddr,
+}
+
+impl CampaignGroup {
+    fn of(addr: IpAddr) -> Self {
+        match addr {
+            IpAddr::V4(v4) => {
+                let o = v4.octets();
+                CampaignGroup { v6: false, network: IpAddr::V4(std::net::Ipv4Addr::new(o[0], o[1], o[2], 0)) }
+            }
+            IpAddr::V6(v6) => {
+                let s = v6.segments();
+                CampaignGroup { v6: true, network: IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0)) }
             }
         }
-    });
-    let result = state.es.search_index(&[HONEYPOT_INDEX_PATTERN], body).await?;
-    crate::es::warn_on_failed_shards("correlator campaign aggregations", &result);
-    let mut out = Vec::new();
-    for agg_name in ["cidrs_v4", "cidrs_v6"] {
-        for b in result["aggregations"][agg_name]["buckets"].as_array().into_iter().flatten() {
-            let Some(key) = b["key"].as_str() else { continue };
-            if !is_routable_network(key) {
-                continue;
+    }
+
+    fn cidr(&self) -> String {
+        format!("{}/{}", self.network, if self.v6 { 64 } else { 24 })
+    }
+}
+
+/// Folds one composite page of per-IP counts into per-group counts.
+fn add_ip_page(groups: &mut std::collections::HashMap<CampaignGroup, i64>, buckets: &[Value]) {
+    for b in buckets {
+        let Some(addr) = b["key"]["ip"].as_str().and_then(|s| s.parse::<IpAddr>().ok()) else { continue };
+        *groups.entry(CampaignGroup::of(addr)).or_insert(0) += b["doc_count"].as_i64().unwrap_or(0);
+    }
+}
+
+/// The groups worth a sub-aggregated look: the `ip_prefix` buckets the old
+/// single search kept (`min_doc_count: 2`, then `is_routable_network`).
+fn campaign_candidates(groups: std::collections::HashMap<CampaignGroup, i64>) -> Vec<CampaignGroup> {
+    let mut out: Vec<CampaignGroup> = groups
+        .into_iter()
+        .filter(|(g, count)| *count >= 2 && is_routable(&g.network))
+        .map(|(g, _)| g)
+        .collect();
+    out.sort();
+    out
+}
+
+/// Splits the candidates into searches of one family each, at most
+/// `CAMPAIGN_GROUPS_PER_SEARCH` groups apiece.
+fn campaign_batches(candidates: Vec<CampaignGroup>) -> Vec<Vec<CampaignGroup>> {
+    let (v4, v6): (Vec<CampaignGroup>, Vec<CampaignGroup>) = candidates.into_iter().partition(|g| !g.v6);
+    v4.chunks(CAMPAIGN_GROUPS_PER_SEARCH)
+        .chain(v6.chunks(CAMPAIGN_GROUPS_PER_SEARCH))
+        .map(<[CampaignGroup]>::to_vec)
+        .collect()
+}
+
+/// One batch: the old per-family `ip_prefix` aggregation with its full
+/// sub-aggregations, over only the events of `groups` (all one family).
+/// Every group's whole event set is in the batch, so each bucket comes out
+/// exactly as the single search computed it.
+fn campaign_batch_body(since: chrono::DateTime<chrono::Utc>, until: chrono::DateTime<chrono::Utc>, groups: &[CampaignGroup]) -> Value {
+    let v6 = groups.first().is_some_and(|g| g.v6);
+    let cidrs: Vec<String> = groups.iter().map(CampaignGroup::cidr).collect();
+    let (name, prefix_length) = if v6 { ("cidrs_v6", 64) } else { ("cidrs_v4", 24) };
+    json!({
+        "size": 0,
+        "query": campaign_window_query(since, until, Some(json!({"terms": {"source.ip": cidrs}}))),
+        "aggs": {
+            name: {
+                "ip_prefix": {"field": "source.ip", "prefix_length": prefix_length, "is_ipv6": v6, "min_doc_count": 2},
+                "aggs": campaign_sub_aggs()
             }
-            let prefix_length = b["prefix_length"].as_i64().unwrap_or(0);
-            out.push(to_bucket(key, prefix_length, b));
+        }
+    })
+}
+
+/// #3810: the campaign aggregation in requests whose bucket count is bounded
+/// by construction. First the window's source IPs are listed with a paged
+/// composite aggregation and folded into /24 and /64 groups; then the old
+/// `ip_prefix` aggregation runs per batch of `CAMPAIGN_GROUPS_PER_SEARCH`
+/// groups of one family, filtered to those groups' addresses.
+///
+/// Also fixes a side effect of the single search: its IPv4 `ip_prefix`
+/// aggregation masked IPv6 events too and emitted phantom "/24"s built from
+/// IPv6 address bits (33 of them on the 2026-11-08 window, `0.0.1.0/24`
+/// among them). Groups now come from real addresses, so those are gone.
+async fn fetch_campaign_aggregates(
+    state: &AppState,
+    since: chrono::DateTime<chrono::Utc>,
+    until: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Vec<CampaignBucket>> {
+    let mut groups = std::collections::HashMap::new();
+    let mut after: Option<Value> = None;
+    loop {
+        let result = state
+            .es
+            .search_index(&[HONEYPOT_INDEX_PATTERN], campaign_ip_page_body(since, until, after.as_ref()))
+            .await?;
+        crate::es::warn_on_failed_shards("correlator campaign source listing", &result);
+        let page = result["aggregations"]["ips"]["buckets"].as_array().cloned().unwrap_or_default();
+        add_ip_page(&mut groups, &page);
+        after = result["aggregations"]["ips"].get("after_key").cloned();
+        // A short page is the last one; composite fills every page before it.
+        if page.len() < CAMPAIGN_IP_PAGE || after.is_none() {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    for batch in campaign_batches(campaign_candidates(groups)) {
+        let result = state
+            .es
+            .search_index(&[HONEYPOT_INDEX_PATTERN], campaign_batch_body(since, until, &batch))
+            .await?;
+        crate::es::warn_on_failed_shards("correlator campaign aggregations", &result);
+        for agg_name in ["cidrs_v4", "cidrs_v6"] {
+            for b in result["aggregations"][agg_name]["buckets"].as_array().into_iter().flatten() {
+                let Some(key) = b["key"].as_str() else { continue };
+                if !is_routable_network(key) {
+                    continue;
+                }
+                let prefix_length = b["prefix_length"].as_i64().unwrap_or(0);
+                out.push(to_bucket(key, prefix_length, b));
+            }
         }
     }
     Ok(out)
@@ -558,7 +712,7 @@ async fn run_correlation(state: &AppState, window: Duration) {
     let start = chrono::Utc::now();
     let since = start - chrono::Duration::from_std(window).unwrap_or(chrono::Duration::days(7));
 
-    let campaign_buckets = match fetch_campaign_aggregates(state, since).await {
+    let campaign_buckets = match fetch_campaign_aggregates(state, since, start).await {
         Ok(b) => b,
         Err(error) => {
             tracing::warn!(%error, "correlator: fetching campaign aggregates failed, skipping this cycle");
@@ -782,4 +936,115 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a, cluster_doc_id("fingerprint", "abc"));
     }
+
+    // #3810 -----------------------------------------------------------
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    fn group(network: &str) -> CampaignGroup {
+        let network: IpAddr = network.parse().unwrap();
+        CampaignGroup { v6: network.is_ipv6(), network }
+    }
+
+    #[test]
+    fn campaign_search_stays_under_max_buckets_by_construction() {
+        // Every sub-aggregation is either a metric (no buckets) or a terms
+        // aggregation whose size the per-group bound already counts. A new
+        // or resized terms sub-aggregation has to move the bound with it.
+        let mut terms = 0usize;
+        for (name, agg) in campaign_sub_aggs().as_object().unwrap() {
+            let kind = agg.as_object().unwrap().keys().next().unwrap().as_str();
+            match kind {
+                "terms" => terms += agg["terms"]["size"].as_u64().unwrap() as usize,
+                "cardinality" | "min" | "max" => {}
+                other => panic!("sub-aggregation {name} is a {other}; count its buckets in CAMPAIGN_BUCKETS_PER_GROUP"),
+            }
+        }
+        assert_eq!(CAMPAIGN_BUCKETS_PER_GROUP, 1 + terms);
+    }
+
+    #[test]
+    fn source_ips_fold_into_routable_groups_with_two_or_more_events() {
+        let page: Vec<Value> = [
+            ("203.0.113.5", 1),
+            ("203.0.113.9", 1),
+            ("198.51.100.7", 1),
+            ("10.0.0.1", 5),
+            ("2001:db8:1:2:aaaa::1", 3),
+            ("fe80::1", 4),
+        ]
+        .iter()
+        .map(|(ip, n)| json!({"key": {"ip": ip}, "doc_count": n}))
+        .collect();
+        let mut groups = std::collections::HashMap::new();
+        add_ip_page(&mut groups, &page[..3]);
+        add_ip_page(&mut groups, &page[3..]);
+        let candidates = campaign_candidates(groups);
+        assert_eq!(candidates, vec![group("203.0.113.0"), group("2001:db8:1:2::")]);
+        assert_eq!(candidates[0].cidr(), "203.0.113.0/24");
+        assert_eq!(candidates[1].cidr(), "2001:db8:1:2::/64");
+    }
+
+    #[test]
+    fn ipv6_addresses_never_become_ipv4_groups() {
+        // The single ip_prefix search turned IPv6 events into phantom /24s
+        // such as 0.0.1.0/24; folding real addresses cannot.
+        let page = vec![json!({"key": {"ip": "2a01:4f8:0:1::abcd"}, "doc_count": 9})];
+        let mut groups = std::collections::HashMap::new();
+        add_ip_page(&mut groups, &page);
+        let candidates = campaign_candidates(groups);
+        assert!(candidates.iter().all(|g| g.v6), "{candidates:?}");
+    }
+
+    #[test]
+    fn batches_hold_one_family_and_at_most_the_group_limit() {
+        let mut candidates: Vec<CampaignGroup> = (0..1300u32)
+            .map(|i| group(&std::net::Ipv4Addr::from((100u32 << 24) | (i << 8)).to_string()))
+            .collect();
+        candidates.extend((0..3u16).map(|i| group(&format!("2001:db8:{i:x}::"))));
+        let batches = campaign_batches(candidates);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 1303);
+        for batch in &batches {
+            assert!(!batch.is_empty() && batch.len() <= CAMPAIGN_GROUPS_PER_SEARCH);
+            assert!(batch.iter().all(|g| g.v6 == batch[0].v6));
+        }
+        assert_eq!(batches.iter().filter(|b| b[0].v6).count(), 1);
+    }
+
+    #[test]
+    fn batch_body_filters_to_its_groups_and_aggregates_one_family() {
+        let since = ts("2026-10-21T05:27:04Z");
+        let until = ts("2026-10-28T05:27:04Z");
+        let v4 = campaign_batch_body(since, until, &[group("203.0.113.0"), group("198.51.100.0")]);
+        let filter = v4["query"]["bool"]["filter"].as_array().unwrap();
+        assert_eq!(filter[0]["range"]["@timestamp"]["lte"], until.to_rfc3339());
+        assert_eq!(filter[0]["range"]["@timestamp"]["gte"], since.to_rfc3339());
+        assert_eq!(filter[2]["terms"]["source.ip"], json!(["203.0.113.0/24", "198.51.100.0/24"]));
+        assert_eq!(v4["query"]["bool"]["must_not"][0], crate::es::internal_probe_exclusion());
+        assert_eq!(v4["aggs"]["cidrs_v4"]["ip_prefix"]["prefix_length"], 24);
+        assert_eq!(v4["aggs"]["cidrs_v4"]["ip_prefix"]["min_doc_count"], 2);
+        assert_eq!(v4["aggs"]["cidrs_v4"]["aggs"], campaign_sub_aggs());
+        assert!(v4["aggs"].get("cidrs_v6").is_none());
+
+        let v6 = campaign_batch_body(since, until, &[group("2001:db8:1:2::")]);
+        assert_eq!(v6["aggs"]["cidrs_v6"]["ip_prefix"]["is_ipv6"], true);
+        assert_eq!(v6["aggs"]["cidrs_v6"]["ip_prefix"]["prefix_length"], 64);
+        assert!(v6["aggs"].get("cidrs_v4").is_none());
+    }
+
+    #[test]
+    fn ip_page_body_pages_from_the_after_key() {
+        let since = ts("2026-10-21T05:27:04Z");
+        let until = ts("2026-10-28T05:27:04Z");
+        let first = campaign_ip_page_body(since, until, None);
+        assert_eq!(first["aggs"]["ips"]["composite"]["size"], CAMPAIGN_IP_PAGE);
+        assert!(first["aggs"]["ips"]["composite"].get("after").is_none());
+        let after = json!({"ip": "203.0.113.9"});
+        let next = campaign_ip_page_body(since, until, Some(&after));
+        assert_eq!(next["aggs"]["ips"]["composite"]["after"], after);
+        assert_eq!(next["query"], first["query"]);
+    }
 }
+
