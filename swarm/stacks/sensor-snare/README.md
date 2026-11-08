@@ -35,10 +35,18 @@ and `stackctl pause` refuses it.
    `/etc/apiary/homeserver-swarm-host-ports.txt`.
 2. The Arcane sync of `honeypot-tanner` has `autoSync: false`. Stop the
    Compose snare and keep it as the rollback: `docker stop hp-snare`.
-3. `ops/swarm/stackctl.py ensure sensor-snare`.
-4. Join tanner: apply this change's `honeypot-tanner/compose.yml` diff to the
-   live file (backup alongside), then recreate only tanner
-   (`docker compose up -d --no-deps tanner` in the project dir).
+3. Apply this change's `honeypot-tanner/compose.yml` diff to the live file
+   (backup alongside) before the stop in step 2, so the join is ready.
+4. Start `ops/swarm/stackctl.py ensure sensor-snare` and, **while it waits**,
+   join tanner as soon as `sensor-snare_decoy` exists: recreate only tanner
+   (`docker compose up -d --no-deps --no-build tanner` in the project dir; a
+   build service needs its image under the Compose default name, e.g.
+   `docker tag arcane.local/honeypot-tanner-<id>/tanner:latest
+   honeypot-tanner-tanner:latest`). Snare exits at startup until
+   `http://tanner:8090/version` answers, so the task cannot converge, and
+   `ensure` cannot return, before tanner is on the overlay. The first cutover
+   (2026-11-08) joined tanner only after `ensure` hung, and snare was down
+   ~3m40s instead of ~30 s.
 5. Prove: the task is `healthy` with `NoNewPrivs: 1`; a request with a unique
    path through the public host produces a tanner analysis in `honeypot-v2`
    (`/logs/enriched/tanner.json`), as before; tanner's access log shows the
