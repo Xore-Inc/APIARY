@@ -17,3 +17,12 @@ ens1f1 802-3-ethernet.mtu 9000
 # eno1: disabled 2026-10-10 (#3588); kept as a manual fallback, multihome sysctls cover it.
 eno1 connection.autoconnect no
 eno1 ipv4.route-metric 200
+# ci-mirror0: dummy interface holding 172.16.0.1, the address repo variable
+# CI_REGISTRY_MIRROR names (#3664). precision's docker0 is 172.17.0.1/16, so
+# unlike the homeserver the mirror cannot use the docker0 gateway; buildkit
+# containers reach this host address through docker0 all the same.
+ci-mirror0 connection.autoconnect yes
+ci-mirror0 ipv4.method manual
+ci-mirror0 ipv4.addresses 172.16.0.1/32
+ci-mirror0 ipv4.never-default yes
+ci-mirror0 ipv6.method disabled
