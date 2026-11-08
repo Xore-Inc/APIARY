@@ -197,6 +197,25 @@ dependency in this repo) — bump it by hand:
 `Dockerfile-api`'s `FROM mcr.microsoft.com/dotnet/sdk:10.0` was a floating
 tag the base-image CVE gate could not pin or exempt. It is now
 `mcr.microsoft.com/dotnet/sdk:10.0.402@sha256:0d99ebf1…`, the same digest
-`sandbox/ghosts/Dockerfile.api-prep` uses. That is the only line changed
-in `Dockerfile-api`. The build that actually runs is `Dockerfile.api-prep`,
+`sandbox/ghosts/Dockerfile.api-prep` uses. That was the only line changed
+in `Dockerfile-api` at the time. The build that actually runs is `Dockerfile.api-prep`,
 which copies these sources and does not depend on this stage.
+
+## Runtime base-image pins (2026-11-07)
+
+The floating `mcr.microsoft.com/dotnet/aspnet:10.0` and `runtime:10.0`
+(Ubuntu 24.04 "noble") carry apt/libapt-pkg CVE-2026-109518, which the
+base-image CVE gate flags and no noble build fixes yet. Both final stages
+now use Microsoft's Ubuntu 26.04 variant of the same 10.0.14 runtime,
+pinned by index digest, which trivy measures at 0 fixable CRITICAL/HIGH:
+
+- `Dockerfile-api` `prod`: `aspnet:10.0.14-resolute@sha256:cb0e8cad…`
+- `Dockerfile-client-universal` final stage: `runtime:10.0.14-resolute@sha256:89f13dc6…`
+
+The same pins are in `sandbox/ghosts/Dockerfile.api-prep` and
+`Dockerfile.client-prep`, the builds that actually run. Nothing else in
+either vendored file changed. The variant keeps what the noble image had:
+a shell and apt, the default user root (the `app` user, uid 1654, exists
+but is not selected), and the same .NET runtime version. A future bump can
+return to the plain `10.0` tag once its noble build no longer carries the
+finding.
