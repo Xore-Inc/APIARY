@@ -187,7 +187,7 @@ Lesson from #3584: Docker and the runners must never start on empty mountpoints.
 2. Network: `nm-profiles.sh check hosts/precision.nm`; `wg show` for `wg0`, `wg-fibre` and `wg-lan`; `systemctl is-active peer-route.service`; `ip route show exact 10.8.0.2/32` via `wg-fibre`; `firewall-cmd --get-active-zones` lists `ens1f1 wg0 wg-fibre wg-lan` in `apiary-swarm`. udev names precision's NetXen card by slot (`ens1f0` LAN, `ens1f1` fibre); if a hardware change renames it, fix `hosts/precision.nm` and `../firewall/hosts/precision.env` before applying either.
 3. Docker: `docker info` (swarm `active`, NodeAddr `10.8.0.3`, manager), and `docker node ls` from every manager.
 4. Arcane: `systemctl --user is-active arcane-fibre-tunnel`, `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13552/api/health` → 200, and environment `precision` `online` in the manager.
-5. Runners: every unit in `hosts/precision-runners.txt` active and online in GitHub. `ci-registry-mirror.service` active, published on `172.16.0.1:5555` only.
+5. Runners: every unit in `hosts/precision-runners.txt` active and online in GitHub. `ci-registry-mirror.service` active, published on `172.16.0.1:5555` only (on precision that address is the `ci-mirror0` dummy interface from `hosts/precision.nm`, #3664), and `curl http://172.16.0.1:5555/v2/` → 200.
 6. Run a GitOps sync, and confirm homeserver ingest is still rising with public `source.ip`.
 
 ## Sensor and edge stacks: what replaces per-service hardening (#3593, #3595)
