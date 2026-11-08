@@ -1,9 +1,12 @@
 # honeypot-dionaea — #258: dionaea and tftp-relay split into their own
 # Dockge stack. Kept together, not further split into per-service stacks:
-# tftp-relay has depends_on: dionaea and actually forwards TFTP traffic to
-# it over dionaea_net (#235's one documented exception to "one honeypot per
-# network" -- see that network's own comment below), so they're one unit,
-# same shape as arcane/home/honeypot-http/compose.yml's http-honeypot+api-honeypot pair.
+# tftp-relay actually forwards TFTP traffic to dionaea over dionaea_net
+# (#235's one documented exception to "one honeypot per network" -- see that
+# network's own comment below), so they're one unit, same shape as
+# arcane/home/honeypot-http/compose.yml's http-honeypot+api-honeypot pair.
+# #3593: dionaea itself now runs as the swarm stack sensor-dionaea; the
+# dionaea service below is its rollback, and the relay reaches the stack over
+# the overlay sensor-dionaea_decoy.
 #
 # dionaea-lib is the one resource this stack shares outside itself: it's
 # where dionaea writes captured binaries/bistreams, and
@@ -208,12 +211,19 @@ services:
     build: ./tftp-relay
     container_name: hp-tftp-relay
     restart: unless-stopped
+    # #3593: dionaea runs as the swarm stack sensor-dionaea; the relay reaches
+    # it by the same name on that stack's attachable overlay (dnsrr: the name
+    # is the task address, so dionaea's reply from a new TFTP port is
+    # accepted). The relay re-resolves the name per new session, so it follows
+    # a replaced task, and finds the Compose dionaea again on dionaea_net
+    # after a rollback (stack paused, hp-dionaea started).
     environment:
       - TFTP_TARGET=dionaea:69
     ports:
       - ${HP_BIND:-10.8.0.2}:1069:1069/udp
     networks:
       - dionaea_net
+      - dionaea_decoy
     # #747: {relay_port, client_ip} per session, so ip-enrichment-worker can
     # correct dionaea's TFTP events -- dionaea only ever sees this relay's
     # own internal address, never the real attacker.
@@ -229,9 +239,10 @@ services:
     cap_drop:
       - ALL
     read_only: true
-    depends_on:
-      dionaea:
-        condition: service_started
+    # #3593: no depends_on dionaea. The Compose dionaea is only the rollback
+    # now; a depends_on would make any recreate of the relay start it into
+    # the stack's host ports. The relay drops datagrams until its target
+    # resolves, and the client's TFTP retry gets the next attempt.
     deploy:
       resources:
         limits:
@@ -241,8 +252,9 @@ services:
 networks:
   # One honeypot per network (#235), each with no other honeypot as a peer --
   # a compromised honeypot has no network path to another honeypot's daemon.
-  # tftp-relay is the one real exception: it has depends_on: dionaea and
-  # actually forwards TFTP traffic to it, so those two share this network
+  # tftp-relay is the one real exception: it actually forwards TFTP
+  # traffic to dionaea, so those two share this network (and, since #3593,
+  # the stack overlay sensor-dionaea_decoy)
   # instead of each getting their own. Private to this stack -- nothing
   # outside it ever referenced dionaea_net.
   #
@@ -263,6 +275,13 @@ networks:
   dionaea_net:
     driver: bridge
     internal: ${DIONAEA_AIR_GAPPED:-false}
+  # #3593 option 1: the overlay the swarm stack sensor-dionaea owns
+  # (10.200.28.0/24). Only the relay joins it. The relay keeps dionaea_net,
+  # which gives it its default route, so the overlay adds no egress path.
+  # Exists once `ops/swarm/stackctl.py ensure sensor-dionaea` has run.
+  dionaea_decoy:
+    name: sensor-dionaea_decoy
+    external: true
 
 volumes:
   # Shared with arcane/home/honeypot-payload-analysis/compose.yml (#258) -- explicit fixed

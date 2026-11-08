@@ -1,0 +1,115 @@
+# #3593 (phase 6): the web decoy hp-snare as a sensor stack, pinned to the
+# homeserver. Same container as the snare service in
+# arcane/home/honeypot-tanner/compose.yml, which stays defined as the
+# rollback (see README.md next to this file).
+#
+# Snare posts every request to http://tanner:8090/event (TANNER=tanner is
+# baked into the image; the port is fixed in snare's tanner handler). Tanner
+# and the rest of its group stay on Compose. Option 1 on #3593 (Xore,
+# 2026-11-08): this stack owns the attachable overlay `decoy`
+# (10.200.29.0/24) and hp-tanner joins it as the external network
+# sensor-snare_decoy. Compose aliases hp-tanner by its service name
+# (`tanner`) on every network it joins, so snare reaches it by the same name
+# as before; aiohttp resolves per connection, so a recreated hp-tanner is
+# found again. Tanner never calls snare. hp-tanner-docker and the other
+# tanner services do not join.
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2:19082 only). home-swarm-host-guard.sh drops NEW DNATed flows to
+#   19082 unless they come from the VPS hub on wg0 (#3769). The VPS reaches
+#   it through Traefik (socat-hp-snare -> 10.8.0.2:19082).
+# - no-new-privileges: set per service below (Arcane's stack deploy carries
+#   it into the service spec as Privileges.NoNewPrivileges). The image keeps
+#   Debian's stock setuid/setgid tools, which the flag makes inert; snare
+#   starts as root and drops to 65534 by setuid()/setgid() itself, never by
+#   exec (#3593 audit, 2026-11-08, no file capability). SETUID+SETGID is the
+#   measured minimum (see the Compose service); everything else is dropped.
+# - TANNER_AIR_GAPPED cannot be expressed: host-mode ports need a
+#   non-internal overlay. An air-gapped tanner group keeps snare on Compose.
+# - Compose has no healthcheck for snare; this stack adds a TCP check on
+#   8080 so swarm replaces a task that stops listening.
+services:
+  snare:
+    image: ghcr.io/xore-inc/honeypot-snare@sha256:679939a49c35a4766d465c9411c33cc81392d872825235690a51fa10b0b5adc1
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        until [ -f /markers/snare-clone.done ] && [ -f /markers/log-init.done ]; do sleep 3; done;
+        rm -f /opt/snare/snare.pid /opt/snare/snare.err /opt/snare/snare.log;
+        exec /usr/local/bin/snare-entry.sh
+    ports:
+      - target: 8080
+        published: 19082
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/snare
+        target: /opt/snare
+      - type: volume
+        source: snare-pages
+        target: /opt/snare/pages
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 19082.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "part of the tanner group, NEVER in scripts/honeypot-pause.sh: the event sink and its front end stay up"
+networks:
+  decoy:
+    driver: overlay
+    # Attachable: hp-tanner (Compose) joins it (#3593 option 1).
+    attachable: true
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.29.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
+volumes:
+  # Written by honeypot-init's snare-clone, read here (#124).
+  snare-pages:
+    external: true
+    name: snare-pages
