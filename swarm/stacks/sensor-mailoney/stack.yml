@@ -1,0 +1,94 @@
+# #3593 (phase 6): the SMTP decoy hp-mailoney as a sensor stack, pinned to the
+# homeserver. Same container as arcane/home/honeypot-mailoney/compose.yml,
+# which stays defined as the rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to 25
+#   unless they come from the VPS hub on wg0 (#3769).
+# - no-new-privileges: set per service below (Arcane's stack deploy carries
+#   it into the service spec as Privileges.NoNewPrivileges, as on
+#   dashboard-sessions; checked on the task, NoNewPrivs 1). The image keeps
+#   Debian's stock setuid/setgid tools (su, passwd, mount, ...), which the
+#   flag makes inert; the service never execs them (#3593 audit, 2026-11-08).
+#   Non-root (65534), cap_drop ALL, no file capability.
+# - /data (mailoney's disposable SQLite session DB) is a tmpfs without
+#   uid/gid (a stack cannot set them); /data is absent from the image, so the
+#   mount is 1777 and uid 65534 writes it. Every task is a fresh container,
+#   so the reused-container case behind the Compose mode=1770 fix does not
+#   arise.
+# - autoheal is replaced by swarm's own unhealthy-task replacement.
+#
+# Reached from the VPS on public 25 (portbridge, no PROXY header; the
+# ip_enrichment tunnel join attributes by via_port, which host mode keeps).
+services:
+  mailoney:
+    image: ghcr.io/xore-inc/honeypot-mailoney@sha256:ae1ad5d1cc24136830c5be98e8143e6028406190abfd7ea8ca4de42f329b728c
+    ports:
+      - target: 25
+        published: 25
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/mailoney
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+      - type: tmpfs
+        target: /data
+    environment:
+      TZ: Europe/Berlin
+      MAILONEY_MAIL_DIR: /var/log/honeypot/mail
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "25"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 25.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone SMTP decoy, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.25.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
