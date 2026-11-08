@@ -1,0 +1,94 @@
+# #3593 (phase 6): the API/cloud decoy hp-api-honeypot as a sensor stack,
+# pinned to the homeserver. Same image as sensor-http (one build serves both,
+# arcane/home/honeypot-http/http-honeypot); the Compose service in
+# arcane/home/honeypot-http/compose.yml stays defined as the rollback.
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to 18083
+#   unless they come from the VPS hub on wg0 or from a local container to
+#   10.8.0.2 (#3769): the sonicwall-sma decoy calls 10.8.0.2:18083 as its AMC
+#   relay hop, and that path stays open.
+# - `security_opt` is not supported. Gate (#3593): non-root (65534), cap_drop
+#   ALL, read_only, FROM scratch with no setuid/setgid file or file
+#   capability (same digest as sensor-http).
+# - The healthcheck is restated (the image's HEALTHCHECK is the same) because
+#   the lint requires it in the stack.
+#
+# Reached from the VPS on public 8888 (portbridge, PROXY header).
+services:
+  api-honeypot:
+    image: ghcr.io/xore-inc/honeypot-http-honeypot@sha256:a44e608be81e47ca57a784a8f2e8522e2568cd9a2a70db1e65001747507dca74
+    ports:
+      - target: 8080
+        published: 18083
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/api-honeypot
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      LISTEN_ADDR: ":8080"
+      SERVER_HEADER: envoy
+      SENSOR_NAME: api-honeypot
+      PERSONA_ID: nexusai-platform
+      SITE_ID: nexusai-eu-cloud
+      ASSET_ID: platform-gw-03
+      ORGANIZATION: NexusAI Research GmbH
+      LOG_FILE: /var/log/honeypot/api.json
+      PROXY_PROTOCOL: "1"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "/honeypot", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 18083.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "pause together with sensor-sonicwall-sma, whose AMC relay hop calls it"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.22.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
