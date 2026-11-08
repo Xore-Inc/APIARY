@@ -20,3 +20,9 @@ tcp 8080
 tcp 8090
 tcp 18083
 tcp 3389
+tcp 19022
+tcp 19023
+tcp 25
+tcp 9201
+tcp 8888
+tcp 8890

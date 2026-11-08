@@ -1,0 +1,149 @@
+# #3593 (phase 6): the SSH/Telnet decoy hp-cowrie as a sensor stack, pinned to
+# the homeserver. Same container as arcane/home/honeypot-cowrie/compose.yml,
+# which stays defined as the rollback (see README.md next to this file).
+# hp-honeyfs-implant stays in that Compose project: it only writes the shared
+# honeyfs/marker paths below, it never talks to cowrie over the network.
+#
+# Differences a stack forces, and what covers them:
+# - The ports publish in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to
+#   19022/19023 unless they come from the VPS hub on wg0 (#3769).
+# - no-new-privileges: set per service below (Arcane's stack deploy carries
+#   it into the service spec as Privileges.NoNewPrivileges; checked live on
+#   dashboard-sessions and on this stack's task, NoNewPrivs 1). The image
+#   keeps Debian's stock setuid/setgid tools (su, passwd, mount, ...), which
+#   the flag makes inert; cowrie never execs them (#3593 audit, 2026-11-08).
+#   Non-root (2000), cap_drop ALL, no file capability.
+# - cowrie.cfg and userdb.txt are not bind-mounted: the image bakes the same
+#   files (sha256 identical to the repo and to the live Compose mount on
+#   2026-11-08); a change to either rebuilds the image and re-pins here.
+# - The DMI identity files are configs (copies of
+#   arcane/home/honeypot-cowrie/cowrie/fakefs/sys/class/dmi/id/*; bump _vN
+#   when they change).
+# - The txtcmds tmpfs cannot take uid/gid in a stack; the default mode 1777
+#   lets uid 2000 write it (smoke-tested: entrypoint fills it, healthy).
+# - autoheal is replaced by swarm's own unhealthy-task replacement: the
+#   honeyfs-implant marker still fails the healthcheck, and the new task
+#   re-merges honeyfs in entrypoint.sh, as the autoheal restart did.
+#
+# Reached from the VPS on public 22/23 (portbridge, no PROXY header; the
+# ip_enrichment tunnel join attributes by via_port, which host mode keeps).
+services:
+  cowrie:
+    image: ghcr.io/xore-inc/honeypot-cowrie@sha256:12fe1af4cb30da9cb73d482abe03de5aa53e94a52055e369ad282f5431162936
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        until [ -f /markers/log-init.done ]; do sleep 3; done;
+        exec /cowrie/cowrie-git/bin/entrypoint.sh
+    ports:
+      - target: 2222
+        published: 19022
+        protocol: tcp
+        mode: host
+      - target: 2223
+        published: 19023
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/cowrie
+        target: /cowrie/cowrie-git/var/log/cowrie
+      - type: bind
+        source: /opt/stacks/apiary/logs/cowrie/lib-cowrie
+        target: /cowrie/cowrie-git/var/lib/cowrie
+      - type: bind
+        source: /opt/stacks/apiary/logs/cowrie/downloads
+        target: /cowrie/cowrie-git/var/lib/cowrie/downloads
+      - type: bind
+        source: /opt/stacks/apiary/logs/cowrie/tty
+        target: /cowrie/cowrie-git/var/lib/cowrie/tty
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+      - type: bind
+        source: /opt/stacks/apiary/state/honeyfs/cowrie
+        target: /cowrie/cowrie-git/honeyfs
+      - type: bind
+        source: /opt/stacks/apiary/state/honeyfs/cowrie-share
+        target: /cowrie/cowrie-git/share/cowrie
+      - type: tmpfs
+        target: /cowrie/cowrie-git/txtcmds
+    configs:
+      - source: dmi_product_name
+        target: /sys/class/dmi/id/product_name
+        mode: 0444
+      - source: dmi_sys_vendor
+        target: /sys/class/dmi/id/sys_vendor
+        mode: 0444
+      - source: dmi_board_name
+        target: /sys/class/dmi/id/board_name
+        mode: 0444
+    environment:
+      TZ: UTC
+      COWRIE_HOSTNAME: gpu01
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD-SHELL", "test ! -f /cowrie/cowrie-git/var/lib/cowrie/.implant-pending && /cowrie/cowrie-env/bin/python3 /cowrie/cowrie-git/bin/healthcheck-probe.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 30s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode ports: two tasks must never contend for 19022/19023.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "pauses with hp-honeyfs-implant (Compose): cowrie first, implant second (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.24.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
+configs:
+  dmi_product_name:
+    external: true
+    name: sensor-cowrie_dmi_product_name_v1
+    x-apiary-file: ./configs/dmi_product_name
+  dmi_sys_vendor:
+    external: true
+    name: sensor-cowrie_dmi_sys_vendor_v1
+    x-apiary-file: ./configs/dmi_sys_vendor
+  dmi_board_name:
+    external: true
+    name: sensor-cowrie_dmi_board_name_v1
+    x-apiary-file: ./configs/dmi_board_name
