@@ -226,7 +226,7 @@ flowchart TB
 | Loop | Reads | Writes | Cadence | Notes |
 |---|---|---|---|---|
 | attacker-identity | `honeypot-v2-*`, `*-analysis-v1` verdicts | `attackers-v1` | 15m | union of observed behavior + analysis verdicts per source IP; standalone Go worker stack |
-| correlator | raw events | `campaigns-v1`, `attacker-clusters-v1` | every cycle | pure aggregations, recomputed from scratch; groups ≥2 IPs sharing fingerprint/hash/ASN/provider-class |
+| correlator | raw events | `campaigns-v1`, `attacker-clusters-v1` | every cycle | pure aggregations, recomputed from scratch; groups ≥2 IPs sharing fingerprint/hash/ASN/provider-class; campaigns (/24, /64) are aggregated in batches of at most 583 groups so no search can pass `search.max_buckets` (#3810) |
 | agent-intrusion | raw events | `agent-intrusion-campaigns` | 300s | deterministic criticality rules escalate; LLM never gates escalation; deterministic sha256 campaign_id ⇒ upsert not duplicate |
 | zeek-proxy-attribution | zeek flows + portbridge log | flow docs | 120s | attributes relayed flows to attackers; ordering rule above applies here too |
 | threat-intel | raw event indices | `source.as.type` in place | 15m run, 5m CIDR reload, 24h lookback | classifies source IPs against `threat-cidrs.csv`; intel labels win over the ingest pipeline's provider class, reproducing the retired Go dashboard's `firstNonEmpty(e.Intel, e.Provider)` precedence at the data layer |
