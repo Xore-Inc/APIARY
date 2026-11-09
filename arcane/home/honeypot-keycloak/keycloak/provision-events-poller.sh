@@ -37,6 +37,17 @@ kc_api GET "/${REALM}/clients/${rm_uuid}/roles/view-events" \
 kc_api POST "/${REALM}/users/${sa_user_id}/role-mappings/clients/${rm_uuid}" "${kc_tmp}/role.json" >/dev/null
 echo "granted realm-management:view-events to auth-events-poller's service account"
 
+# #3824: Keycloak 26.8.2 accepts an admin REST call (GET .../events is one) only
+# from a token carrying the admin-API audience, which its built-in
+# `kc-admin-api` client scope adds. This client deliberately has no default
+# scopes, so without it the worker gets a token and then 401 on every cycle
+# (seen live right after the 26.8.2 rebuild). Older releases have no such scope.
+scope_id="$(kc_api GET "/${REALM}/client-scopes" | kc_json '([s["id"] for s in d if s["name"]=="kc-admin-api"] or [""])[0]')"
+if [[ -n "${scope_id}" ]]; then
+  kc_api PUT "/${REALM}/clients/${client_uuid}/default-client-scopes/${scope_id}" >/dev/null
+  echo "added default client scope kc-admin-api to auth-events-poller"
+fi
+
 # GID 10101 matches auth-events-worker/Dockerfile's fixed, non-root
 # `authevents` user -- same reasoning as vps/secrets/oidc/*'s
 # "chown root:65532" convention (docs/KEYCLOAK-OPERATIONS.md). The
