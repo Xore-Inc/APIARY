@@ -259,10 +259,12 @@ def test_preflight_realm_check_aborts_before_any_write():
     """
     abort = SCRIPT_TEXT.find("ABORT: listed in CLIENT_CONTAINERS but absent")
     assert abort != -1, "the #2195 realm-mismatch abort is gone"
-    assert 'get clients -r "$REALM"' in SCRIPT_TEXT, (
+    # #3824: the list comes from the admin REST API (lib-admin.sh) rather than
+    # kcadm, and the secret reaches ssh on stdin from a 0600 file.
+    assert 'kc_api GET "/${REALM}/clients"' in SCRIPT_TEXT, (
         "the pre-flight must query the realm's own client list, not trust the map"
     )
-    write = SCRIPT_TEXT.find('| ssh "$VPS_HOST"')
+    write = SCRIPT_TEXT.find('ssh "$VPS_HOST" "install -d')
     recreate = SCRIPT_TEXT.find("docker compose up -d --force-recreate")
     assert write != -1 and recreate != -1, "the sync/recreate steps moved; update this test"
     assert abort < write < recreate, (

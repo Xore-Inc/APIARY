@@ -690,6 +690,42 @@ fn measures_for(sensor: &str) -> Vec<(&'static str, &'static str, &'static str)>
 
 const OVERVIEW_WINDOW: &str = "now-7d";
 
+/// #3827: `honeypot` is mapped `flattened` in every honeypot-v2 backing
+/// index, so a `stats` aggregation straight on `honeypot.<measure>` is
+/// refused ("not supported for aggregation [stats]") and took the whole
+/// overview down with a 502. Each measure is read instead through a
+/// `double` runtime field that parses the keyed leaf's doc value (a
+/// flattened leaf is stored as a keyword), inside a `filter: exists`
+/// sub-aggregation so the script only runs on documents that carry the
+/// field. Measured live on the cowrie 7-day window (9.4 M events, 1.66 M
+/// with `duration_ms`): 0.75-1.3 s. A value that does not parse as a
+/// number is skipped, not counted as zero.
+///
+/// Returns the runtime mappings and the `measure_{index}` aggregations;
+/// the stats sit under each aggregation's `stats` key.
+fn measure_aggregations(sensor: &str) -> (serde_json::Map<String, Value>, Vec<(String, Value)>) {
+    const PARSE_KEYED_NUMBER: &str = "if (!doc.containsKey(params.field)) { return; } \
+        def values = doc[params.field]; \
+        if (values.size() > 0) { try { emit(Double.parseDouble(values.value)); } catch (NumberFormatException e) {} }";
+    let mut runtime = serde_json::Map::new();
+    let mut aggs = Vec::new();
+    for (index, (field, _, _)) in measures_for(sensor).iter().enumerate() {
+        let name = format!("measure_{index}");
+        runtime.insert(
+            name.clone(),
+            json!({"type": "double", "script": {"source": PARSE_KEYED_NUMBER, "params": {"field": field}}}),
+        );
+        aggs.push((
+            name.clone(),
+            json!({
+                "filter": {"exists": {"field": field}},
+                "aggs": {"stats": {"stats": {"field": name}}}
+            }),
+        ));
+    }
+    (runtime, aggs)
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/sensors/{sensor}/overview",
@@ -728,11 +764,12 @@ pub async fn overview(
     for (index, (field, _)) in top_fields_for(&sensor).iter().enumerate() {
         aggs[format!("top_{index}")] = json!({"terms": {"field": field, "size": 10}});
     }
-    for (index, (field, _, _)) in measures_for(&sensor).iter().enumerate() {
-        aggs[format!("measure_{index}")] = json!({"stats": {"field": field}});
+    let (runtime, measure_aggs) = measure_aggregations(&sensor);
+    for (name, agg) in measure_aggs {
+        aggs[name] = agg;
     }
 
-    let body = json!({
+    let mut body = json!({
         "size": 0,
         "track_total_hits": true,
         "query": {"bool": {
@@ -744,6 +781,9 @@ pub async fn overview(
         }},
         "aggs": aggs
     });
+    if !runtime.is_empty() {
+        body["runtime_mappings"] = Value::Object(runtime);
+    }
     let result = state
         .es
         .search_index(&["honeypot-v2-*"], body)
@@ -789,7 +829,7 @@ pub async fn overview(
         .iter()
         .enumerate()
         .filter_map(|(index, (_, label, unit))| {
-            let stats = &a[format!("measure_{index}")];
+            let stats = &a[format!("measure_{index}")]["stats"];
             let total = stats["sum"].as_f64().unwrap_or(0.0);
             if total <= 0.0 {
                 return None;
@@ -828,6 +868,32 @@ pub async fn overview(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // #3827: no measure may aggregate `stats` straight on the flattened
+    // `honeypot.*` namespace; each one goes through its runtime field.
+    #[test]
+    fn measures_aggregate_runtime_fields_never_the_flattened_leaf() {
+        for sensor in ["cowrie", "hellpot", "endlessh", "http-honeypot", "tanner", "api-honeypot", "mailoney"] {
+            let (runtime, aggs) = measure_aggregations(sensor);
+            assert_eq!(runtime.len(), measures_for(sensor).len(), "{sensor}");
+            assert_eq!(aggs.len(), measures_for(sensor).len(), "{sensor}");
+            for ((name, agg), (field, _, _)) in aggs.iter().zip(measures_for(sensor)) {
+                assert_eq!(agg["filter"]["exists"]["field"], field, "{sensor}");
+                assert_eq!(agg["aggs"]["stats"]["stats"]["field"], name.as_str(), "{sensor}");
+                assert!(!name.starts_with("honeypot."), "{sensor}");
+                let mapping = &runtime[name];
+                assert_eq!(mapping["type"], "double", "{sensor}");
+                assert_eq!(mapping["script"]["params"]["field"], field, "{sensor}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_sensor_without_measures_adds_no_runtime_mappings() {
+        let (runtime, aggs) = measure_aggregations("dionaea");
+        assert!(runtime.is_empty());
+        assert!(aggs.is_empty());
+    }
 
     // #3213: `http_requests` is what the curated sensor view renders as the
     // HTTP request table, and it used to carry a `password` column holding

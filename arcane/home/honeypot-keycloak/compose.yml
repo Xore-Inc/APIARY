@@ -43,23 +43,22 @@ services:
         reservations: {memory: 512M}
 
   keycloak:
-    # Digest-pinned, but still floating on :latest: this is the identity
-    # provider for the whole stack, and staying current on it matters more
-    # here than a reproducible image id. It was pinned to 26.7.1@sha256:f1f1f01e...
-    # when CVE-2026-18963 landed -- an unauthenticated account takeover
-    # through the reset-credentials flow, CVSS 9.1, fixed in 26.7.2 -- and a
-    # tag-only pin is exactly what keeps a known-vulnerable build running
-    # until someone edits a file.
+    # Version + digest pin (#3824). This used to float on :latest (with a
+    # digest underneath it, #3501) on the theory that the IdP should always be
+    # current -- it was on 26.7.1 when CVE-2026-18963 landed, an
+    # unauthenticated account takeover through the reset-credentials flow,
+    # CVSS 9.1, fixed in 26.7.2. In practice the digest already froze it, and a
+    # ":latest@sha256" reference only hid which release was running. Naming the
+    # release keeps the pin honest: a Keycloak security release is applied by
+    # moving this line (tag and digest together, see docs/KEYCLOAK-OPERATIONS.md
+    # section 7), and the ACCEPTED_CVES entry for this exact digest in
+    # scripts/list-docker-base-images.py retires itself when it moves.
     #
-    # The digest records which :latest the ACCEPTED_CVES exemption was
-    # measured against (#3501); it retires itself the moment keycloak ships a
-    # rebuild, and the gate applies to the new one.
-    #
-    # pull_policy matters as much as the pin: without it a redeploy reuses
-    # whatever ":latest" resolved to the first time it was pulled, which is a
-    # digest pin again with none of the honesty of one.
-    image: quay.io/keycloak/keycloak:latest@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
-    pull_policy: always
+    # 26.8.2 = 26.8 = latest on quay.io as of 2026-11-05.
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b
+    # With a digest pin there is nothing newer to fetch; `missing` keeps a
+    # redeploy working while quay.io is unreachable.
+    pull_policy: missing
     container_name: hp-keycloak
     restart: unless-stopped
     depends_on:
@@ -73,6 +72,15 @@ services:
         if [[ -f /run/keycloak-secrets/bootstrap-admin-password ]]; then
           export KC_BOOTSTRAP_ADMIN_USERNAME="$${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-bootstrap-admin}"
           export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(< /run/keycloak-secrets/bootstrap-admin-password)"
+        fi
+        # #3824: a temporary bootstrap admin *service-account client* instead of
+        # a bootstrap user -- no human account and no password login exists
+        # until an operator creates one. Read only while the file exists; the
+        # rebuild procedure replaces it with a permanent admin client and then
+        # deletes both the file and the temporary client.
+        if [[ -f /run/keycloak-secrets/bootstrap-admin-client-secret ]]; then
+          export KC_BOOTSTRAP_ADMIN_CLIENT_ID="$${KEYCLOAK_BOOTSTRAP_ADMIN_CLIENT_ID:-bootstrap-admin-client}"
+          export KC_BOOTSTRAP_ADMIN_CLIENT_SECRET="$$(< /run/keycloak-secrets/bootstrap-admin-client-secret)"
         fi
         case "$${KEYCLOAK_PUBLIC_DOMAIN}" in
           ""|*[!A-Za-z0-9.-]*) echo "invalid KEYCLOAK_PUBLIC_DOMAIN" >&2; exit 1 ;;
@@ -99,6 +107,7 @@ services:
       KC_HTTP_MANAGEMENT_SCHEME: http
       KC_CACHE: local
       KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-bootstrap-admin}
+      KEYCLOAK_BOOTSTRAP_ADMIN_CLIENT_ID: ${KEYCLOAK_BOOTSTRAP_ADMIN_CLIENT_ID:-bootstrap-admin-client}
     ports:
       - ${HP_BIND:-10.8.0.2}:${KEYCLOAK_PORT:-18080}:8080
     volumes:

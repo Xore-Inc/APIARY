@@ -39,21 +39,30 @@ deployed**, which also leaves every other Ollama consumer (llm-worker,
 ml-worker, rex86-eval) without a model backend. Galah will not start either. So on a rebuild:
 
 1. The homeserver must be a Swarm manager (`docker info --format
-   '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}'` → `active true`).
-   Its normal availability is `pause`.
+   '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}'` → `active true`)
+   with availability **`active`** (`docker node inspect self --format
+   '{{.Spec.Availability}}'`).
 2. `galah-broker` must be deployed (through its Arcane GitOps sync), so that
    `docker network ls --filter name=galah-broker_` shows both overlays as
    `overlay`/`swarm`.
 3. Only then start the Ghidra/Ollama stack, then `honeypot-galah`.
 
-If Compose still reports the network as not found on the homeserver while
-the overlays exist on the managers, the overlay has not been materialized
-locally. Briefly set the homeserver to `active`, run a throwaway task on
-it attached to the overlay, start the Compose project, then remove the
-task and set the homeserver back to `pause`. This is the workaround recorded
-under "Live state" below. A durable fix is still open (remaining work, item 4).
-[`docs/STACK-REBUILD.md`](../../../docs/STACK-REBUILD.md) carries the same
-ordering for a full reset.
+**Why `active` (#3722).** A standalone (Compose) container that joins an
+attachable overlay asks the swarm for a network-attachment task on its node,
+and the scheduler only places tasks on `active` nodes. On a `pause` node the
+attach fails with `attaching to network failed ... context deadline
+exceeded`, **even when the overlay is already materialized there** (proved
+2026-10-31: the probe failed while `hp-galah` sat on `galah-broker_front`, and
+succeeded after a 1 s `active` window with no throwaway task). The old
+workaround (active, throwaway task, start, remove, pause) only worked because
+of its `active` window. Since #3722 the homeserver stays `active`, and every
+stack's placement decides explicitly whether it may run there
+(`scripts/check-swarm-stacks.py`), so `pause` is no longer needed to keep
+generic services off the sensor host.
+
+If an attach still fails, check the availability first; `pause` and `drain`
+both reject it. [`docs/STACK-REBUILD.md`](../../../docs/STACK-REBUILD.md)
+carries the same ordering for a full reset.
 
 ## Live state (2026-10-12)
 
@@ -70,8 +79,8 @@ pinned image through Arcane. Do not make the package public to bypass auth.
 `ops/swarm/stackctl.py ensure galah-broker --branch feat/3591-swarm-canary`
 created the Arcane GitOps sync and converged at 2/2 on precision. The two
 encrypted, attachable overlays have MTU 1310. A temporary Swarm task on the
-normally Paused homeserver was needed to materialize each overlay before
-attaching standalone Compose containers. The task was removed and homeserver
+then Paused homeserver was used to attach standalone Compose containers (the
+`active` window is what mattered, see #3722 above). The task was removed and homeserver
 returned to Pause.
 
 Galah is now attached to `galah-broker_front`, and Ollama is attached to
@@ -106,13 +115,11 @@ update and automatic rollback remain untested.
    broker update and verify automatic rollback without touching Ollama.
 2. Replace the interim Arcane GHCR credential with a classic PAT limited to
    `read:packages`, then prove pulls on both managers.
-3. Merge this PR, point the canary and broker Arcane syncs at `main`, deploy,
-   and verify both stacks at 2/2. Keep homeserver at `Pause` in normal service.
-4. Confirm the updated Galah and Ollama Compose definitions are the source of
-   truth, including the live Ollama image and runtime settings. Test that a
-   later Galah recreation can reattach to the front overlay without a
-   temporary task on homeserver; otherwise implement a durable
-   network-materialization mechanism before treating the migration as stable.
+3. Done 2026-10-24 (#3639): canary and broker syncs on `main`, both 2/2.
+4. Done (#3722): the homeserver is `active` and placement keeps generic
+   services off it, so Galah and Ollama recreate without a temporary task.
+   The broker carries `apiary.homeserver: allow`, so after a resume its two
+   replicas spread over the homeserver and precision.
 
 The old **Compose service** stays stopped. The old `honeypot-galah` **project**
 cannot stay stopped: it also owns the live Galah sensor. This is a literal

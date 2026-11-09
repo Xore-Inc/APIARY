@@ -276,6 +276,26 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "cannot move without a migration this repo does not own. Names no "
         "FROM in the tree, so main() emits it bare and the digest is None."
     ),
+    "quay.io/keycloak/keycloak:26.8.2": (
+        "sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b",
+        "Measured 2026-11-09 (#3824): 1 fixable HIGH, guava 33.6.0 "
+        "(CVE-2026-102554, fixed in 33.7.2) bundled in the Keycloak server. "
+        "26.8.2 already carries the JDK fix the 26.8.1 entry was waiting for "
+        "(CVE-2026-91415), so the guava finding is the only residue. This "
+        "digest is 26.8.2 = 26.8 = latest, the newest Keycloak release "
+        "(quay.io tag list, 2026-11-05), so only an upstream rebuild moves "
+        "guava. The realm-import, PKCE/TOTP login, OIDC chaos and gateway "
+        "tests pin the same digest. Re-check at the next Keycloak release."
+    ),
+    "technitium/dns-server:15.6.2": (
+        "sha256:eb48ac5c135f4ab936b536f74f853d53e15ab39ef37fdbc9598a089b90d9f245",
+        "Measured 2026-10-31: 1 fixable HIGH, the Ubuntu base layer's "
+        "libbrotli1 1.1.0-2build2 (CVE-2026-111497, fixed in 1.1.0-2ubuntu0.1). "
+        "15.6.2 = latest is the newest Technitium release (Docker Hub, "
+        "2026-10-17), so only an upstream rebuild picks up the Ubuntu fix. "
+        "The resolver does not decode brotli from untrusted peers. Re-check at "
+        "the next Technitium release."
+    ),
     "postgres:18.6-bookworm": (
         "sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc",
         "#3720: digest refresh of the same 18.6-bookworm tag, now also the "

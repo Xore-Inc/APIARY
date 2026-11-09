@@ -867,7 +867,7 @@
         }
       ],
       "apiary-dashboard-rewrite": [
-        {"name": "access"},
+        {"name": "access", "description": "Sign in to the standalone dashboard"},
         {
           "name": "admin",
           "description": "#3578: same shape as apiary-dashboard's admin (composite of 'access'), for the rewrite dashboard, which reads resource_access.apiary-dashboard-rewrite.roles and treats anyone without 'admin' as a viewer",
@@ -985,14 +985,17 @@
       "baseUrl": "https://honeypot.example.invalid/",
       "redirectUris": [
         "https://honeypot.example.invalid/auth/callback",
-        "https://beta.honeypot.example.invalid/auth/callback"
+        "https://beta.example.invalid/auth/callback"
       ],
       "webOrigins": [
-        "https://honeypot.example.invalid"
+        "https://honeypot.example.invalid",
+        "https://beta.example.invalid"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://honeypot.example.invalid/*##https://beta.honeypot.example.invalid/*"
+        "post.logout.redirect.uris": "https://beta.example.invalid/auth/login?signed_out=1##https://honeypot.example.invalid/auth/login?signed_out=1",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
       },
       "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
       "optionalClientScopes": [],
@@ -1113,6 +1116,7 @@
     {
       "clientId": "unsloth",
       "name": "Unsloth Studio oauth2-proxy",
+      "description": "Unsloth Studio (LAN 8899 via VPS gateway)",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -1123,7 +1127,7 @@
       "serviceAccountsEnabled": false,
       "frontchannelLogout": true,
       "rootUrl": "https://unsloth.example.invalid",
-      "baseUrl": "https://unsloth.example.invalid/",
+      "baseUrl": "https://unsloth.example.invalid",
       "redirectUris": ["https://unsloth.example.invalid/oauth2/callback"],
       "webOrigins": ["https://unsloth.example.invalid"],
       "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://unsloth.example.invalid/*"},
@@ -1165,9 +1169,10 @@
       "frontchannelLogout": false,
       "rootUrl": "https://arcane.example.invalid",
       "baseUrl": "https://arcane.example.invalid/",
+      "adminUrl": "https://arcane.example.invalid",
       "redirectUris": ["https://arcane.example.invalid/auth/oidc/callback"],
       "webOrigins": ["https://arcane.example.invalid"],
-      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://arcane.example.invalid/*"},
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://arcane.example.invalid/*", "backchannel.logout.session.required": "true", "backchannel.logout.revoke.offline.tokens": "false"},
       "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
       "optionalClientScopes": []
     },

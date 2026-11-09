@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep swarm host-mode sensor ports off the homeserver LAN (#3593)
+Requires=docker.service
+PartOf=docker.service
+After=docker.service firewalld.service wg-quick@wg0.service home-wg-forward.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/apiary-home-swarm-host-guard apply /etc/apiary/homeserver-swarm-host-ports.txt
+ExecStop=/usr/local/libexec/apiary-home-swarm-host-guard rollback
+
+[Install]
+WantedBy=docker.service

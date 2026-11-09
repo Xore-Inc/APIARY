@@ -124,7 +124,7 @@ services:
 
   # ===== TRAEFIK =====
   traefik:
-    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
+    image: traefik:v3.7.17@sha256:30ff62491aacdb862ceb8c9edcf2627da638d7deafdd4b6dab32fe34f8aa3e90
     container_name: traefik
     restart: unless-stopped
     ports:
@@ -780,6 +780,9 @@ services:
     networks: [proxy]
 
   socat-hp-kibana:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-kibana. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-kibana
     restart: unless-stopped
@@ -800,11 +803,18 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-kibana:5601
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/kibana:/run/oidc-secrets:ro
-    networks: [oidc-kibana]
+    # #3595: the socat behind this gateway is the swarm stack edge-kibana,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-kibana, edge-kibana]
     labels:
       - autoheal=true
 
   socat-hp-tanner:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-tanner. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-tanner
     restart: unless-stopped
@@ -825,11 +835,18 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-tanner:8091
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/tanner:/run/oidc-secrets:ro
-    networks: [oidc-tanner]
+    # #3595: the socat behind this gateway is the swarm stack edge-tanner,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-tanner, edge-tanner]
     labels:
       - autoheal=true
 
   socat-hp-evebox:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-evebox. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-evebox
     restart: unless-stopped
@@ -850,11 +867,18 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-evebox:5636
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/evebox:/run/oidc-secrets:ro
-    networks: [oidc-evebox]
+    # #3595: the socat behind this gateway is the swarm stack edge-evebox,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-evebox, edge-evebox]
     labels:
       - autoheal=true
 
   socat-hp-arkime:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-arkime. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-arkime
     restart: unless-stopped
@@ -875,7 +899,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-arkime:8005
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/arkime:/run/oidc-secrets:ro
-    networks: [oidc-arkime]
+    # #3595: the socat behind this gateway is the swarm stack edge-arkime,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-arkime, edge-arkime]
     labels:
       - autoheal=true
 
@@ -883,6 +911,9 @@ services:
   # not part of this stack's home-side compose file, but reachable the same
   # way once its own HP_BIND is set: see that file's revdeck service comment.
   socat-hp-revdeck:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-revdeck. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-revdeck
     restart: unless-stopped
@@ -903,7 +934,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-revdeck:5000
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/revdeck:/run/oidc-secrets:ro
-    networks: [oidc-revdeck]
+    # #3595: the socat behind this gateway is the swarm stack edge-revdeck,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-revdeck, edge-revdeck]
     labels:
       - autoheal=true
 
@@ -914,6 +949,9 @@ services:
   # unsloth:access. The upstream Studio is not deployed at the time of
   # writing, so every request after login fails upstream until it is.
   socat-hp-unsloth:
+    # #3595: replaced by the swarm stack swarm/stacks/edge-unsloth. Kept for
+    # rollback behind the legacy profile: a plain `up` no longer starts it.
+    profiles: [legacy]
     image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
     container_name: socat-hp-unsloth
     restart: unless-stopped
@@ -934,7 +972,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://socat-hp-unsloth:8899
     volumes:
       - ${OIDC_SECRETS_DIR:?set OIDC_SECRETS_DIR}/unsloth:/run/oidc-secrets:ro
-    networks: [oidc-unsloth]
+    # #3595: the socat behind this gateway is the swarm stack edge-unsloth,
+    # reached on its attachable overlay under the same name. Deploy that
+    # stack before this service starts (Compose refuses a missing external
+    # network).
+    networks: [oidc-unsloth, edge-unsloth]
     labels:
       - autoheal=true
 
@@ -1293,6 +1335,24 @@ networks:
     driver: bridge
   oidc-unsloth:
     driver: bridge
+  edge-unsloth:
+    external: true
+    name: edge-unsloth_gw
+  edge-revdeck:
+    external: true
+    name: edge-revdeck_gw
+  edge-evebox:
+    external: true
+    name: edge-evebox_gw
+  edge-arkime:
+    external: true
+    name: edge-arkime_gw
+  edge-tanner:
+    external: true
+    name: edge-tanner_gw
+  edge-kibana:
+    external: true
+    name: edge-kibana_gw
   oidc-traefik:
     driver: bridge
   oidc-dashboard:

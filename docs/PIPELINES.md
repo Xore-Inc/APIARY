@@ -210,7 +210,7 @@ flowchart TB
     clu[("attacker-clusters-v1")]
     aic[("agent-intrusion-campaigns")]
     st[("dashboard-alert-state-v1")]
-    rll[("overview-rollup-v1<br/>geo-rollup-v1<br/>attack-rollup-v1")]
+    rll[("overview-rollup-v1<br/>geo-rollup-v1<br/>attack-rollup-v1<br/>page-rollup-v1")]
   end
 
   raw --> ident --> atk
@@ -226,11 +226,11 @@ flowchart TB
 | Loop | Reads | Writes | Cadence | Notes |
 |---|---|---|---|---|
 | attacker-identity | `honeypot-v2-*`, `*-analysis-v1` verdicts | `attackers-v1` | 15m | union of observed behavior + analysis verdicts per source IP; standalone Go worker stack |
-| correlator | raw events | `campaigns-v1`, `attacker-clusters-v1` | every cycle | pure aggregations, recomputed from scratch; groups ≥2 IPs sharing fingerprint/hash/ASN/provider-class |
+| correlator | raw events | `campaigns-v1`, `attacker-clusters-v1` | every cycle | pure aggregations, recomputed from scratch; groups ≥2 IPs sharing fingerprint/hash/ASN/provider-class; campaigns (/24, /64) are aggregated in batches of at most 583 groups so no search can pass `search.max_buckets` (#3810) |
 | agent-intrusion | raw events | `agent-intrusion-campaigns` | 300s | deterministic criticality rules escalate; LLM never gates escalation; deterministic sha256 campaign_id ⇒ upsert not duplicate |
 | zeek-proxy-attribution | zeek flows + portbridge log | flow docs | 120s | attributes relayed flows to attackers; ordering rule above applies here too |
 | threat-intel | raw event indices | `source.as.type` in place | 15m run, 5m CIDR reload, 24h lookback | classifies source IPs against `threat-cidrs.csv`; intel labels win over the ingest pipeline's provider class, reproducing the retired Go dashboard's `firstNonEmpty(e.Intel, e.Provider)` precedence at the data layer |
-| dashboard-rollups (#2046) | raw event indices (default pattern) | `overview-rollup-v1`, `geo-rollup-v1`, `attack-rollup-v1` | `ROLLUP_RUN_INTERVAL_SECS`, default 300s | pure-ES derived overviews the dashboard's overview/map/kill-chain reads slice cheaply instead of re-aggregating raw events per request |
+| dashboard-rollups (#2046) | raw event indices (default pattern) | `overview-rollup-v1`, `geo-rollup-v1`, `attack-rollup-v1`, `page-rollup-v1` | `ROLLUP_RUN_INTERVAL_SECS`, default 300s | pure-ES derived overviews the dashboard's overview/map/kill-chain reads slice cheaply instead of re-aggregating raw events per request; `page-rollup-v1` (#3756) holds the whole aggregation answer of `/api/v1/sources` and `/api/v1/charts/ja4l-fingerprints`, served while younger than 15 min, live query otherwise |
 | ml-worker / llm-worker | payloads + events | `ml-anomalies` + `dashboard-ml-anomaly-ack-v1` | continuous | scoring semantics tracked in #1969/#1974 |
 | payload-inventory | disk stores | `dashboard-payload-inventory-v1`, `dashboard-payload-bytes-v1` | periodic scan | HEAD-exists fast path (#1221) |
 | es-results-importer | root-owned result spools | `*-analysis-v1` | continuous | read-only mirror, shard-partitionable |
@@ -306,6 +306,7 @@ index has exactly one writer):
 | `reporter-metrics-v1` | reporter | settings stats pane |
 | `dashboard-alert-state-v1` | alert-notifier loop | alerts page |
 | `overview-rollup-v1`, `geo-rollup-v1`, `attack-rollup-v1` | dashboard-rollups loop (#2046) | overview/map/kill-chain dashboard reads |
+| `page-rollup-v1` | dashboard-rollups loop (#3756) | `/api/v1/sources` (and the `ips.csv` export), `/api/v1/charts/ja4l-fingerprints` |
 | `ml-anomalies`, `dashboard-ml-anomaly-ack-v1` | ml/llm workers | ml-anomalies page, composite score |
 | `dashboard-users-v1`, `dashboard-workbench-runs-v1`, report/problem-report indices | backend-service itself | their pages |
 

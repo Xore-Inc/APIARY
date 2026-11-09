@@ -132,7 +132,7 @@ class RouterHarness:
         self.script.write_text("#!/usr/bin/env bash\n" + extract_run_block())
         self.script.chmod(0o755)
 
-    def run(self, event_name="pull_request", homeserver_prs="true",
+    def run(self, event_name="push", homeserver_prs="true",
             force_github_hosted="", same_repo=True):
         event = self.tmp / "event.json"
         head_repo = "Xore/APIARY" if same_repo else "someone/APIARY"
@@ -267,9 +267,20 @@ class RouterCanaryReuseTest(unittest.TestCase):
     def test_untrusted_pr_never_probes_or_routes_home(self):
         """Fork PRs must not reach the box, and must not even dispatch."""
         res = self._run([[run_object(5, "completed", "success", 30)]],
-                        same_repo=False)
+                        event_name="pull_request", same_repo=False)
         self.assertIn("homeserver=false", res["output"])
         self.assertEqual(res["dispatches"], 0)
+
+    def test_same_repo_pr_never_routes_home_even_when_opted_in(self):
+        """Unreviewed PR content must never run on the persistent runner:
+        a same-repository PR stays GitHub-hosted and dispatches nothing,
+        even with CI_HOMESERVER_PRS=true and a fresh successful canary."""
+        res = self._run([[run_object(8, "completed", "success", 30)]],
+                        event_name="pull_request", homeserver_prs="true",
+                        same_repo=True)
+        self.assertIn("homeserver=false", res["output"])
+        self.assertEqual(res["dispatches"], 0)
+        self.assertNotIn("reusing successful canary", res["stdout"])
 
     def test_force_github_hosted_overrides_a_reusable_success(self):
         res = self._run([[run_object(6, "completed", "success", 30)]],

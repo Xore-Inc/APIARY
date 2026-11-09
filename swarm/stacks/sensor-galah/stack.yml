@@ -1,0 +1,107 @@
+# #3593 (phase 6): the LLM-backed HTTP decoy hp-galah as a sensor stack,
+# pinned to the homeserver. Same container as
+# arcane/home/honeypot-galah/compose.yml, which stays defined as the rollback
+# (see README.md next to this file).
+#
+# Galah calls the LLM broker (swarm stack galah-broker, alias
+# galah-llm-broker on the attachable overlay galah-broker_front), exactly as
+# the Compose container does. The broker is held at 0/0 while the #3706
+# benchmark runs, so this stack is cut over only in the post-benchmark
+# window, when the LLM path can be proven end to end. Deploying it starts no
+# Ollama consumer: galah talks only to the broker.
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to 8888/8890
+#   unless they come from the VPS hub on wg0 (#3769).
+# - no-new-privileges: set per service below (Arcane's stack deploy carries
+#   it into the service spec as Privileges.NoNewPrivileges, as on
+#   dashboard-sessions; checked on the task, NoNewPrivs 1). The image keeps
+#   Debian's stock setuid/setgid tools (su, passwd, mount, ...), which the
+#   flag makes inert; the service never execs them (#3593 audit, 2026-11-08).
+#   Non-root (65534), cap_drop ALL, no file capability.
+# - Its own non-internal overlay (decoy) carries the host-mode ports;
+#   galah-broker_front is internal, as it is for the Compose container.
+# - autoheal is replaced by swarm's own unhealthy-task replacement.
+#
+# Reached from the VPS on public 8889 (portbridge -> 8888, no PROXY header;
+# the ip_enrichment tunnel join attributes by via_port) and through Traefik
+# (socat-hp-galah -> 8890).
+services:
+  galah:
+    image: ghcr.io/xore-inc/honeypot-galah@sha256:e27febd1918ee41e0808a1c46cba0d15dc4ff2fe0f1f4229eeb4c3a874e16b38
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: host
+      - target: 8890
+        published: 8890
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/galah
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      TZ: Europe/Berlin
+      LLM_PROVIDER: ollama
+      LLM_MODEL: qwen2.5:7b-instruct-q4_K_M
+      LLM_SERVER_URL: http://galah-llm-broker:11434
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [decoy, broker_front]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8888"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 8888/8890.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "Galah decoy replies need the broker (galah-broker stack) and Ollama together"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.27.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
+  broker_front:
+    name: galah-broker_front
+    external: true

@@ -1,0 +1,89 @@
+# #3593 (phase 6): the RDP decoy hp-rdp-honeypot as a sensor stack, pinned
+# to the homeserver. Same container as
+# arcane/home/honeypot-rdp-honeypot/compose.yml, which stays defined as the
+# rollback (see README.md next to this file).
+#
+# Differences a stack forces, and what covers them:
+# - The port publishes in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to 3389
+#   unless they come from the VPS hub on wg0 (or a local container to
+#   10.8.0.2). RDP to the libvirt guests (win11-cape, win11-ghosts) is never
+#   DNATed and keeps working (#3769).
+# - `security_opt` is not supported. Gate (#3593): non-root (65534), cap_drop
+#   ALL, read_only, FROM scratch with no setuid/setgid file or file
+#   capability (checked on this digest 2026-11-07).
+# - The healthcheck is restated from the Compose service (30 s; the image's
+#   own default is 300 s) because the lint requires it in the stack.
+#
+# Reached from the VPS on public 3389 (portbridge, PROXY header).
+services:
+  rdp:
+    image: ghcr.io/xore-inc/honeypot-rdp-honeypot@sha256:c75240515dfd41e3747ba80b333eae5c2c026e20c544dd134480c692b02d9a17
+    ports:
+      - target: 3389
+        published: 3389
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/rdp-honeypot
+        target: /var/log/honeypot
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+    environment:
+      LISTEN_ADDR: ":3389"
+      LOG_FILE: /var/log/honeypot/rdp-honeypot.json
+      PROXY_PROTOCOL: "1"
+      MAX_CLIENTS: "4096"
+      TZ: Europe/Berlin
+    read_only: true
+    cap_drop: [ALL]
+    networks: [decoy]
+    healthcheck:
+      test: ["CMD", "/rdp-honeypot", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode port: two tasks must never contend for 3389.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: safe
+        apiary.pause.reason: "standalone RDP decoy, no dependents (scripts/honeypot-pause.sh)"
+networks:
+  decoy:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.23.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"

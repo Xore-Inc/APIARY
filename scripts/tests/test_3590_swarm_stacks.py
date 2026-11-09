@@ -46,6 +46,8 @@ GOOD_SERVICE = """
     healthcheck:
       test: ["CMD", "true"]
     deploy:
+      placement:
+        constraints: [node.labels.role == manager, node.labels.sensor == false]
       restart_policy: {condition: any}
       update_config: {failure_action: rollback, order: start-first, monitor: 30s}
       rollback_config: {failure_action: pause, order: start-first}
@@ -124,6 +126,76 @@ class LintTest(unittest.TestCase):
         self.assertFlags(body.replace("deploy:\n", "deploy:\n      mode: global\n"), "global service")
         self.assertFlags(body.replace("apiary.pause.reason: test", "apiary.pause.reason: test\n        apiary.probe: udp:53"),
                          "apiary.probe")
+
+    def test_homeserver_placement_is_explicit(self):
+        # #3722: the homeserver is an Active node; placement, not availability,
+        # keeps generic services off it.
+        body = good_stack()
+        no_sensor = body.replace("[node.labels.role == manager, node.labels.sensor == false]",
+                                 "[node.labels.role == manager]")
+        self.assertFlags(no_sensor, "placement must decide the homeserver")
+        for pin in ("node.labels.sensor == true", "node.labels.gpu==true", "node.hostname == supermicro"):
+            self.assertEqual(self.errors(no_sensor.replace("[node.labels.role == manager]",
+                                                           f"[node.labels.role == manager, {pin}]")), [], pin)
+        allowed = no_sensor.replace("apiary.pause.reason: test",
+                                    "apiary.pause.reason: test\n        apiary.homeserver: allow")
+        self.assertFlags(allowed, "apiary.homeserver.reason")
+        self.assertEqual(self.errors(allowed + "        apiary.homeserver.reason: cross-host canary\n"), [])
+        self.assertFlags(no_sensor.replace("apiary.pause.reason: test",
+                                           "apiary.pause.reason: test\n        apiary.homeserver: 'yes'"),
+                         "must be `allow`")
+
+    def test_sensor_ports_host_mode_and_guarded(self):
+        # #3593: a sensor publishes in host mode, and the LAN guard lists the port.
+        body = good_stack().replace("node.labels.sensor == false", "node.labels.sensor == true")
+        ingress = body + "    ports: ['25:25']\n"
+        self.assertFlags(ingress, "mode: host")
+        host = body + "    ports:\n      - {target: 25, published: 25, mode: host, protocol: tcp}\n"
+        self.assertFlags(host, "homeserver-swarm-host-ports.txt")
+        root, path = self.write(host)
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("# c\ntcp 25\n")
+        self.assertEqual(lint.check_file(path, root), [])
+        guard.write_text("udp 25\n")
+        self.assertTrue(any("not in" in e for e in lint.check_file(path, root)))
+
+    def test_gpu_reservation_rules(self):
+        # #3594: one GPU as a swarm generic resource.
+        body = good_stack().replace(
+            "[node.labels.role == manager, node.labels.sensor == false]",
+            "[node.labels.role == manager, node.labels.gpu == true]",
+        ).replace("restart_policy: {condition: any}",
+                  "restart_policy: {condition: any}\n      resources:\n        reservations:\n"
+                  "          generic_resources:\n            - discrete_resource_spec: {kind: NVIDIA-GPU, value: 1}")
+        self.assertFlags(body, "stop-first update_config")
+        stop = body.replace("order: start-first", "order: stop-first")
+        self.assertEqual(self.errors(stop), [])
+        self.assertFlags(stop.replace("node.labels.gpu == true", "node.labels.sensor == true"),
+                         "needs the constraint node.labels.gpu == true")
+        devices = good_stack().replace(
+            "restart_policy: {condition: any}",
+            "restart_policy: {condition: any}\n      resources:\n        reservations:\n"
+            "          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]")
+        self.assertFlags(devices, "ignored by swarm")
+
+    def test_overlay_subnet_pinned_in_pool(self):
+        # #3763: overlays pin a /24 inside 10.200.0.0/16.
+        net = "networks:\n  n:\n    driver: overlay\n"
+        self.assertFlags(good_stack(top=net), "pin exactly one")
+        for bad in ("10.0.1.0/24", "10.200.0.0/24", "10.200.8.0/23"):
+            self.assertFlags(good_stack(top=net + f"    ipam: {{config: [{{subnet: {bad}}}]}}\n"), "must be a /24")
+        ok = net + "    ipam: {config: [{subnet: 10.200.9.0/24}]}\n"
+        self.assertEqual(self.errors(good_stack(top=ok)), [])
+        self.assertEqual(self.errors(good_stack(top="networks:\n  x: {external: true, name: y}\n")), [])
+
+    def test_overlay_subnets_unique_across_stacks(self):
+        ok = "networks:\n  n:\n    driver: overlay\n    ipam: {config: [{subnet: 10.200.9.0/24}]}\n"
+        root, _ = self.write(good_stack(top=ok), name="one")
+        d = root / "swarm/stacks/two"
+        d.mkdir(parents=True)
+        (d / "stack.yml").write_text(good_stack(top=ok))
+        self.assertEqual(lint.main(["--root", str(root)]), 1)
 
     def test_bad_stack_name(self):
         self.assertFlags(good_stack(), "not a valid stack name", name="Bad.Name")

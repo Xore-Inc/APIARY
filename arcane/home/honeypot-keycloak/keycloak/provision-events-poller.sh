@@ -13,53 +13,47 @@
 # second time is a no-op in Keycloak, and the secret file is simply
 # overwritten with the current value).
 #
-# Run on the homeserver (needs docker exec access to hp-keycloak).
+# Run on the homeserver as root. #3824: authenticates with the permanent admin
+# client (secrets/admin-client-secret) through lib-admin.sh.
 set -euo pipefail
+# shellcheck source-path=SCRIPTDIR source=lib-admin.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib-admin.sh"
 
 REALM="${KEYCLOAK_REALM:-apiary}"
-KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
-KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-provision-events-poller.config}"
+ADMIN_ID="${KEYCLOAK_ADMIN_CLIENT_ID:-apiary-ops-admin}"
 SECRETS_DIR="${EVENTS_POLLER_SECRETS_DIR:-/var/dockge/stacks/auth-events-worker-secrets}"
-KC="/opt/keycloak/bin/kcadm.sh"
 
-: "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
-: "${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}"
+kc_login "${ADMIN_ID}" "${KEYCLOAK_SECRETS_DIR}/admin-client-secret"
 
-docker exec "$KC_CONTAINER" "$KC" config credentials \
-  --config "$KC_CONFIG" --server http://127.0.0.1:8080 --realm master \
-  --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
-
-# #2194: from this point the config file holds the live admin access token
-# -- remove it on every exit path, not just success (a mid-run failure under
-# set -euo pipefail used to leave it in hp-keycloak:/tmp until restart).
-cleanup() { docker exec "$KC_CONTAINER" rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
-
-client_uuid="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-  -q "clientId=auth-events-poller" --fields id --format csv --noquotes --config "$KC_CONFIG")"
+client_uuid="$(kc_client_uuid "${REALM}" auth-events-poller)"
 [[ -n "$client_uuid" ]] || { echo "auth-events-poller client not found in realm $REALM -- import the realm first" >&2; exit 1; }
 
-sa_user_id="$(docker exec "$KC_CONTAINER" "$KC" get "clients/${client_uuid}/service-account-user" \
-  -r "$REALM" --fields id --format csv --noquotes --config "$KC_CONFIG")"
+sa_user_id="$(kc_api GET "/${REALM}/clients/${client_uuid}/service-account-user" | kc_json 'd["id"]')"
 [[ -n "$sa_user_id" ]] || { echo "auth-events-poller has no service-account user -- is serviceAccountsEnabled true?" >&2; exit 1; }
 
-docker exec "$KC_CONTAINER" "$KC" add-roles -r "$REALM" --config "$KC_CONFIG" \
-  --uusername "service-account-auth-events-poller" --cclientid realm-management --rolename view-events
+rm_uuid="$(kc_client_uuid "${REALM}" realm-management)"
+kc_api GET "/${REALM}/clients/${rm_uuid}/roles/view-events" \
+  | python3 -c 'import json,sys; json.dump([json.load(sys.stdin)], sys.stdout)' > "${kc_tmp}/role.json"
+kc_api POST "/${REALM}/users/${sa_user_id}/role-mappings/clients/${rm_uuid}" "${kc_tmp}/role.json" >/dev/null
 echo "granted realm-management:view-events to auth-events-poller's service account"
 
-secret="$(docker exec "$KC_CONTAINER" "$KC" get \
-  "clients/${client_uuid}/client-secret" -r "$REALM" --config "$KC_CONFIG" \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')"
+# #3824: Keycloak 26.8.2 accepts an admin REST call (GET .../events is one) only
+# from a token carrying the admin-API audience, which its built-in
+# `kc-admin-api` client scope adds. This client deliberately has no default
+# scopes, so without it the worker gets a token and then 401 on every cycle
+# (seen live right after the 26.8.2 rebuild). Older releases have no such scope.
+scope_id="$(kc_api GET "/${REALM}/client-scopes" | kc_json '([s["id"] for s in d if s["name"]=="kc-admin-api"] or [""])[0]')"
+if [[ -n "${scope_id}" ]]; then
+  kc_api PUT "/${REALM}/clients/${client_uuid}/default-client-scopes/${scope_id}" >/dev/null
+  echo "added default client scope kc-admin-api to auth-events-poller"
+fi
 
-install -d -m 750 "$SECRETS_DIR"
-umask 077
-printf '%s' "$secret" > "$SECRETS_DIR/client-secret"
 # GID 10101 matches auth-events-worker/Dockerfile's fixed, non-root
 # `authevents` user -- same reasoning as vps/secrets/oidc/*'s
 # "chown root:65532" convention (docs/KEYCLOAK-OPERATIONS.md). The
 # directory itself needs the same group, not just the file -- traversal
 # (the executable bit) is checked on the directory, and a file-only chown
 # left group-root's directory unreadable by GID 10101 (caught live).
-chown root:10101 "$SECRETS_DIR" "$SECRETS_DIR/client-secret"
-chmod 440 "$SECRETS_DIR/client-secret"
+install -d -m 750 -o root -g 10101 "$SECRETS_DIR"
+kc_write_secret "${REALM}" "${client_uuid}" "$SECRETS_DIR/client-secret" root:10101 440
 echo "wrote client secret to $SECRETS_DIR/client-secret"

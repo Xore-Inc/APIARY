@@ -39,9 +39,10 @@ on:
     inputs:
       ci_homeserver_prs:
         description: >-
-          Value of vars.CI_HOMESERVER_PRS at the caller. "true" lets
-          same-repo pull_request runs execute on the homeserver; anything
-          else keeps every pull_request on GitHub-hosted.
+          Value of vars.CI_HOMESERVER_PRS at the caller. Retained for
+          caller compatibility but ignored: every pull_request stays on
+          GitHub-hosted runners, as unreviewed PR content must never
+          execute on the persistent self-hosted runner.
         type: string
         required: false
         default: ""
@@ -108,11 +109,15 @@ jobs:
             schedule)
               trusted=true ;;
             pull_request)
-              base="$(jq -r '.pull_request.base.repo.full_name // ""' "$EVENT_PATH")"
-              head_repo="$(jq -r '.pull_request.head.repo.full_name // ""' "$EVENT_PATH")"
-              if [[ -n "$base" && "$base" == "$head_repo" && "${CI_HOMESERVER_PRS}" == "true" ]]; then
-                trusted=true
-              fi ;;
+              # A pull request is never trusted for the persistent
+              # self-hosted runner. Same-repository identity proves only
+              # that the author holds write access; it establishes no
+              # review, branch protection or commit immutability, so a PR
+              # (workflows, scripts, npm lifecycle and build code) would
+              # run unreviewed on the honeypot-ci host. CI_HOMESERVER_PRS
+              # is therefore deliberately ignored for pull_request events;
+              # they always fall back to GitHub-hosted runners.
+              trusted=false ;;
           esac
 
           # Decision-window knobs: env-overridable so local unit tests run
@@ -169,9 +174,13 @@ jobs:
             # ci-heartbeat.yml is the branch's own; fork PRs never get this
             # far, trusted=false). push/workflow_dispatch/schedule carry a
             # real branch in GITHUB_REF_NAME already.
+            # Never dispatch at a pull request's head ref: that would let
+            # the PR supply the workflow definition run on the persistent
+            # runner. Only trusted (reviewed) events reach this block, and
+            # for those GITHUB_REF_NAME is a real branch or tag.
             dispatch_ref="$GITHUB_REF_NAME"
             if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-              dispatch_ref="$(jq -r '.pull_request.head.ref // ""' "$EVENT_PATH")"
+              dispatch_ref=""
             fi
 
             # #2849 phase 0: before dispatching anything, look for a canary

@@ -48,8 +48,18 @@ type session struct {
 // handlers can be plain methods instead of six-parameter functions whose
 // callers (and tests) have to keep the argument order straight (#2489).
 type relay struct {
-	server         replySink
+	server replySink
+	// target is where a NEW session sends its first datagram. With resolve
+	// set it is refreshed from TFTP_TARGET at most every resolveEvery (#3593):
+	// dionaea runs as a swarm task in endpoint_mode dnsrr, and every task
+	// replacement gives it a new overlay address. Resolving once at start
+	// left the relay forwarding to a dead address until it was restarted.
 	target         *net.UDPAddr
+	targetMu       sync.Mutex
+	resolve        func() (*net.UDPAddr, error)
+	resolveEvery   time.Duration
+	resolvedAt     time.Time
+	resolveFailed  bool
 	maxSessions    int
 	sessionLog     *os.File
 	sessionLogPath string
@@ -63,9 +73,14 @@ type relay struct {
 
 func main() {
 	listen := getenv("LISTEN_ADDR", ":1069")
-	target, err := net.ResolveUDPAddr("udp4", getenv("TFTP_TARGET", "dionaea:69"))
+	targetSpec := getenv("TFTP_TARGET", "dionaea:69")
+	resolve := func() (*net.UDPAddr, error) { return net.ResolveUDPAddr("udp4", targetSpec) }
+	// Not fatal (#3593): the target is a swarm task that can start after this
+	// container (host boot, task replacement). Until it resolves, datagrams
+	// are dropped and the client's own TFTP retry gets the next attempt.
+	target, err := resolve()
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("tftp relay: target %s not resolvable yet, retrying per session: %v", targetSpec, err)
 	}
 	server, err := net.ListenUDP("udp4", mustAddr(listen))
 	if err != nil {
@@ -89,10 +104,14 @@ func main() {
 	// could exhaust the process's file-descriptor limit well before the
 	// existing 2-minute idle sweep in relayReplies ever ran.
 	maxSessions := getenvInt("TFTP_MAX_SESSIONS", 1024)
-	log.Printf("tftp relay %s -> %s (max %d concurrent sessions)", listen, target, maxSessions)
+	log.Printf("tftp relay %s -> %s %v (max %d concurrent sessions)", listen, targetSpec, target, maxSessions)
 	r := &relay{
 		server:         server,
 		target:         target,
+		resolve:        resolve,
+		resolveEvery:   time.Duration(getenvInt("TFTP_RESOLVE_SECONDS", 5)) * time.Second,
+		resolvedAt:     time.Now(),
+		resolveFailed:  err != nil,
 		maxSessions:    maxSessions,
 		sessionLog:     sessionLog,
 		sessionLogPath: sessionLogPath,
@@ -129,6 +148,17 @@ func (r *relay) handleDatagram(datagram []byte, client *net.UDPAddr) {
 	key := client.String()
 	r.lock.Lock()
 	current := r.sessions[key]
+	r.lock.Unlock()
+	var target *net.UDPAddr
+	if current == nil {
+		// Resolved outside the session-table lock: a slow lookup must not
+		// stall datagrams of sessions that already exist.
+		if target = r.sessionTarget(); target == nil {
+			return
+		}
+	}
+	r.lock.Lock()
+	current = r.sessions[key]
 	if current == nil {
 		if len(r.sessions) >= r.maxSessions {
 			// At the cap: drop rather than open another upstream
@@ -154,7 +184,7 @@ func (r *relay) handleDatagram(datagram []byte, client *net.UDPAddr) {
 		// lets ip-enrichment-worker join on it the same way it already
 		// joins portbridge's via_port for every other affected sensor.
 		r.logSession(upstream.LocalAddr().(*net.UDPAddr).Port, client.IP.String())
-		current = &session{conn: upstream, target: r.target}
+		current = &session{conn: upstream, target: target}
 		r.sessions[key] = current
 		go r.relayReplies(client, key, current)
 	}
@@ -164,6 +194,33 @@ func (r *relay) handleDatagram(datagram []byte, client *net.UDPAddr) {
 	current.mu.RUnlock()
 	current.conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 	_, _ = current.conn.WriteToUDP(datagram, peer)
+}
+
+// sessionTarget returns the address a new session starts at: the cached
+// resolution of TFTP_TARGET, refreshed once it is older than resolveEvery. A
+// failed lookup keeps the last good address (never worse than resolving once
+// at start); nil only while the target has never resolved.
+func (r *relay) sessionTarget() *net.UDPAddr {
+	r.targetMu.Lock()
+	defer r.targetMu.Unlock()
+	if r.resolve == nil || (r.target != nil && time.Since(r.resolvedAt) < r.resolveEvery) {
+		return r.target
+	}
+	addr, err := r.resolve()
+	r.resolvedAt = time.Now()
+	if err != nil {
+		if !r.resolveFailed {
+			log.Printf("tftp relay: target lookup failed, keeping %v: %v", r.target, err)
+		}
+		r.resolveFailed = true
+		return r.target
+	}
+	r.resolveFailed = false
+	if r.target == nil || !addr.IP.Equal(r.target.IP) || addr.Port != r.target.Port {
+		log.Printf("tftp relay: target now %s (was %v)", addr, r.target)
+		r.target = addr
+	}
+	return r.target
 }
 
 func (r *relay) relayReplies(client *net.UDPAddr, key string, current *session) {

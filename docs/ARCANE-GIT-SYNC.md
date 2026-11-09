@@ -940,3 +940,37 @@ mitigations remain: Arcane is only reachable over the WireGuard tunnel (no
 public exposure), native OIDC/MFA gates its own login, and the registered
 Git credential (currently none needed — public repo) should stay
 least-privilege and read-only if the repository is ever made private.
+
+### Edge agent token: rotate and revoke (#3583)
+
+Each remote environment (`precision`, `vps`) authenticates its edge agent
+with one environment API key, the agent's `AGENT_TOKEN`. The live agent
+composes inline it (`/home/xore/arcane-agent/compose.yml` on precision,
+`/root/vps/arcane-agent/compose.yml` on the VPS, both 0600; template
+[`ops/arcane-agent/compose.yml`](../ops/arcane-agent/compose.yml)). Behaviour
+below was read from Arcane `v2.17.0`'s source
+(`backend/internal/environment/handler.go`, `UpdateEnvironment`, and
+`children/swarm/service.go`, `EnsureApiKey`).
+
+- **Rotate:** `PUT /api/environments/<id>` with `{"regenerateApiKey": true}`,
+  as a signed-in user or with a user's `X-API-Key`. Arcane creates a new
+  environment key, links it, returns it once as `data.apiKey`, and then
+  deletes the previous key: from that moment the agent's old token no longer
+  authenticates and the environment shows `pending`. Capture the response
+  into a 0600 file (never on a command line or in a log), put the new value
+  into the host's agent compose (backup alongside, edit that one line), and
+  run `docker compose up -d` there. Only `arcane-edge-agent` restarts; check
+  the environment is `online connected=true` again.
+- **Revoke:** the same call, keeping the returned key nowhere. The old token
+  is dead at once and the agent cannot reconnect. Set `{"enabled": false}`
+  as well to keep the environment out of Arcane's connection tests.
+  Revoking the precision transport is separate: remove the
+  `arcane-fibre-tunnel` key from the homeserver's `authorized_keys`
+  ([SWARM-NETWORK.md](SWARM-NETWORK.md)).
+- **If the delete of the old key fails,** Arcane logs `Failed to delete
+  previous environment API key; the old key remains valid until deleted
+  manually`. Delete it on the API Keys page.
+- **What it does to workloads:** nothing. An agent that is offline stops and
+  recreates nothing, and reconnecting deploys nothing (outage test,
+  2026-11-01, #3583). Swarm tasks keep running under the swarm managers
+  either way.

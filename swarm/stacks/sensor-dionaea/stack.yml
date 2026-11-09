@@ -1,0 +1,286 @@
+# #3593 (phase 6): the multi-protocol decoy hp-dionaea as a sensor stack,
+# pinned to the homeserver. Same container as
+# arcane/home/honeypot-dionaea/compose.yml, which keeps the dionaea service
+# defined as the rollback (see README.md next to this file).
+#
+# hp-tftp-relay stays a Compose service (no PROXY header on TFTP, so its
+# source attribution cannot move yet). Option 1 on #3593 (Xore, 2026-11-08):
+# this stack owns the attachable overlay `decoy` (10.200.28.0/24) and the
+# relay joins it as the external network sensor-dionaea_decoy, keeping
+# TFTP_TARGET=dionaea:69. Arcane aliases the service by its short name
+# (`dionaea`), so the relay finds it by the same name as under Compose.
+#
+# endpoint_mode dnsrr, not the default VIP (smoke 2026-11-08): through the VIP
+# the request reaches dionaea, but dionaea answers from a new TFTP port (TID)
+# that the VIP's NAT does not map back, and the transfer times out. With
+# dnsrr the name returns the task address, the reply comes straight from it,
+# and the relay's unconnected socket accepts it (RRQ rc 0). The task address
+# changes on every task replacement; the relay re-resolves TFTP_TARGET per
+# new session (cached TFTP_RESOLVE_SECONDS, default 5 s), so it follows.
+# Nothing else calls dionaea by name; every other port arrives on the host
+# ports below.
+#
+# Differences a stack forces, and what covers them:
+# - The ports publish in `mode: host` on every node address (Compose bound
+#   10.8.0.2 only). home-swarm-host-guard.sh drops NEW DNATed flows to all 14
+#   unless they come from the VPS hub on wg0 (#3769).
+# - no-new-privileges: set per service below (Arcane's stack deploy carries
+#   it into the service spec as Privileges.NoNewPrivileges). The image keeps
+#   Ubuntu's stock setuid/setgid tools (su, passwd, mount, ...,
+#   pam_extrausers_chkpwd, wall), which the flag makes inert; dionaea drops to
+#   its user by setuid()/setgid() itself and execs none of them (#3593 audit,
+#   2026-11-08, no file capability). The entrypoint runs as root (chown of the
+#   data dirs, privileged ports), with exactly the five capabilities the
+#   Compose service measured (2026-07-31): NET_BIND_SERVICE, CHOWN, SETUID,
+#   SETGID, DAC_OVERRIDE.
+# - The six service files are configs (copies of
+#   arcane/home/honeypot-dionaea/dionaea/services/*.yaml; bump _vN when they
+#   change). They mount inside the /opt/dionaea/etc tmpfs, and the
+#   entrypoint's `cp -van` leaves them in place, as with the Compose binds.
+# - /persona is not mounted: nothing in the image reads it. honeypot-init's
+#   personas/apply_personas.py seeds those files into dionaea-lib, which this
+#   stack mounts as the same external volume.
+# - DIONAEA_LOG_MAX_BYTES is the JSON_STREAM_MAX_BYTES default (the live .env
+#   sets only HP_BIND); keep it equal to ip-enrichment-worker's value (#1389).
+# - DIONAEA_AIR_GAPPED cannot be expressed: host-mode ports need a
+#   non-internal overlay. An air-gapped dionaea stays on Compose.
+# - autoheal is replaced by swarm's own unhealthy-task replacement; the
+#   relay's per-session re-resolution keeps TFTP working across it.
+#
+# Reached from the VPS on the public ports (portbridge, no PROXY header; the
+# ip_enrichment tunnel join attributes by via_port, which host mode keeps) and
+# on public udp 69 via portbridge -> 10.8.0.2:1069 -> hp-tftp-relay.
+services:
+  dionaea:
+    image: ghcr.io/xore-inc/honeypot-dionaea@sha256:5cce1dd949a66122df17c996b942710e50071072cd8abeb6e69f29634f46ac18
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        until [ -f /markers/log-init.done ]; do sleep 3; done
+
+        cd /opt/dionaea
+
+        test -f etc/dionaea/dionaea.cfg || cp -van template/etc .
+
+        cp -van template/lib/dionaea/. var/lib/dionaea/ 2>/dev/null || true
+
+        cp -van template/log/dionaea/. var/log/dionaea/ 2>/dev/null || true
+
+        mkdir -p var/lib/dionaea/binaries var/lib/dionaea/bistreams var/lib/dionaea/ftp/root \
+                 var/lib/dionaea/tftp/root var/lib/dionaea/upnp/root var/lib/dionaea/printer/root \
+                 var/lib/dionaea/roots/ftp var/lib/dionaea/roots/tftp \
+                 var/lib/dionaea/roots/www var/lib/dionaea/roots/upnp
+        mkdir -p etc/dionaea/ihandlers-enabled
+
+        printf -- '- name: log_json\n  config:\n    handlers:\n      - file:///opt/dionaea/var/log/dionaea/dionaea.json\n' \
+                > etc/dionaea/ihandlers-enabled/log_json.yaml
+
+        printf -- '- name: log_incident\n  config:\n    handlers:\n      - file:///opt/dionaea/var/log/dionaea/dionaea_incident.json\n' \
+                > etc/dionaea/ihandlers-enabled/log_incident.yaml
+
+        printf -- '- name: store\n' \
+                > etc/dionaea/ihandlers-enabled/store.yaml
+
+        sed -i 's/^default.levels=.*/default.levels=info,warning,error/' \
+               etc/dionaea/dionaea.cfg
+        chown -R dionaea:dionaea var/lib/dionaea var/log/dionaea
+
+        export DIONAEA_SKIP_INIT=1
+
+        exec /usr/local/sbin/entrypoint.sh
+    ports:
+      - target: 21
+        published: 21
+        protocol: tcp
+        mode: host
+      - target: 445
+        published: 445
+        protocol: tcp
+        mode: host
+      - target: 1433
+        published: 1433
+        protocol: tcp
+        mode: host
+      - target: 3306
+        published: 3306
+        protocol: tcp
+        mode: host
+      - target: 27017
+        published: 27017
+        protocol: tcp
+        mode: host
+      - target: 1723
+        published: 1723
+        protocol: tcp
+        mode: host
+      - target: 5060
+        published: 5060
+        protocol: tcp
+        mode: host
+      - target: 5060
+        published: 5060
+        protocol: udp
+        mode: host
+      - target: 135
+        published: 135
+        protocol: tcp
+        mode: host
+      - target: 1883
+        published: 1883
+        protocol: tcp
+        mode: host
+      - target: 9100
+        published: 9100
+        protocol: tcp
+        mode: host
+      - target: 11211
+        published: 11211
+        protocol: tcp
+        mode: host
+      - target: 69
+        published: 69
+        protocol: udp
+        mode: host
+      - target: 1900
+        published: 1900
+        protocol: udp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/stacks/apiary/logs/dionaea
+        target: /opt/dionaea/var/log/dionaea
+      - type: volume
+        source: dionaea-lib
+        target: /opt/dionaea/var/lib/dionaea
+      - type: bind
+        source: /opt/stacks/apiary/state/init-markers
+        target: /markers
+        read_only: true
+      - type: tmpfs
+        target: /opt/dionaea/etc
+    configs:
+      - source: svc_ftp
+        target: /opt/dionaea/etc/dionaea/services-enabled/ftp.yaml
+        mode: 0444
+      - source: svc_smb
+        target: /opt/dionaea/etc/dionaea/services-enabled/smb.yaml
+        mode: 0444
+      - source: svc_sip
+        target: /opt/dionaea/etc/dionaea/services-enabled/sip.yaml
+        mode: 0444
+      - source: svc_printer
+        target: /opt/dionaea/etc/dionaea/services-enabled/printer.yaml
+        mode: 0444
+      - source: svc_tftp
+        target: /opt/dionaea/etc/dionaea/services-enabled/tftp.yaml
+        mode: 0444
+      - source: svc_upnp
+        target: /opt/dionaea/etc/dionaea/services-enabled/upnp.yaml
+        mode: 0444
+    environment:
+      TZ: Europe/Berlin
+      DIONAEA_LOG_MAX_BYTES: "67108864"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    networks: [decoy]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import socket
+          socket.create_connection(('127.0.0.1', 445), 3).close()
+          import os, sys
+          stat_path = '/sys/fs/cgroup/memory.stat'
+          max_path = '/sys/fs/cgroup/memory.max'
+          if os.path.exists(stat_path) and os.path.exists(max_path):
+              limit = open(max_path).read().strip()
+              anon = 0
+              for line in open(stat_path):
+                  key, _, value = line.partition(' ')
+                  if key == 'anon':
+                      anon = int(value)
+              if limit != 'max' and anon >= int(limit) * 0.9:
+                  sys.exit(1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      mode: replicated
+      replicas: 1
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.labels.sensor == true
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 1024M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 100s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Host-mode ports: two tasks must never contend for them.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 100s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "UNIT with hp-tftp-relay (Compose) in scripts/honeypot-pause.sh: dionaea first, relay second"
+networks:
+  decoy:
+    driver: overlay
+    # Attachable: hp-tftp-relay (Compose) joins it (#3593 option 1).
+    attachable: true
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.28.0/24
+    driver_opts:
+      com.docker.network.driver.mtu: "1310"
+volumes:
+  # Shared with honeypot-payload-analysis and honeypot-init (#258); created
+  # by the Compose project, so external here.
+  dionaea-lib:
+    external: true
+    name: dionaea-lib
+configs:
+  svc_ftp:
+    external: true
+    name: sensor-dionaea_svc_ftp_v1
+    x-apiary-file: ./configs/ftp.yaml
+  svc_smb:
+    external: true
+    name: sensor-dionaea_svc_smb_v1
+    x-apiary-file: ./configs/smb.yaml
+  svc_sip:
+    external: true
+    name: sensor-dionaea_svc_sip_v1
+    x-apiary-file: ./configs/sip.yaml
+  svc_printer:
+    external: true
+    name: sensor-dionaea_svc_printer_v1
+    x-apiary-file: ./configs/printer.yaml
+  svc_tftp:
+    external: true
+    name: sensor-dionaea_svc_tftp_v1
+    x-apiary-file: ./configs/tftp.yaml
+  svc_upnp:
+    external: true
+    name: sensor-dionaea_svc_upnp_v1
+    x-apiary-file: ./configs/upnp.yaml

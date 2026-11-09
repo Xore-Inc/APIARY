@@ -35,6 +35,12 @@ services:
     container_name: hp-tanner-docker
     restart: unless-stopped
     privileged: true
+    # #3593: the homeserver daemon sets no-new-privileges for every container.
+    # This nested daemon's runc and its sandbox containers inherit it and cannot
+    # clear it, so a sandbox image that needs a setuid helper would break. The
+    # container is privileged anyway, so the flag adds no boundary here.
+    security_opt:
+      - no-new-privileges:false
     environment:
       - DOCKER_TLS_CERTDIR=
     tmpfs:
@@ -228,8 +234,13 @@ services:
       tanner_docker:
         condition: service_healthy
     read_only: true
+    # #3593 option 1: snare runs as the swarm stack sensor-snare and posts to
+    # http://tanner:8090 over that stack's attachable overlay; Compose aliases
+    # this container `tanner` there too. tanner_local stays first and keeps
+    # the default route, so the overlay adds no egress path.
     networks:
       - tanner_local
+      - snare_decoy
     deploy:
       resources:
         limits:
@@ -333,6 +344,13 @@ networks:
   tanner_local:
     driver: bridge
     internal: ${TANNER_AIR_GAPPED:-false}
+  # #3593 option 1: the overlay the swarm stack sensor-snare owns
+  # (10.200.29.0/24). Only tanner joins it (hp-tanner-docker and the other
+  # tanner services do not). Exists once
+  # `ops/swarm/stackctl.py ensure sensor-snare` has run.
+  snare_decoy:
+    name: sensor-snare_decoy
+    external: true
 
 volumes:
   # #124: opposite direction from dionaea-lib/yara-results in the other

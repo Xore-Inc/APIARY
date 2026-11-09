@@ -60,6 +60,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claims as claims_mod  # noqa: E402  (sys.path must be set first)
+from harmony_policy import refuse_harmony_model_without_adaptation  # noqa: E402
 
 
 def _load_evaluate_models():
@@ -75,15 +76,18 @@ def _load_evaluate_models():
 
 
 def _chat_body(adjudicator: str, system: str, prompt: str) -> dict[str, Any]:
-    # Exact shape of claims.py:617-624's closure -- same model options, so a
+    # Exact shape of claims.py's closure -- same model options, so a
     # drift finding is about the adjudicator, not about a probe using
-    # different generation parameters.
+    # different generation parameters. The budget is read off claims.py rather
+    # than restated: it is the same number, and a copy is how a probe ends up
+    # describing a request the thing it probes no longer sends.
     return {
         "model": adjudicator,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": prompt}],
         "stream": False, "think": False, "format": "json",
-        "options": {"temperature": 0, "seed": 144, "num_ctx": 8192, "num_predict": 1024},
+        "options": {"temperature": 0, "seed": 144, "num_ctx": 8192,
+                    "num_predict": claims_mod.EXTRACTION_NUM_PREDICT},
     }
 
 
@@ -179,6 +183,17 @@ def main() -> int:
     if not args.dry_run and args.repeats < 2:
         parser.error("--repeats must be >= 2 -- a stability claim from a single "
                       "trial proves nothing about drift (see module docstring)")
+
+    # The adjudicator is chosen here, and this probe has no #2233 harmony
+    # adaptation: `think: false` sends back empty content for the gpt-oss
+    # family, every trial would report the same zero claim set, and the verdict
+    # would read STABLE -- a stability finding about a model that answered
+    # nothing. Refused rather than measured, on both paths: --dry-run's whole
+    # output is the request that would go out, so printing the template for a
+    # cell this probe would refuse is how the refusal gets copied past.
+    refuse_harmony_model_without_adaptation(
+        args.adjudicator, producer="probe-judge-repeat-stability.py",
+        num_predict=claims_mod.EXTRACTION_NUM_PREDICT)
 
     answer = args.answer or (args.answer_file.read_text() if args.answer_file else
                              "placeholder answer text for --dry-run planning")

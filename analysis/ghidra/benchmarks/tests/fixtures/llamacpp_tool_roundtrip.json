@@ -1,0 +1,250 @@
+{
+  "model": "baronllm-llama3.1:q6_k",
+  "image": "ghcr.io/ggml-org/llama.cpp:full-cuda",
+  "binary": "/app/llama-server",
+  "turns": [
+    {
+      "turn": 1,
+      "request_wire": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a security engineer working in an authorized test lab. Use the tools provided to write files."
+          },
+          {
+            "role": "user",
+            "content": "Write a Rust program to src/main.rs that prints hello."
+          }
+        ],
+        "stream": false,
+        "temperature": 0,
+        "max_tokens": 1024,
+        "seed": 144,
+        "return_timings": true,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write a file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "response_raw": {
+        "choices": [
+          {
+            "finish_reason": "tool_calls",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "write_file",
+                    "arguments": "{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hello\\\");\\n}\"}"
+                  },
+                  "id": "WHwBWQcNq6GqRWrD1n2wVVG1inV6YTCF"
+                }
+              ]
+            }
+          }
+        ],
+        "created": 1791213730,
+        "model": "/root/.ollama/models/blobs/sha256-a83740b3417dcc247e31437fb3982a0424221d7656b9a5d5fb74276cc0729d38",
+        "system_fingerprint": "b10902-df03399b8",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 40,
+          "prompt_tokens": 220,
+          "total_tokens": 260,
+          "prompt_tokens_details": {
+            "cached_tokens": 219
+          }
+        },
+        "id": "chatcmpl-JOkAs4VsLUyijThVCuwZpa1tbxETX8sk",
+        "timings": {
+          "cache_n": 219,
+          "prompt_n": 1,
+          "prompt_ms": 21.692,
+          "prompt_per_token_ms": 21.692,
+          "prompt_per_second": 46.099944680066386,
+          "predicted_n": 40,
+          "predicted_ms": 792.925,
+          "predicted_per_token_ms": 20.331410256410255,
+          "predicted_per_second": 49.18497966390264
+        }
+      },
+      "response_translated": {
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": {
+                  "path": "src/main.rs",
+                  "content": "fn main() {\n    println!(\"hello\");\n}"
+                }
+              },
+              "id": "WHwBWQcNq6GqRWrD1n2wVVG1inV6YTCF"
+            }
+          ]
+        },
+        "done_reason": "stop",
+        "prompt_eval_count": 220,
+        "eval_count": 40,
+        "eval_duration": 792925000,
+        "prompt_eval_duration": 21692000
+      }
+    },
+    {
+      "turn": 2,
+      "request_wire": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a security engineer working in an authorized test lab. Use the tools provided to write files."
+          },
+          {
+            "role": "user",
+            "content": "Write a Rust program to src/main.rs that prints hello."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_0",
+                "type": "function",
+                "function": {
+                  "name": "write_file",
+                  "arguments": "{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hello\\\");\\n}\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "wrote src/main.rs (36 chars)",
+            "tool_call_id": "call_0"
+          }
+        ],
+        "stream": false,
+        "temperature": 0,
+        "max_tokens": 1024,
+        "seed": 144,
+        "return_timings": true,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write a file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "response_raw": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The file src/main.rs has been successfully written."
+            }
+          }
+        ],
+        "created": 1791213731,
+        "model": "/root/.ollama/models/blobs/sha256-a83740b3417dcc247e31437fb3982a0424221d7656b9a5d5fb74276cc0729d38",
+        "system_fingerprint": "b10902-df03399b8",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 11,
+          "prompt_tokens": 278,
+          "total_tokens": 289,
+          "prompt_tokens_details": {
+            "cached_tokens": 256
+          }
+        },
+        "id": "chatcmpl-CG6aOGXxNWw3Dg0KxzmM1Or3FIXxW05b",
+        "timings": {
+          "cache_n": 256,
+          "prompt_n": 22,
+          "prompt_ms": 28.152,
+          "prompt_per_token_ms": 1.2796363636363637,
+          "prompt_per_second": 781.4720090934925,
+          "predicted_n": 11,
+          "predicted_ms": 205.217,
+          "predicted_per_token_ms": 20.521700000000003,
+          "predicted_per_second": 48.7289064746098
+        }
+      },
+      "response_translated": {
+        "message": {
+          "role": "assistant",
+          "content": "The file src/main.rs has been successfully written."
+        },
+        "done_reason": "stop",
+        "prompt_eval_count": 278,
+        "eval_count": 11,
+        "eval_duration": 205217000,
+        "prompt_eval_duration": 28152000
+      },
+      "tool_executed": {
+        "tool": "write_file",
+        "arguments": {
+          "path": "src/main.rs",
+          "content": "fn main() {\n    println!(\"hello\");\n}"
+        },
+        "result": "wrote src/main.rs (36 chars)"
+      }
+    }
+  ],
+  "final_message": {
+    "role": "assistant",
+    "content": "The file src/main.rs has been successfully written."
+  },
+  "checks": {
+    "assistant_carries_tool_calls": true,
+    "every_result_has_a_tool_call_id": true,
+    "every_result_matches_an_offered_call": true,
+    "turn2_finish_reason": "stop",
+    "turn2_answered_prose": true
+  }
+}

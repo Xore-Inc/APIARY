@@ -8,19 +8,16 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 ## Resulting topology
 
 - `honeypot-keycloak` is an Arcane-managed stack on the homeserver.
-- No local image is built, and the two upstream images are pinned
-  *differently on purpose*. PostgreSQL is a digest pin
-  (`postgres:18.6-bookworm@sha256:…`) because its version is chosen, not
-  chased. Keycloak is deliberately **unpinned** —
-  `quay.io/keycloak/keycloak:latest` with `pull_policy: always` — because it
-  is the identity provider for the whole stack: it was digest-pinned to
-  26.7.1 when CVE-2026-18963 (unauthenticated account takeover via
-  reset-credentials, CVSS 9.1) landed, and a digest pin is exactly what keeps
-  a known-vulnerable build running until someone edits a file. `pull_policy`
-  is load-bearing here, not decoration: without it a redeploy silently reuses
-  whatever `:latest` first resolved to, which is a pin again with none of the
-  honesty of one. Do not "tidy" the tag into a digest without reading the
-  comment above it in the compose file first.
+- No local image is built. Both upstream images are pinned by version tag
+  *and* digest: `postgres:18.6-bookworm@sha256:…` and
+  `quay.io/keycloak/keycloak:26.8.2@sha256:…` (#3824). Keycloak used to name
+  `:latest` (with a digest underneath it since #3501), on the theory that the
+  identity provider should always be current -- it was on 26.7.1 when
+  CVE-2026-18963 (unauthenticated account takeover via reset-credentials,
+  CVSS 9.1) landed. The digest already froze it, so `:latest@sha256` only hid
+  which release was running. A Keycloak security release is applied by moving
+  the tag and digest together (§7); the base-image CVE gate's
+  `ACCEPTED_CVES` entry for the old digest retires itself when it moves.
 - PostgreSQL is reachable only on the internal `keycloak-data` network.
 - Keycloak publishes HTTP only on the homeserver WireGuard address.
 - VPS Traefik terminates TLS and forwards the issuer and administrator hosts
@@ -85,7 +82,7 @@ Protect the environment and generate independent secrets locally:
 ```bash
 sudo chmod 600 /var/dockge/stacks/honeypot-keycloak/.env
 sudo sh -c 'umask 027; openssl rand -base64 48 > /var/dockge/stacks/honeypot-keycloak/secrets/postgres-password'
-sudo sh -c 'umask 027; openssl rand -base64 48 > /var/dockge/stacks/honeypot-keycloak/secrets/bootstrap-admin-password'
+sudo sh -c 'umask 027; openssl rand -base64 48 | tr -d "\n" > /var/dockge/stacks/honeypot-keycloak/secrets/bootstrap-admin-client-secret'
 sudo sh -c 'umask 027; openssl rand -base64 48 > /var/dockge/stacks/honeypot-keycloak/secrets/restic-password'
 sudo chown root:root /var/dockge/stacks/honeypot-keycloak/secrets/*
 sudo chmod 440 /var/dockge/stacks/honeypot-keycloak/secrets/*
@@ -118,47 +115,49 @@ The upstream image needs a writable disposable container layer for this step;
 do not set `read_only: true` unless a separately reviewed optimized image is
 built first.
 
-## 2. Create the sole administrator
+## 2. Administrator access
 
-Authenticate `kcadm` with the temporary bootstrap administrator from inside the
-container. Avoid putting either password in shell history:
+#3824: a fresh database starts with no human account at all. While
+`secrets/bootstrap-admin-client-secret` exists, the compose entrypoint exports
+`KC_BOOTSTRAP_ADMIN_CLIENT_ID`/`_SECRET` and Keycloak creates a *temporary
+admin service-account client* in `master` (not a bootstrap user with a
+password). The older `bootstrap-admin-password` path still works if that file
+is present, but the rebuild procedure no longer uses it.
 
-```bash
-sudo docker exec hp-keycloak bash -ec '
-  /opt/keycloak/bin/kcadm.sh config credentials \
-    --config /tmp/kcadm.config \
-    --server http://127.0.0.1:8080 \
-    --realm master \
-    --user "$KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME" \
-    --password "$(< /run/keycloak-secrets/bootstrap-admin-password)"
-'
-```
-
-Create a named human in the `apiary` realm with a verified operator-owned email,
-a temporary policy-compliant password, and required actions `UPDATE_PASSWORD`
-and `CONFIGURE_TOTP`. Add the user to `/administrators` and grant the
-`realm-management` client role `realm-admin`. Do not add
-`recovery-authn-codes-config`: the pinned runtime does not provide that required
-action factory. Recovery is an administrator-driven credential reset.
-
-Verify the user before deleting bootstrap access:
+Once Keycloak is healthy, swap the temporary client for the permanent one and
+apply the master-realm settings (both idempotent, run on the homeserver as
+root):
 
 ```bash
-KC=/opt/keycloak/bin/kcadm.sh
-sudo docker exec hp-keycloak "$KC" get users -r apiary \
-  -q username=<admin-user> --config /tmp/kcadm.config
+sudo /var/dockge/stacks/honeypot-keycloak/keycloak/provision-admin-client.sh
+sudo /var/dockge/stacks/honeypot-keycloak/keycloak/provision-master-realm.sh
 ```
 
-Open `https://auth.honeypot.example/admin/apiary/console/`, replace the
-temporary password, enroll TOTP, and confirm the administrator can read the
-realm. Then remove both bootstrap artifacts and restart:
+`provision-admin-client.sh` creates the confidential client `apiary-ops-admin`
+in `master` (service account only, no browser/password/implicit flow), grants
+it the master `admin` realm role and Keycloak 26.8's `kc-admin-api` scope
+(without that scope a client created over REST gets a token and then `401` on
+every admin call), writes its secret to `secrets/admin-client-secret`
+(`root:root 0440`), proves it can list the realms, deletes the temporary
+bootstrap client (only if Keycloak marked it `is_temporary_admin`) and removes
+`bootstrap-admin-client-secret`. Every other provisioner authenticates with
+that client through `keycloak/lib-admin.sh`, which reads secrets from files and
+keeps the access token in a `0600` header file -- no password or secret is
+ever on a command line.
 
-```bash
-sudo rm /var/dockge/stacks/honeypot-keycloak/secrets/bootstrap-admin-password
-sudo rm /var/dockge/stacks/honeypot-keycloak/secrets/admin.initial-password
-cd /var/dockge/stacks/honeypot-keycloak
-sudo docker compose --env-file .env -f compose.yml restart keycloak
-```
+`provision-master-realm.sh` applies `realm/master-realm-settings.json`: the
+master settings that are not Keycloak defaults (APIARY login/account theme,
+WebAuthn/passkey policy) plus `webauthn-authenticator` = `ALTERNATIVE` in
+`Browser - Conditional 2FA`. `--import-realm` cannot carry these: master
+exists before the import runs and the import skips existing realms.
+
+Human accounts are created by an operator with that client (or in the admin
+console once one exists): a named human in the `apiary` realm with a verified
+operator-owned email, a temporary policy-compliant password, and required
+actions `UPDATE_PASSWORD` and `CONFIGURE_TOTP`, in `/administrators` (and
+`/users`) with the `realm-management` client role `realm-admin`. Do not add
+`recovery-authn-codes-config`: the pinned runtime does not provide that
+required action factory. Recovery is an administrator-driven credential reset.
 
 The public realm has self-registration disabled. Administrators create every
 human account, and TOTP is a default required action for all humans.
@@ -207,27 +206,25 @@ per-client procedure below -- run from the homeserver with SSH access to the
 VPS:
 
 ```bash
-KEYCLOAK_ADMIN_USERNAME=<master-realm admin> \
-KEYCLOAK_ADMIN_PASSWORD=<its password> \
-./keycloak/sync-client-secrets.sh
+sudo /var/dockge/stacks/honeypot-keycloak/keycloak/sync-client-secrets.sh
 ```
 
-It writes each secret directly over SSH (never to a local file or a
-command-line argument), fixes ownership/permissions to match the manual
-steps above, and restarts each of the 7 gateways so the new secret takes
-effect immediately. Manual fallback, retrieving a single client secret using
-the already authenticated homeserver `kcadm` (what the script above does for
-all 7):
+(as root on the homeserver: root's SSH config carries the `vps` alias, and the
+script authenticates with `secrets/admin-client-secret`, §2).
+
+It writes each secret from a `0600` file in a private temp dir straight into
+SSH's stdin (never a command-line argument, never printed), fixes
+ownership/permissions to match the manual steps above, and restarts each of the
+7 gateways so the new secret takes effect immediately. Manual fallback for one
+client, with the same helpers (as root on the homeserver; `kc_write_secret`
+writes exact bytes without a newline):
 
 ```bash
-KC=/opt/keycloak/bin/kcadm.sh
-CLIENT=<client>
-CLIENT_UUID=$(sudo docker exec hp-keycloak "$KC" get clients -r apiary \
-  -q "clientId=$CLIENT" --fields id --format csv --noquotes \
-  --config /tmp/kcadm.config)
-sudo docker exec hp-keycloak "$KC" get \
-  "clients/$CLIENT_UUID/client-secret" -r apiary \
-  --config /tmp/kcadm.config
+source /var/dockge/stacks/honeypot-keycloak/keycloak/lib-admin.sh
+kc_login apiary-ops-admin "$KEYCLOAK_SECRETS_DIR/admin-client-secret"
+kc_write_secret apiary "$(kc_client_uuid apiary <client>)" /root/<client>.secret root:root 600
+ssh vps 'cat > /root/vps/secrets/oidc/<client>/client-secret' < /root/<client>.secret
+rm -f /root/<client>.secret
 ```
 
 Transfer only the returned `value` into the matching VPS `client-secret` file
@@ -377,26 +374,41 @@ sudo KEYCLOAK_RESTORE_CONFIRM=restore-keycloak-database \
 ## 7. Upgrade and rebuild procedure
 
 1. Review Keycloak and PostgreSQL release notes.
-2. Update the PostgreSQL tag and digest together in
-   `arcane/home/honeypot-keycloak/compose.yml`. The Keycloak service needs no
-   edit — it is deliberately on `:latest` with `pull_policy: always` (see
-   "Resulting topology"), so a security release arrives by redeploying, and
-   accepting that trade is the decision this step is not asking you to
-   revisit.
+2. Update tag and digest together for each image in
+   `arcane/home/honeypot-keycloak/compose.yml` (resolve the digest from the
+   registry, e.g. quay.io's tag API, not from a local pull). For Keycloak also
+   move the same pin in the four `scripts/test-*` fixtures that boot it and
+   re-measure the image with the base-image scan's trivy command; replace the
+   `ACCEPTED_CVES` entry in `scripts/list-docker-base-images.py` (or drop it
+   if the new digest is clean).
 3. Re-test the theme against the pinned Keycloak parent theme.
 4. Validate Compose and the realm template.
 5. Deploy to a disposable stack and exercise the acceptance tests.
-6. For a deliberate clean rebuild, remove the Keycloak PostgreSQL volume,
-   import the realm, recreate the administrator, then rotate all eleven
-   confidential clients' secrets in two steps -- both required, either
-   order:
-   - `keycloak/sync-client-secrets.sh` (§3): the seven VPS gateway secrets,
-     restarting every gateway.
-   - `keycloak/provision-dashboard-oidc-secret.sh` (once per dashboard client:
-     `apiary-dashboard` and `apiary-dashboard-rewrite`),
-     `keycloak/provision-arcane-oidc-secret.sh`, and
-     `keycloak/provision-events-poller.sh` (§3 "Non-gateway confidential
-     clients"): the four homeserver-side clients.
+6. For a deliberate clean rebuild (#3824 is the worked example):
+   - back up first: `pg_dump -Fc`, plus an offline full export with users
+     (`kc.sh export --users realm_file` from a one-off container of the
+     running image on `keycloak-data`), and prove the dump restores into a
+     throwaway postgres;
+   - stop Keycloak, drop and recreate the `keycloak` database (or remove the
+     volume), write a fresh random `secrets/bootstrap-admin-client-secret`,
+     move any old `bootstrap-admin-password` away, and start: master is
+     created with only the temporary admin client, and `apiary` imports from
+     the template;
+   - `keycloak/provision-admin-client.sh`, then
+     `keycloak/provision-master-realm.sh` and
+     `keycloak/provision-account-console-scopes.sh` (§2);
+   - rotate all eleven confidential clients' secrets in two steps -- both
+     required, either order:
+     - `keycloak/sync-client-secrets.sh` (§3): the seven VPS gateway secrets,
+       restarting every gateway.
+     - `keycloak/provision-dashboard-oidc-secret.sh` (once per dashboard
+       client: `apiary-dashboard` and `apiary-dashboard-rewrite`),
+       `keycloak/provision-arcane-oidc-secret.sh`, and
+       `keycloak/provision-events-poller.sh` (§3 "Non-gateway confidential
+       clients"): the four homeserver-side clients. The dashboards and the
+       events worker read their secret at startup or per request; recreate
+       the containers to be sure.
+   - create the human accounts (§2): a rebuilt realm has none.
 
    Then repeat the full acceptance suite.
 7. Never reuse a stale client-secret file after a clean realm rebuild.
@@ -413,6 +425,7 @@ sudo KEYCLOAK_RESTORE_CONFIRM=restore-keycloak-database \
 | All gateways restart with secret read errors | UID 65532 cannot traverse/read host secret paths | Use `root:65532`, directory `0750`, files `0440`. |
 | Gateways redirect but callback fails after rebuild | VPS client secrets belong to the old realm | Run `keycloak/sync-client-secrets.sh` to rotate all 7 gateway client-secret files and restart every gateway in one pass. |
 | Dashboard, Arcane login, or the events poller fail after rebuild with the gateways otherwise fine | Their homeserver-side client secrets belong to the old realm -- `sync-client-secrets.sh` never touches them (§3) | Run `keycloak/provision-dashboard-oidc-secret.sh`, `keycloak/provision-arcane-oidc-secret.sh`, and/or `keycloak/provision-events-poller.sh` as applicable. |
+| A provisioner gets a token but every admin call returns `401` | Keycloak 26.8 only accepts admin REST calls whose token carries the admin-API audience, added by its built-in `kc-admin-api` client scope; a client created over REST does not get that scope (#3824) | `provision-admin-client.sh` assigns it, and `provision-events-poller.sh` does the same for `auth-events-poller` (its worker logs `Cycle failed: 401` otherwise). For any other tooling client, add `kc-admin-api` as a default client scope. |
 | WireGuard port is absent | Keycloak is attached only to an internal Docker network | Attach Keycloak to `keycloak-data` and `keycloak-egress`; PostgreSQL uses only `keycloak-data`. |
 | Keycloak fails on a read-only filesystem | Upstream image needs first-start augmentation | Allow its disposable layer to be writable or build a separately reviewed optimized image. |
 | A theme file edit + `docker compose restart keycloak` doesn't reach real browsers, even though `curl` (no compression) and internal checks show the fix is live | Keycloak/Quarkus caches a gzip-compressed copy of every theme resource under `/opt/keycloak/data/tmp/kc-gzip-cache/`, which lives in the container's own writable layer -- it is not bind-mounted or a named volume, so it survives `docker restart` and is never invalidated when the source file on disk changes. Every real browser sends `Accept-Encoding: gzip` by default, so it keeps getting served the stale compiled variant indefinitely. Caught live (#108/#1027): repeated Cloudflare cache purges appeared not to fix a login theme bug because the *origin itself* was still serving the old file under gzip. | After any theme file change, before (or instead of) blaming CDN cache: `docker exec hp-keycloak rm -rf /opt/keycloak/data/tmp/kc-gzip-cache` -- no restart needed, Keycloak regenerates it lazily on the next request. Only a full container recreate (not `restart`) would otherwise clear it. Verify with `curl -H 'Accept-Encoding: gzip' --compressed ...` specifically, not a plain `curl`/`wget` that skips compression -- those two can disagree. |

@@ -223,11 +223,13 @@ Compose will not create a container whose external network is missing. So
 neither Ollama (the Ghidra/Ollama stack) nor `honeypot-galah` can start
 until the following hold:
 
-1. The homeserver is still a Swarm manager. A full reset does not leave the
-   Swarm (`docker swarm leave` is never part of this runbook), and the
-   homeserver's normal availability is `pause`:
+1. The homeserver is still a Swarm manager with availability `active`. A
+   full reset does not leave the Swarm (`docker swarm leave` is never part of
+   this runbook). A `pause` or `drain` node cannot attach Compose containers
+   to an overlay at all (#3722):
    ```bash
    docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}'   # active true
+   docker node inspect self --format '{{.Spec.Availability}}'                     # active
    ```
 2. The `galah-broker` stack is deployed through its Arcane GitOps sync and both
    overlays exist:
@@ -238,9 +240,9 @@ until the following hold:
    ```
 
 Start the Ghidra/Ollama stack only after that, and `honeypot-galah` after
-Ollama (in step 4). If Compose still reports `network galah-broker_* not found`
-on the homeserver, follow the overlay-materialization workaround in the
-broker README.
+Ollama (in step 4). If Compose reports `attaching to network failed` on the
+homeserver, check its availability first (`docker node update --availability
+active supermicro` from any manager); see the broker README.
 
 If the Swarm cannot be brought back, use the broker README's **Rollback**
 section. Starting the old Compose broker with

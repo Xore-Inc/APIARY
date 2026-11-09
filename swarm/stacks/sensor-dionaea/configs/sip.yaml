@@ -1,0 +1,19 @@
+- name: sip
+  config:
+    udp_ports: [5060]
+    tcp_ports: [5060]
+    tls_ports: [5061]
+    users: "var/lib/dionaea/sip/accounts.sqlite"
+    rtp:
+      enable: true
+      modes: [bistream, pcap]
+      pcap:
+        path: "var/lib/dionaea/sip/rtp/{personality}/%Y-%m-%d/"
+        filename: "%H:%M:%S_{remote_host}_{remote_port}_in.pcap"
+    personalities:
+      default:
+        domain: "voice.meridian.internal"
+        name: "MERIDIAN-HH-PBX"
+        personality: "generic"
+        default_sdp: "default"
+        handle: ["REGISTER", "INVITE", "BYE", "CANCEL", "ACK", "OPTIONS"]

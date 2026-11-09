@@ -10,12 +10,9 @@ use axum::{http::StatusCode, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::payload_paths::resolve_payload_path;
+use crate::host_fs::{host, Root};
+use crate::payload_paths::resolve_payload;
 use crate::sandbox_submit::create_request_marker;
-
-pub fn ghidra_request_dir() -> String {
-    std::env::var("GHIDRA_REQUEST_DIR").unwrap_or_default()
-}
 
 #[derive(Deserialize)]
 pub struct SubmitBody {
@@ -42,20 +39,19 @@ pub async fn submit(Json(body): Json<SubmitBody>) -> (StatusCode, Json<Value>) {
     if !crate::payload_paths::is_valid_hash(&hash) {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid payload hash"})));
     }
-    if resolve_payload_path(&hash).is_err() {
+    if resolve_payload(&hash).is_err() {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "captured payload not found"})),
         );
     }
-    let dir = ghidra_request_dir();
-    if dir.is_empty() {
+    if !host().configured(Root::GhidraRequests) {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "Ghidra analysis is not configured on this host"})),
         );
     }
-    match create_request_marker(&dir, &hash) {
+    match create_request_marker(Root::GhidraRequests, &hash) {
         Ok(()) => (StatusCode::OK, Json(json!({"queued": true}))),
         Err(reason) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": reason}))),
     }

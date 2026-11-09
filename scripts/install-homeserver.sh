@@ -441,8 +441,16 @@ step_docker_daemon_config() {
   # floor here, not a formality: buildkit GC now starts pruning once /var
   # free space drops within about 31GB of that floor, not after the disk is
   # already critical.
+  # no-new-privileges (#3593, Xore's decision on #3587, 2026-10-31): swarm
+  # services cannot set `security_opt`, so the sensor stacks get the
+  # hardening their Compose files set per service only from the daemon. The
+  # VPS has had it daemon-wide since its installer was written. Containers
+  # that need it off say so explicitly (`security_opt:
+  # [no-new-privileges:false]`: hp-tanner-docker's nested daemon). Applying
+  # this needs a dockerd restart, which restarts every container here.
   cat >/etc/docker/daemon.json <<'EOF'
 {
+    "no-new-privileges": true,
     "log-driver": "local",
     "log-opts": {
         "max-file": "3",
@@ -1310,28 +1318,29 @@ step_stage_keycloak_theme() {
 
 step_provision_keycloak_secrets() {
   # #787: step_provision_stack_dirs only creates an empty secrets/ dir --
-  # nothing populated postgres-password/bootstrap-admin-password before this,
-  # so a genuinely fresh, unattended install would fail here (Postgres'
-  # POSTGRES_PASSWORD_FILE and Keycloak's own entrypoint both read files that
-  # never existed). This test/reinstall path resets Keycloak to a known
-  # initial admin rather than restoring a prior one -- same "start from
-  # zero" treatment as the rest of the honeypot stack's data, not an
-  # exception carved out just for identity.
+  # nothing populated postgres-password before this, so a genuinely fresh,
+  # unattended install would fail here (Postgres' POSTGRES_PASSWORD_FILE and
+  # Keycloak's own entrypoint both read files that never existed).
+  #
+  # #3824: the initial administrator is a temporary bootstrap *client*
+  # (client_credentials), not a bootstrap user. This used to write a fixed
+  # admin/admin123 bootstrap password; now a random bootstrap-admin-client-
+  # secret is generated only while no permanent admin-client-secret exists, and
+  # step_provision_keycloak_admin_client swaps it for the permanent client once
+  # Keycloak is up. No human account exists until an operator creates one.
   local dir="/var/dockge/stacks/honeypot-keycloak/secrets"
   install -d -m 750 "$dir"
   if [[ ! -f "$dir/postgres-password" ]]; then
     (umask 027; openssl rand -base64 48 > "$dir/postgres-password")
     echo "generated postgres-password"
   fi
-  if [[ ! -f "$dir/bootstrap-admin-password" ]]; then
-    (umask 027; printf 'admin123\n' > "$dir/bootstrap-admin-password")
-    echo "wrote initial bootstrap-admin-password (admin/admin123 -- rotate after first login)"
-  fi
-  chown root:root "$dir"/postgres-password "$dir"/bootstrap-admin-password
-  chmod 440 "$dir"/postgres-password "$dir"/bootstrap-admin-password
-  local env_file="/var/dockge/stacks/honeypot-keycloak/.env"
-  if [[ -f "$env_file" ]] && grep -q '^KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=' "$env_file"; then
-    sed -i 's/^KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=.*/KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=admin/' "$env_file"
+  chown root:root "$dir"/postgres-password
+  chmod 440 "$dir"/postgres-password
+  if [[ ! -f "$dir/admin-client-secret" && ! -f "$dir/bootstrap-admin-client-secret" ]]; then
+    (umask 027; openssl rand -base64 48 | tr -d '\n' > "$dir/bootstrap-admin-client-secret")
+    chown root:root "$dir/bootstrap-admin-client-secret"
+    chmod 440 "$dir/bootstrap-admin-client-secret"
+    echo "generated bootstrap-admin-client-secret (temporary; replaced by provision-keycloak-admin-client)"
   fi
 }
 
@@ -1826,14 +1835,25 @@ step_start_remaining_stacks() {
 # actually healthy (to grant its service-account client the view-events
 # role) -- `up -d --wait` in the previous step already confirmed that.
 # ---------------------------------------------------------------------------
+step_provision_keycloak_admin_client() {
+  # #3824: replace the temporary bootstrap admin client Keycloak created from
+  # bootstrap-admin-client-secret with the permanent master admin client every
+  # provisioner below authenticates with, delete the bootstrap one, then apply
+  # the repo's master-realm settings (--import-realm cannot carry master).
+  # Keycloak is healthy here: start-remaining waited for it.
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
+    "$KEYCLOAK_PROVISION_DIR/provision-admin-client.sh"
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
+    "$KEYCLOAK_PROVISION_DIR/provision-master-realm.sh"
+}
+
 step_provision_events_poller_secrets() {
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-events-poller.sh"
 }
 
@@ -1916,12 +1936,11 @@ step_provision_dashboard_oidc_secret() {
   # own crash-restart loop picks up the freshly written secret within
   # seconds.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
   DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite \
   DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
     "$KEYCLOAK_PROVISION_DIR/provision-dashboard-oidc-secret.sh"
@@ -1936,12 +1955,11 @@ step_provision_arcane_oidc_secret() {
   # Arcane with it. Path convention deliberately identical to its two sibling
   # provisioner steps above so a single fix covers all three.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-arcane-oidc-secret.sh"
 }
 
@@ -1954,12 +1972,11 @@ step_provision_account_console_scopes() {
   # alongside the sibling provisioners that also exist because the realm
   # format cannot express what they set.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-account-console-scopes.sh"
 }
 
@@ -3185,7 +3202,7 @@ run_step arcane-import-stacks  "Import honeypot-* + auth-events-worker/llm-worke
 run_step stage-keycloak-theme  "Check out and sync the Keycloak login theme" step_stage_keycloak_theme
 run_step bootstrap-missing-envs "Bootstrap any still-missing .env from .example" step_bootstrap_missing_envs
 run_step seed-canary-hostname "Seed honeypot-canarytokens' CANARY_PUBLIC_HOSTNAME from KEYCLOAK_PUBLIC_DOMAIN (#2498)" step_seed_canary_public_hostname
-run_step provision-keycloak-secrets "Generate Keycloak secrets, reset bootstrap admin to admin/admin123" step_provision_keycloak_secrets
+run_step provision-keycloak-secrets "Generate Keycloak secrets (postgres + temporary bootstrap admin client)" step_provision_keycloak_secrets
 
 run_step shared-resources      "Create honeynet + placeholder volumes" step_create_shared_resources
 run_step provision-buildx-cache "Create /var/buildx-cache for the CI runners (#2822)" step_provision_buildx_cache
@@ -3207,6 +3224,7 @@ run_step geoip-reload-es       "Reload ES if geoip databases arrived after it st
 run_step fix-snare-ownership   "Set logs/snare root-owned (snare drops caps)" step_fix_snare_ownership
 run_step start-remaining       "Start remaining sensor/dashboard stacks" step_start_remaining_stacks
 
+run_step provision-keycloak-admin-client "Permanent master admin client, drop the bootstrap one, master realm settings (#3824)" step_provision_keycloak_admin_client
 run_step provision-events-poller-secrets "Grant auth-events-poller view-events + write its secret" step_provision_events_poller_secrets
 run_step pin-deploy-runner-gid  "Pin deploy-runner GID + enrichment dirs for the dashboard and workers" step_pin_deploy_runner_gid
 run_step provision-dashboard-oidc-secret "Write dashboard's OIDC client secret from Keycloak" step_provision_dashboard_oidc_secret

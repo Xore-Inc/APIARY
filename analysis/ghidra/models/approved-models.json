@@ -68,7 +68,7 @@
         "concurrency": 1,
         "context_tokens": 32768,
         "keep_alive": "10m",
-        "output_tokens": 4096,
+        "output_tokens": 16000,
         "seed": 144,
         "temperature": 0,
         "thinking": false
@@ -121,9 +121,9 @@
       },
       "qualification_request": {
         "concurrency": 1,
-        "context_tokens": 8192,
+        "context_tokens": 24576,
         "keep_alive": "10m",
-        "output_tokens": 4096,
+        "output_tokens": 16000,
         "seed": 144,
         "temperature": 0,
         "thinking": false
@@ -191,13 +191,14 @@
       },
       "qualification_request": {
         "concurrency": 1,
-        "context_tokens": 8192,
+        "context_tokens": 24576,
         "keep_alive": "10m",
-        "output_tokens": 512,
+        "output_tokens": 16000,
         "seed": 144,
         "temperature": 0,
         "thinking": false
       },
+      "qualification_status": "unmeasured: output_tokens 16000 has no committed qualification run. Every stored sessions record under docs/benchmarks/runs/ (498 of them) was captured at num_predict 512, and approval.report_sha256 was archived for a 512-token run, so `model-governance.py verify-report` reports sessions:request_settings_changed against that archived report. 16000 is nevertheless the only value the harness will run this slot at -- evaluate_slot() compares qualification_request by exact equality, so a manifest declaring any other number cannot run the slot at all. It is the owner's decision to raise the benchmark budget past the 2048 ceiling llm-worker clamps at (env_int('LLM_OUTPUT_TOKENS', 512, 128, 2048)), so runtime_request below still declares 512: this slot's qualified budget now describes the benchmark and not a deployment. The budget is required; the measurement of the model at it is missing. Run evaluate-models.py --manifest for this slot and `model-governance.py promote` the result, then delete this key: an unqualified budget that reads as approved is the defect, not the 16000.",
       "runtime_request": {
         "concurrency": 1,
         "context_tokens": 8192,
