@@ -454,7 +454,18 @@ def decide(source: dict, pb: Portbridge, starts: dict) -> Decision:
 
 
 def record_start(starts: dict, source: dict) -> None:
-    """Pass 1: the earliest time seen for every named session."""
+    """Pass 1: the earliest time seen for every named session.
+
+    Lines the live worker already attributed carry the client's address, not
+    the tunnel peer's, and classify() answers "other" for them without a
+    session. They are still the lines that opened the connection (mailoney's
+    envelope lines, cowrie's connect), so they count here as if the worker had
+    not rewritten them (#3815).
+    """
+    h = source.get("honeypot") or {}
+    ip = h.get("src_ip")
+    if ip and ip != TUNNEL_PEER_IP and ip not in LOOPBACK_IPS:
+        source = {**source, "honeypot": {**h, "src_ip": TUNNEL_PEER_IP}}
     _, needs = classify(source)
     for need in needs:
         if need.session is not None and need.line_at:
