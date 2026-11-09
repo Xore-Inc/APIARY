@@ -196,6 +196,22 @@ class Shapes(unittest.TestCase):
         self.assertEqual(label, [[None, "unmatched"], "portbridge"])
         self.assertIn("expected instanceof List", bt.UPDATE_SCRIPT)
 
+    def test_a_start_is_read_from_lines_the_worker_already_attributed(self):
+        # Live, the envelope lines were attributed (client address written) and
+        # only the late mail-body stayed on the tunnel peer; the backfill still
+        # has to anchor the body on the envelope's time.
+        pb = portbridge(dial("203.0.113.29", 44990, T, "10.8.0.2:25"))
+        def line(event, at, ip):
+            return {"event": {"sensor": "mailoney"}, "honeypot": {
+                "src_ip": ip, "src_port": 44990, "dst_port": 25, "session_id": "900",
+                "event": event, "timestamp": iso(at)}}
+        envelope, body = line("envelope", T + 1, "203.0.113.29"), line("mail-body", T + 21, PEER)
+        starts = {}
+        for doc in (envelope, body):
+            bt.record_start(starts, doc)
+        self.assertEqual(starts, {("mailoney", "44990/900"): T + 1})
+        self.assertEqual(bt.decide(body, pb, starts).outcome, bt.ATTRIBUTED)
+
 
 class FakeES:
     def __init__(self, pb_hits, hp_hits):
