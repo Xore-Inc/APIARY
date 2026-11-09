@@ -125,7 +125,7 @@ class Shapes(unittest.TestCase):
         self.assertEqual(d.writes["REMOTE_ADDR"], [f"{PEER}:43664", "203.0.113.21:43664"])
         self.assertEqual(d.writes["src_ip"], [PEER, "203.0.113.21"])
         self.assertEqual(d.writes["fleet_peer"], [None, PEER])
-        self.assertEqual(d.writes["tunnel_attribution"], [None, "portbridge"])
+        self.assertEqual(d.writes["tunnel_attribution"], [[None, "unmatched"], "portbridge"])
 
     def test_dionaea_incident_rewrites_the_nested_connection(self):
         pb = portbridge(dial("203.0.113.22", 50556, T, "10.8.0.2:445"))
@@ -156,6 +156,45 @@ class Shapes(unittest.TestCase):
         # Unanchored, the rival sits in the line's own window -- and it is a
         # dial to 445, which cowrie's telnet port (2223 -> 19023) rules out.
         self.assertEqual(bt.decide(closed, pb, {}).outcome, bt.UNMATCHED, "never the stranger")
+
+    def test_elasticpot_line_says_9200_and_portbridge_dialled_9201(self):
+        # #3811
+        pb = portbridge(dial("203.0.113.26", 57906, T, "10.8.0.2:9201"))
+        doc = {"event": {"sensor": "elasticpot"}, "honeypot": {
+            "src_ip": PEER, "src_port": 57906, "dst_port": 9200, "timestamp": iso(T + 1)}}
+        d = bt.decide(doc, pb, {})
+        self.assertEqual(d.outcome, bt.ATTRIBUTED)
+        self.assertEqual(d.writes["src_ip"], [PEER, "203.0.113.26"])
+        rival = portbridge(dial("203.0.113.26", 57906, T, "10.8.0.2:9201"), dial("198.51.100.26", 57906, T, "10.8.0.2:445"))
+        self.assertEqual(bt.decide(doc, rival, {}).outcome, bt.ATTRIBUTED, "the 445 dial is another service")
+
+    def test_a_late_mailoney_mail_body_joins_on_the_connections_first_line(self):
+        # #3815
+        pb = portbridge(dial("203.0.113.27", 44980, T, "10.8.0.2:25"))
+        def line(event, at, session_id="809"):
+            return {"event": {"sensor": "mailoney"}, "honeypot": {
+                "src_ip": PEER, "src_port": 44980, "dst_port": 25, "session_id": session_id,
+                "event": event, "timestamp": iso(at)}}
+        envelope, body = line("envelope", T + 1), line("mail-body", T + 21)
+        starts = {}
+        for doc in (body, envelope):  # order must not matter
+            bt.record_start(starts, doc)
+        self.assertEqual(bt.decide(body, pb, starts).writes["src_ip"], [PEER, "203.0.113.27"])
+        self.assertEqual(bt.decide(body, pb, {}).outcome, bt.UNMATCHED, "on its own time it misses the dial")
+        # A counter that restarted with the container: the old start is not this connection's.
+        stale = line("mail-body", T + 3600)
+        self.assertEqual(bt.decide(stale, pb, starts).outcome, bt.UNMATCHED)
+        # Same source port, another connection (other counter value): its own start.
+        other = line("mail-body", T + 3600, session_id="810")
+        self.assertEqual(bt.decide(other, pb, starts).outcome, bt.UNMATCHED)
+
+    def test_apply_replaces_the_workers_unmatched_label(self):
+        pb = portbridge(dial("203.0.113.28", 57909, T, "10.8.0.2:9201"))
+        doc = {"event": {"sensor": "elasticpot"}, "honeypot": {
+            "src_ip": PEER, "src_port": 57909, "dst_port": 9200, "timestamp": iso(T + 1), "tunnel_attribution": "unmatched"}}
+        label = bt.decide(doc, pb, {}).writes["tunnel_attribution"]
+        self.assertEqual(label, [[None, "unmatched"], "portbridge"])
+        self.assertIn("expected instanceof List", bt.UPDATE_SCRIPT)
 
 
 class FakeES:

@@ -18,7 +18,7 @@ The rule is the worker's rule (backend-service ip_enrichment/viamap.rs
 * The join key is the sensor-observed source port, which is portbridge's
   `via_port`, and the time the *connection* started -- the earliest line of
   the session for sensors that name sessions (cowrie `session`, conpot `id`,
-  dionaea's connection `id`), otherwise the line's own time.
+  mailoney `src_port` + `session_id`, dionaea's connection `id`), otherwise the line's own time.
 * A dial matches when it was stamped up to DIAL_LEAD_SECONDS before that
   start or CLOCK_SKEW_SECONDS after it, on a compatible transport, and on the
   same target port where the sensor's listen port is known to equal it.
@@ -90,6 +90,9 @@ LOOPBACK_IPS = ("127.0.0.1", "::1")
 CLOCK_SKEW_SECONDS = 2
 DIAL_LEAD_SECONDS = 4
 UDP_SESSION_MAX_AGE_SECONDS = 3600
+# mailoney names its connections by src_port + a session counter that restarts
+# with the container (#3815); a session start older than this is not trusted.
+MAILONEY_SESSION_TTL_SECONDS = 15 * 60
 RIVAL_LOOKBACK_SECONDS = 600
 # backfill only: silence in portbridge-v2 longer than this is a gap
 GAP_SECONDS = 300
@@ -115,13 +118,14 @@ TCP, UDP, UNKNOWN = "tcp", "udp", ""
 # connections to one target cannot share a source port at the same time.
 WANT_PORT_FIELD = {
     "dionaea": "dst_port",
-    "elasticpot": "dst_port",
     "mailoney": "dst_port",
     "dns-honeypot": "port",
     "cisco-asa-honeypot": "port",
 }
 # cowrie's compose publishes 19022 -> 2222 and 19023 -> 2223.
 COWRIE_TARGETS = {2222: 19022, 2223: 19023}
+# elasticpot's compose publishes 9201 -> 9200, and portbridge dials 9201 (#3811).
+ELASTICPOT_TARGETS = {9200: 9201}
 CONPOT_UDP_KINDS = ("snmp", "bacnet", "ipmi", "tftp")
 CONPOT_UDP_PORTS = (161, 623, 47808, 69)
 GALAH_PROXIED_PORT = "8890"
@@ -372,11 +376,15 @@ def classify(source: dict) -> tuple[str | None, list]:
             session = (sensor, str(h["session"]))
         elif conpot and h.get("id"):
             session = (sensor, str(h["id"]))
+        elif sensor == "mailoney" and h.get("session_id") not in (None, "") and as_port(h.get("src_port")):
+            session = (sensor, f"{as_port(h.get('src_port'))}/{h['session_id']}")
         want_field = WANT_PORT_FIELD.get(sensor)
         if want_field:
             want = as_port(h.get(want_field))
         elif sensor == "cowrie":
             want = COWRIE_TARGETS.get(as_port(h.get("dst_port")), 0)
+        elif sensor == "elasticpot":
+            want = ELASTICPOT_TARGETS.get(as_port(h.get("dst_port")), 0)
         elif conpot and transport == TCP:
             want = as_port(h.get("dst_port"))
         else:
@@ -424,7 +432,11 @@ def decide(source: dict, pb: Portbridge, starts: dict) -> Decision:
     for need in needs:
         at = need.line_at
         if need.session is not None and need.line_at:
-            at = min(starts.get(need.session, need.line_at), need.line_at)
+            start = starts.get(need.session, need.line_at)
+            if need.session[0] == "mailoney" and need.line_at - start > MAILONEY_SESSION_TTL_SECONDS:
+                at = need.line_at  # a counter that restarted, not this connection's start
+            else:
+                at = min(start, need.line_at)
         outcome, ip, dial_at = resolve(pb, need.via_port, at, need.want_port, need.transport)
         outcomes.append(outcome)
         if outcome == ATTRIBUTED:
@@ -435,7 +447,9 @@ def decide(source: dict, pb: Portbridge, starts: dict) -> Decision:
     if worst != ATTRIBUTED:
         return Decision(worst, {"tunnel_attribution": [None, LABELS[worst]]})
     writes["fleet_peer"] = [None, TUNNEL_PEER_IP]
-    writes["tunnel_attribution"] = [None, LABELS[ATTRIBUTED]]
+    # The live worker has usually labelled the document "unmatched" already;
+    # that label is what an attribution replaces (ambiguous stays final).
+    writes["tunnel_attribution"] = [[None, LABELS[UNMATCHED]], LABELS[ATTRIBUTED]]
     return Decision(ATTRIBUTED, writes, lags)
 
 
@@ -492,7 +506,7 @@ HONEYPOT_SOURCE = [
     "@timestamp", "event.sensor",
     "source.ip",
     "honeypot.sensor", "honeypot.src_ip", "honeypot.src_port", "honeypot.timestamp", "honeypot.time",
-    "honeypot.event_timestamp", "honeypot.eventTime", "honeypot.session", "honeypot.id",
+    "honeypot.event_timestamp", "honeypot.eventTime", "honeypot.session", "honeypot.id", "honeypot.session_id",
     "honeypot.dst_port", "honeypot.port", "honeypot.transport", "honeypot.data_type",
     "honeypot.connection.transport", "honeypot.REMOTE_ADDR", "honeypot.DST_PORT",
     "honeypot.source_ip", "honeypot.sip_message", "honeypot.transport_type",
@@ -526,6 +540,7 @@ def sessions_query(since: str | None, until: str | None) -> dict:
     filters = time_filter(since, until)
     return {"bool": {"filter": filters, "should": [
         {"term": {"event.sensor": "cowrie"}},
+        {"term": {"event.sensor": "mailoney"}},
         {"prefix": {"event.sensor": "conpot"}},
         {"exists": {"field": "honeypot.data.connection.id"}},
         {"exists": {"field": "honeypot.data.parent.id"}},
@@ -548,7 +563,10 @@ for (def w : writes.entrySet()) {
   if (!(cur instanceof Map)) continue;
   def last = parts[parts.length - 1];
   def expected = w.getValue()[0];
-  if (expected == null ? cur.get(last) == null : expected.equals(cur.get(last))) {
+  def current = cur.get(last);
+  boolean holds = expected instanceof List ? expected.contains(current)
+      : (expected == null ? current == null : expected.equals(current));
+  if (holds) {
     cur.put(last, w.getValue()[1]);
     changed = true;
   }

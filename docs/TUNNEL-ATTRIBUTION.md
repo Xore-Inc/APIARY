@@ -78,8 +78,8 @@ mirrored constant for constant in `scripts/backfill-tunnel-attribution.py`.
 | Input | Source |
 |---|---|
 | via_port | the sensor's source port (`src_port`, hellpot `REMOTE_ADDR`, sentrypeer `source_ip`, galah `srcPort`, beelzebub `event.SourcePort`, dionaea incident `remote_port`) |
-| connection start | the earliest line of the session for cowrie (`session`), conpot (`id`) and dionaea incidents (connection `id`); otherwise the line's own time |
-| target port | where the sensor's port equals portbridge's target: dionaea, elasticpot, mailoney, dns-honeypot, cisco-asa, hellpot (8080), galah (8888), conpot TCP; cowrie mapped 2222→19022, 2223→19023 |
+| connection start | the earliest line of the session for cowrie (`session`), conpot (`id`), mailoney (`src_port` + `session_id`, trusted for 15 minutes because the counter restarts with the container; its `mail-body` line is written seconds after the envelope lines) and dionaea incidents (connection `id`); otherwise the line's own time |
+| target port | where the sensor's port equals portbridge's target: dionaea, mailoney, dns-honeypot, cisco-asa, hellpot (8080), galah (8888), conpot TCP; cowrie mapped 2222→19022, 2223→19023; elasticpot mapped 9200→9201 (Compose publishes `9201:9200`) |
 | transport | the sensor's own field, or known per sensor; TCP and UDP ports are separate namespaces |
 
 A dial matches when it was stamped from `DIAL_LEAD_SECONDS` (4) before the
@@ -200,6 +200,9 @@ The dry run prints one row per sensor with every outcome. `--apply` writes in
 batches of 500 through `_update_by_query` on each document's backing index,
 with `pipeline=geoip-honeypot`. Each field is written only while it still holds
 the tunnel value and only while `source.ip` is absent, so a re-run is a no-op.
+`honeypot.tunnel_attribution` is replaced when it is absent or `unmatched` (the
+label the live worker leaves on a line it could not join), so a document the
+backfill attributes ends as `portbridge`; `ambiguous` is never overwritten.
 `--since` and `--until` restrict by `@timestamp`, and `--sensor` restricts by
 sensor. Expect two full scans of the unattributed documents plus one of
 `portbridge-v2`. At this size it takes tens of minutes, plus the writes.
