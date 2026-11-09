@@ -39,13 +39,15 @@
 # Idempotent: re-running is a no-op, so it is safe on every install and safe
 # to run by hand against a live realm to repair one.
 #
-# Run on the homeserver (needs docker exec access to hp-keycloak).
+# Run on the homeserver as root. #3824: authenticates with the permanent admin
+# client (secrets/admin-client-secret, see provision-admin-client.sh) through
+# lib-admin.sh instead of a kcadm password on the command line.
 set -euo pipefail
+# shellcheck source-path=SCRIPTDIR source=lib-admin.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib-admin.sh"
 
 REALM="${KEYCLOAK_REALM:-apiary}"
-KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
-KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-provision-account-console-scopes.config}"
-KC="/opt/keycloak/bin/kcadm.sh"
+ADMIN_ID="${KEYCLOAK_ADMIN_CLIENT_ID:-apiary-ops-admin}"
 
 # stock Keycloak's default set for account-console.
 DEFAULT_SCOPES=(acr email profile roles web-origins)
@@ -54,52 +56,34 @@ DEFAULT_SCOPES=(acr email profile roles web-origins)
 # unless something explicitly asks for one.
 OPTIONAL_SCOPES=(offline_access)
 
-: "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
-: "${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}"
+kc_login "${ADMIN_ID}" "${KEYCLOAK_SECRETS_DIR}/admin-client-secret"
 
-docker exec "$KC_CONTAINER" "$KC" config credentials \
-  --config "$KC_CONFIG" --server http://127.0.0.1:8080 --realm master \
-  --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
-
-cleanup() { docker exec "$KC_CONTAINER" rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
-
-client_uuid="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-  -q "clientId=account-console" --fields id --format csv --noquotes --config "$KC_CONFIG" | tr -d '\r')"
+client_uuid="$(kc_client_uuid "${REALM}" account-console)"
 [[ -n "$client_uuid" ]] || { echo "account-console client not found in realm $REALM -- import the realm first" >&2; exit 1; }
 
-# Resolve scope name -> id from one listing rather than per-name lookups.
-# `kcadm get client-scopes -q name=<x>` does NOT filter (confirmed live: it
-# returns the whole list regardless), so a per-name query silently hands back
-# the *first* scope every time -- which looks like it worked and assigns the
-# wrong scope five times over.
-scope_ids="$(docker exec "$KC_CONTAINER" "$KC" get client-scopes -r "$REALM" \
-  --fields id,name --format csv --noquotes --config "$KC_CONFIG" | tr -d '\r')"
-
+# One listing, resolved by exact name (#1697: a per-name kcadm query did not
+# filter and silently returned the first scope every time).
+kc_api GET "/${REALM}/client-scopes" > "${kc_tmp}/scopes.json"
 scope_id_for() {
-  local want="$1"
-  while IFS=, read -r id name; do
-    [[ "$name" == "$want" ]] && { printf '%s' "$id"; return 0; }
-  done <<< "$scope_ids"
-  return 1
+  python3 -c 'import json,sys; m=[s["id"] for s in json.load(open(sys.argv[1])) if s["name"]==sys.argv[2]]; print(m[0] if m else "")' \
+    "${kc_tmp}/scopes.json" "$1"
 }
 
 assign() {
   local kind="$1" name="$2" id
-  if ! id="$(scope_id_for "$name")"; then
+  id="$(scope_id_for "$name")"
+  if [[ -z "$id" ]]; then
     echo "  ? scope '$name' does not exist in realm $REALM -- skipping" >&2
     return 0
   fi
-  docker exec "$KC_CONTAINER" "$KC" update \
-    "clients/${client_uuid}/${kind}-client-scopes/${id}" -r "$REALM" --config "$KC_CONFIG"
-  echo "  + ${kind%%-*} scope: $name"
+  kc_api PUT "/${REALM}/clients/${client_uuid}/${kind}-client-scopes/${id}" >/dev/null
+  echo "  + ${kind} scope: $name"
 }
 
 for scope in "${DEFAULT_SCOPES[@]}"; do assign default "$scope"; done
 for scope in "${OPTIONAL_SCOPES[@]}"; do assign optional "$scope"; done
 
-applied="$(docker exec "$KC_CONTAINER" "$KC" get "clients/${client_uuid}/default-client-scopes" \
-  -r "$REALM" --config "$KC_CONFIG" | grep '"name"' | sed 's/.*: "//;s/".*//' | sort | tr '\n' ' ' || true)"
+applied="$(kc_api GET "/${REALM}/clients/${client_uuid}/default-client-scopes" | kc_json '" ".join(sorted(s["name"] for s in d))')"
 echo "account-console default scopes now: ${applied:-<none>}"
 
 for scope in "${DEFAULT_SCOPES[@]}"; do

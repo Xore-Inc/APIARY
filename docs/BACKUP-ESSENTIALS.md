@@ -327,7 +327,8 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    `/var/dockge/stacks/<stack>/secrets/`. **The mode depends on who reads
    the file; `0600` root-only breaks two of them:**
    - `honeypot-keycloak` secrets (`postgres-password`,
-     `bootstrap-admin-password`): `root:root 0440`, directory `0750`
+     `admin-client-secret` -- the permanent master admin client since #3824):
+     `root:root 0440`, directory `0750`
      (Postgres and Keycloak run as uid 1000).
    - `oidc-client-secret` for `honeypot-dashboard` and `apiary-dashboard`:
      `github-deploy-runner:deploy-runner 0440`, directory

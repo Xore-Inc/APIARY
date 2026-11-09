@@ -1,0 +1,19 @@
+{
+  "_comment": "#3824: the master-realm settings that were configured by hand on the live realm and are not Keycloak defaults. --import-realm never touches master (it exists before the import runs), so provision-master-realm.sh applies this as a partial PUT after every fresh database. example.invalid is rendered with KEYCLOAK_PUBLIC_DOMAIN like apiary-realm.json. Besides these fields the script sets the webauthn-authenticator step of 'Browser - Conditional 2FA' to ALTERNATIVE, matching the apiary realm.",
+  "loginTheme": "apiary",
+  "accountTheme": "apiary",
+  "attributes": {
+    "darkMode": "true"
+  },
+  "webAuthnPolicyRpEntityName": "keycloakxore",
+  "webAuthnPolicyRpId": "example.invalid",
+  "webAuthnPolicyAttestationConveyancePreference": "none",
+  "webAuthnPolicyUserVerificationRequirement": "required",
+  "webAuthnPolicyAvoidSameAuthenticatorRegister": true,
+  "webAuthnPolicyPasswordlessRpEntityName": "keycloakxore",
+  "webAuthnPolicyPasswordlessRpId": "example.invalid",
+  "webAuthnPolicyPasswordlessAttestationConveyancePreference": "none",
+  "webAuthnPolicyPasswordlessAvoidSameAuthenticatorRegister": true,
+  "webAuthnPolicyPasswordlessPasskeysEnabled": true,
+  "webAuthnPolicyPasswordlessMediation": "conditional"
+}

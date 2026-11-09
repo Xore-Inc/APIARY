@@ -367,7 +367,9 @@ For a release you pin by digest (apiary-dashboard), also run
 
 Do not rely on the bootstrap admin: in #3708 it no longer existed in the
 `master` realm (the real users were different accounts), so the Keycloak
-admin API was unusable. That matters for
+admin API was unusable. Since #3824 the permanent admin client
+`apiary-ops-admin` (`honeypot-keycloak/secrets/admin-client-secret`, restored
+with the other secrets) covers this; `keycloak/lib-admin.sh` logs in with it. That matters for
 the poller secret in [part 9](#9-workers-models-units).
 
 ## 7. Elasticsearch, init, then everything else

@@ -23,40 +23,21 @@
 #   DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
 #     ./provision-dashboard-oidc-secret.sh
 #
-# Run on the homeserver (needs docker exec access to hp-keycloak).
+# Run on the homeserver as root. #3824: authenticates with the permanent admin
+# client (secrets/admin-client-secret) through lib-admin.sh.
 set -euo pipefail
+# shellcheck source-path=SCRIPTDIR source=lib-admin.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib-admin.sh"
 
 REALM="${KEYCLOAK_REALM:-apiary}"
-KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
-KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-provision-dashboard-oidc-secret.config}"
+ADMIN_ID="${KEYCLOAK_ADMIN_CLIENT_ID:-apiary-ops-admin}"
 SECRETS_DIR="${DASHBOARD_SECRETS_DIR:-/var/dockge/stacks/honeypot-dashboard/secrets}"
 CLIENT_ID="${DASHBOARD_CLIENT_ID:-apiary-dashboard}"
-KC="/opt/keycloak/bin/kcadm.sh"
 
-: "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
-: "${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}"
+kc_login "${ADMIN_ID}" "${KEYCLOAK_SECRETS_DIR}/admin-client-secret"
 
-docker exec "$KC_CONTAINER" "$KC" config credentials \
-  --config "$KC_CONFIG" --server http://127.0.0.1:8080 --realm master \
-  --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
-
-# #2194: from this point the config file holds the live admin access token
-# -- remove it on every exit path, not just success (a mid-run failure under
-# set -euo pipefail used to leave it in hp-keycloak:/tmp until restart).
-cleanup() { docker exec "$KC_CONTAINER" rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
-
-client_uuid="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-  -q "clientId=${CLIENT_ID}" --fields id --format csv --noquotes --config "$KC_CONFIG")"
+client_uuid="$(kc_client_uuid "${REALM}" "${CLIENT_ID}")"
 [[ -n "$client_uuid" ]] || { echo "${CLIENT_ID} client not found in realm $REALM -- import the realm first" >&2; exit 1; }
-
-secret="$(docker exec "$KC_CONTAINER" "$KC" get \
-  "clients/${client_uuid}/client-secret" -r "$REALM" --config "$KC_CONFIG" \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')"
-
-install -d -m 750 "$SECRETS_DIR"
-umask 077
-printf '%s' "$secret" > "$SECRETS_DIR/oidc-client-secret"
 
 # Group-own the secret by the group honeypot-dashboard's compose joins the
 # container to, so dashboard-next can actually read it.
@@ -77,13 +58,15 @@ printf '%s' "$secret" > "$SECRETS_DIR/oidc-client-secret"
 # Keycloak for what is a local file-permission problem.
 DASHBOARD_SECRETS_GROUP="${DASHBOARD_SECRETS_GROUP:-deploy-runner}"
 if secret_gid="$(getent group "$DASHBOARD_SECRETS_GROUP" | cut -d: -f3)" && [[ -n "$secret_gid" ]]; then
-  chown "root:$secret_gid" "$SECRETS_DIR" "$SECRETS_DIR/oidc-client-secret"
+  owner="root:$secret_gid"
   echo "secret group-owned by $DASHBOARD_SECRETS_GROUP (gid $secret_gid)"
 else
-  chown root:root "$SECRETS_DIR/oidc-client-secret"
+  owner="root:root"
   echo "WARNING: group '$DASHBOARD_SECRETS_GROUP' does not exist -- left root:root." >&2
   echo "         dashboard-next runs unprivileged and will fail with EACCES reading this." >&2
 fi
+install -d -m 750 "$SECRETS_DIR"
+chown "$owner" "$SECRETS_DIR"
 chmod 750 "$SECRETS_DIR"
-chmod 440 "$SECRETS_DIR/oidc-client-secret"
+kc_write_secret "${REALM}" "${client_uuid}" "$SECRETS_DIR/oidc-client-secret" "$owner" 440
 echo "wrote client secret to $SECRETS_DIR/oidc-client-secret"

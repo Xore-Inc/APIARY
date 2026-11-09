@@ -38,7 +38,7 @@ jq -e '
     .attributes["pkce.code.challenge.method"] == "S256" and
     (if (.clientId == "apiary-dashboard" or .clientId == "apiary-dashboard-rewrite") then (.redirectUris | length == 2) else (.redirectUris | length == 1) end) and
     (all(.redirectUris[]; startswith("https://") and (contains("*") | not))) and
-    (.webOrigins | length == 1) and
+    (if .clientId == "apiary-dashboard-rewrite" then (.webOrigins | length == 2) else (.webOrigins | length == 1) end) and
     (all(.webOrigins[]; startswith("https://") and (contains("*") | not)))
   )) and
   # #3578: the rewrite dashboard client maps the same access/admin roles as
@@ -50,7 +50,9 @@ jq -e '
   (.groups[] | select(.name == "users") | .clientRoles["apiary-dashboard-rewrite"] == ["access"]) and
   (.groups[] | select(.name == "administrators") | .clientRoles["apiary-dashboard-rewrite"] == ["access", "admin"]) and
   (.clients[] | select(.clientId == "apiary-dashboard-rewrite") |
-    (.redirectUris | sort == ["https://beta.honeypot.example.invalid/auth/callback", "https://honeypot.example.invalid/auth/callback"])
+    # #3824: beta is its own host (beta.<domain>), not a honeypot.<domain>
+    # subdomain -- the live client that served the beta since 2026-10-08.
+    (.redirectUris | sort == ["https://beta.example.invalid/auth/callback", "https://honeypot.example.invalid/auth/callback"])
   ) and
   # auth-events-poller (#1066) is deliberately shaped differently -- a
   # machine-only service-account client with no browser flow, so none of
