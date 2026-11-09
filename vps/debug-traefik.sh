@@ -54,7 +54,7 @@ tcp_open() { timeout 3 bash -c "</dev/tcp/$1/$2" 2>/dev/null; }
 VHOSTS=(
   "www               |www      |8080  |static site (nginx on home)"
   "EveBox            |evebox   |19636 |Suricata EVE GUI"
-  "Honeypot dashboard|dashboard|19090 |live attack dashboard"
+  "Honeypot dashboard|honeypot |19092 |live attack dashboard (apiary-dashboard)"
   "Kibana            |kibana   |19601 |ELK Kibana"
   "Tanner web        |tanner   |19091 |SNARE/tanner web UI"
   "Snare honeypot    |snare    |19082 |fake website honeypot"
@@ -232,7 +232,7 @@ echo "  Backend CLOSED → home service not started (check home docker ps)"
 echo
 echo "  Home ports use 19xxx prefix for honeypot services:"
 echo "    evebox.<domain>   → Traefik backend: 10.8.0.2:19636"
-echo "    dashboard         → 10.8.0.2:19090"
+echo "    honeypot (dash)   → 10.8.0.2:19092"
 echo "    kibana            → 10.8.0.2:19601"
 echo "    tanner            → 10.8.0.2:19091"
 echo "    snare             → 10.8.0.2:19082"

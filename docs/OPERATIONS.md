@@ -391,10 +391,13 @@ scripts/verify-deploy.sh --healthz-exec \
 # Without one, name the expected revision yourself:
 scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
-
-# The frontend's form:
-scripts/verify-deploy.sh --healthz-url http://host:19090/build.json
 ```
+
+The `--healthz-url` form read the legacy frontend's `/build.json` on 19090,
+which left with frontend-next in #3749. The dashboard (Xore-Inc/apiary-dashboard)
+carries its revision in the image label `org.opencontainers.image.revision`
+(`docker inspect hp-apiary-dashboard`); `--healthz-url` still works for any
+endpoint whose JSON body carries `revision`.
 
 Exit codes are the point, and are deliberately three-valued: **0** the
 deployed revision matches; **1** a finding (missing, unstamped, malformed, or

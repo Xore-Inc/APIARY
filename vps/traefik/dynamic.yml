@@ -376,8 +376,8 @@ http:
       # its session itself (docs/KEYCLOAK-CUTOVER.md's route matrix). The
       # oidc-dashboard compatibility gateway this used to route through was
       # retired outright (no router has referenced it since #1026); only the
-      # oidc-dashboard network remains, for socat-hp-dashboard/-b and
-      # Traefik itself to reach the dashboard replicas directly.
+      # oidc-dashboard network remains, for socat-hp-dashboard-next (the
+      # apiary-dashboard bridge) and Traefik itself to reach the dashboard.
       #
       # #1897: SAMEORIGIN rather than DENY. The dashboard frames its own
       # PDFs and reports, and the three path-specific exceptions added for

@@ -1023,8 +1023,8 @@ services:
   # runtime) is retired -- every router that used to target it now points
   # directly at the honeypot-dashboard native service (vps/traefik/
   # dynamic.yml), verified live. The oidc-dashboard *network* below is not
-  # removed: socat-hp-dashboard/-b and Traefik itself still use it to reach
-  # the dashboard replicas directly.
+  # removed: socat-hp-dashboard-next (the apiary-dashboard bridge) and Traefik
+  # itself still use it to reach the dashboard directly.
 
   # =====================================================================
   # SURICATA IDS

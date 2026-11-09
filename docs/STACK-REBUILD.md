@@ -325,7 +325,7 @@ a fresh pull first with `docker compose rm -f suricata-update` if you want one.
 # On the homeserver:
 docker ps --filter health=unhealthy --format '{{.Names}}'
 docker ps -a --filter status=exited --format '{{.Names}}\t{{.Status}}'
-curl -s -o /dev/null -w '%{http_code}\n' http://10.8.0.2:19090/   # dashboard
+curl -s -o /dev/null -w '%{http_code}\n' http://10.8.0.2:19092/healthz   # dashboard (apiary-dashboard)
 docker run --rm --network honeynet curlimages/curl:latest -s \
   http://elasticsearch:9200/honeypot-v2-*/_count                  # events flowing
 ```
