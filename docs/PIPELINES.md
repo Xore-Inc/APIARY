@@ -56,7 +56,7 @@ flowchart LR
     w5["inventory + es-importer<br/>→ payload/report indices"]
   end
 
-  dash["Dashboard tier<br/>frontend-next ⇄ backend-service"]
+  dash["Dashboard tier<br/>apiary-dashboard ⇄ backend-service"]
 
   s1 & s2 & s3 --> logs
   logs -->|"tunnel-blind sensors: via_port join"| enrich

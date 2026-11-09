@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verify that frontend-next/public/static/theme.css is still the exact
-# stylesheet recorded in frontend-next/theme.lock.
+# Verify that branding/vendor/xore-theme/theme.css is still the exact
+# stylesheet recorded in branding/vendor/xore-theme/theme.lock.
 #
 # The hash check is offline and always runs. When the upstream repository is
 # reachable (or a local clone is passed as $1) the vendored copy is also
@@ -11,9 +11,11 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# #1659: repointed at frontend-next after the Go dashboard's retirement.
-lock="$root/arcane/home/honeypot-dashboard/frontend-next/theme.lock"
-vendored="$root/arcane/home/honeypot-dashboard/frontend-next/public/static/theme.css"
+# #1659: repointed at frontend-next after the Go dashboard's retirement;
+# #3749: moved to branding/vendor/xore-theme when frontend-next was removed.
+# The copy now backs the branding token check (branding/scripts/check_theme_sync.py).
+lock="$root/branding/vendor/xore-theme/theme.lock"
+vendored="$root/branding/vendor/xore-theme/theme.css"
 
 [ -f "$lock" ] || { echo "missing $lock" >&2; exit 1; }
 [ -f "$vendored" ] || { echo "missing $vendored" >&2; exit 1; }
@@ -33,7 +35,7 @@ fi
 
 actual="$(sha256sum "$vendored" | cut -d' ' -f1)"
 if [ "$actual" != "$expected" ]; then
-  echo "frontend-next/public/static/theme.css does not match theme.lock" >&2
+  echo "branding/vendor/xore-theme/theme.css does not match theme.lock" >&2
   echo "  expected sha256 $expected (Xore/theme@${commit:0:7})" >&2
   echo "  actual   sha256 $actual" >&2
   echo "Re-run scripts/sync-theme.sh to vendor the pinned stylesheet." >&2
@@ -63,7 +65,7 @@ fi
 
 if [ -n "$upstream" ]; then
   if ! cmp -s "$upstream" "$vendored"; then
-    echo "frontend-next/public/static/theme.css differs from Xore/theme@$commit" >&2
+    echo "branding/vendor/xore-theme/theme.css differs from Xore/theme@$commit" >&2
     diff -u "$upstream" "$vendored" | head -n 40 >&2 || true
     rm -f "$upstream"
     exit 1

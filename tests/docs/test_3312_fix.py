@@ -52,7 +52,7 @@ AUDIT = REPO_ROOT / "scripts" / "isolation-audit.sh"
 HOMESERVER = REPO_ROOT / "scripts" / "install-homeserver.sh"
 
 HELPER_INSTALLED_PATH = "/opt/github-ci-runner-helpers/dashboard-source-health.sh"
-ROOT_ONLY_ENV = "/var/dockge/stacks/honeypot-dashboard/.env"
+ROOT_ONLY_ENV = "/var/dockge/stacks/honeypot-dashboard-backend/.env"  # #3749: the backend's own .env
 LEGACY_TOKEN_ENV = "/opt/stacks/honeypot-dashboard/.env"
 
 
@@ -134,7 +134,7 @@ def test_helper_takes_no_arguments_and_keeps_the_token_out_of_argv():
         "curl -H would put the service token in the host's process list (#3312)"
     )
     assert 'header = "X-Service-Token: %s"' in helper, (
-        "the helper must send the token as the BFF's X-Service-Token header"
+        "the helper must send the token as the backend's X-Service-Token header"
     )
 
 

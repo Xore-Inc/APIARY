@@ -317,7 +317,7 @@ fn redact_record(mut record: Value) -> Value {
 /// document straight through.
 ///
 /// Restored (2026-08-19) after a prior pass deleted this as "dead code" on
-/// the theory that frontend-next only reads the list through the generic
+/// the theory that the dashboard (then frontend-next) only reads the list through the generic
 /// /api/v1/store/canarytokens proxy — true for canarytokens.tsx, but
 /// credentials.tsx (added in the same PR that deleted this) calls this
 /// exact route by name to populate its link-token dropdown, and the

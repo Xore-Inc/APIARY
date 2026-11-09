@@ -192,12 +192,22 @@ with whatever the other side currently runs.
    signs.
 3. **Ship the dashboard that signs** (Xore-Inc/apiary-dashboard#249), with
    the private key. Every other BFF that calls the backend with
-   `SERVICE_TOKEN` must sign too or be retired first; the legacy
-   `dashboard-next` in this repo does not sign.
+   `SERVICE_TOKEN` must sign too or be retired first. The legacy
+   `dashboard-next`, which did not sign, was retired in #3749.
 4. **Watch the log** until `[E-ACTOR-ASSERTION]` stays silent through a
    representative period: an admin and a viewer session, every admin action
    the team uses, a Workbench run.
 5. **Set `ACTOR_ASSERTION_MODE=enforce`** and redeploy the backend only.
+
+Production state: both backends (`honeypot-dashboard-backend` and the
+mounted one in `honeypot-dashboard`) have run `enforce` since 2026-11-09
+(#3749), after the legacy `dashboard-next` stopped. Verified then:
+actor-scoped reads from the dashboard answer 200, an assertion signed with
+the deployed key passes a viewer mutation, the same call unsigned is a 401,
+and a viewer on an admin route is a 403. Dashboard mutations through the
+browser were not exercised end to end at that point, because of
+Xore-Inc/apiary-dashboard#291 (refused by the dashboard's own CSRF guard
+before they reach the backend).
 
 Rollback, in this order:
 

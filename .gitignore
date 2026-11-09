@@ -19,7 +19,7 @@ __pycache__/
 
 # CI's JUnit XML and retained test logs (#3319). Written by the quality
 # workflow's artifact steps and uploaded, never committed -- same reasoning
-# as the Playwright run artifacts already ignored inside frontend-next.
+# as the Playwright run artifacts frontend-next used to ignore (#3749).
 .ci-artifacts/
 
 # Filled-in installer answer files. These carry real WireGuard private keys,

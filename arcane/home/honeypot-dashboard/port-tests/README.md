@@ -1,8 +1,9 @@
 # Port smoke suite (#1608 / #1610 / #1616)
 
 Live-data smoke tests for the modernization port: the Rust service tier
-(`backend-service/`), the TanStack Start SSR/BFF tier (`frontend-next/`),
-and the worker loops. Every check runs against the **real** Elasticsearch,
+(`backend-service/`) and the worker loops. The frontend suites left with
+`frontend-next` (#3749); the dashboard is Xore-Inc/apiary-dashboard and
+carries its own tests. Every check runs against the **real** Elasticsearch,
 so results reflect actual parity, not fixtures.
 
 ## Prerequisites
@@ -12,29 +13,20 @@ so results reflect actual parity, not fixtures.
   (it dies occasionally — restart it before blaming a failure on code; the
   target is Docker-assigned, so if the tunnel lands but ES doesn't answer,
   re-check `docker inspect hp-elasticsearch` for the current address).
-- Rust toolchain (`cargo`) and Node 22+ / `npm ci` done in `frontend-next/`.
+- Rust toolchain (`cargo`).
 
 ## Scripts
 
 | script | covers | writes to live ES? |
 | --- | --- | --- |
 | `backend-api.sh` | every `/api/v1` endpoint: KPIs, dashboard aggregation, events + filters + q, stores, charts, session/ip/payload/replay details, artifacts, SSE, report PDF | ip-block round trip on the TEST-NET-3 address `203.0.113.99` (restored) |
-| `frontend-ssr.sh` | every route SSRs 200 under `OIDC_DISABLED=1`, 404 page, chart/SSE proxies, unauthenticated blackhole export | no |
-| `auth-flow.sh` | auth guard: SSR redirect to `/auth/login`, 401 API proxies, blackhole export stays open (tunnel trust) | no |
 | `worker-notifier.sh` | `WORKER_LOOPS=alert-notifier` baseline pass | yes — upserts `dashboard-alert-state-v1` on the same key/shape contract as the Go alertManager (safe alongside it) |
 | `worker-reports-scheduler.sh` | `WORKER_LOOPS=reports-scheduler` scheduled-tick parity against the old Go `reportScheduleLoop`'s own test contract (success path + #1340 no-hot-loop failure path) | yes — two throwaway definitions in `dashboard-reports-definitions-v1` + one generated doc in `dashboard-generated-reports-v1`, all deleted at the end |
-| `bff-load.sh` | #1616 load-test gate: cluster.mjs actually forks WEB_CONCURRENCY workers; SSE fan-out + burst navigation run concurrently against artificially tight caps and the BFF sheds (503) instead of hanging/500ing/crashing | no |
 
 Run one: `bash port-tests/backend-api.sh`
-Run all: `for s in port-tests/{backend-api,frontend-ssr,auth-flow,worker-notifier,worker-reports-scheduler}.sh; do bash "$s" || exit 1; done`
+Run all: `for s in port-tests/{backend-api,worker-notifier,worker-reports-scheduler}.sh; do bash "$s" || exit 1; done`
 
-`bff-load.sh` is slower and noisier (concurrent bursts, not single checks) than
-the rest of the sweep, so it's not in the "run all" loop above — run it on
-its own when touching `lib/backend.server.ts`, `lib/backpressure.server.ts`,
-`server/cluster.mjs`, or any of the byte-streaming `api/*` proxy routes.
-
-Env knobs: `ES_URL`, `BE_PORT` (18081), `FE_PORT` (14173),
-`SKIP_FE_BUILD=1` to reuse the last vite build,
+Env knobs: `ES_URL`, `BE_PORT` (18081),
 `PORT_TESTS_MAX_SKIPS=N` to fail a run whose skip count exceeds N
 (default: skips stay exit-zero — but they are always counted and listed).
 
