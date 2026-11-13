@@ -1,7 +1,10 @@
 [Unit]
 Description=Watch for honeypot Ghidra analysis requests
 Documentation=file:/opt/honeypot-ghidra/DASHBOARD_INTEGRATION_PLAN.md
-After=docker.service
+# No After=docker.service here (#3742): a .path unit is ordered Before=paths.target,
+# which basic.target needs, and docker.service starts after basic.target (via
+# firewalld). The ordering made a boot cycle; on 2026-11-13 systemd broke it by
+# dropping firewalld's start. The triggered service keeps After=docker.service.
 
 [Path]
 # The dashboard writes {sha256}.request here; it never calls the Ghidra REST
