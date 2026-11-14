@@ -475,7 +475,7 @@ pub async fn acknowledge(
 /// store_page_excluding for what a wrong one costs.
 type StoreConfig = (&'static str, &'static str, &'static str, &'static [&'static str]);
 
-fn store_config(name: &str) -> Option<StoreConfig> {
+pub(crate) fn store_config(name: &str) -> Option<StoreConfig> {
     Some(match name {
         // #1611 workstream E.9: `error`, `details.username`, and
         // `details.redirect_uri` are already present here (no excludes) —
@@ -496,7 +496,12 @@ fn store_config(name: &str) -> Option<StoreConfig> {
         // sort (`sort=@timestamp:asc`) — the campaign-verdict documents
         // this index holds have no last_seen field at all (see the
         // agent-intrusion-worker port's build_campaign_verdict, #1610).
-        "agent-campaigns" => ("agent-intrusion-campaigns", "@timestamp", "date", &[]),
+        // #3854: `events` (every correlated event with its rule matches and
+        // decode chains) is ~200 KB per campaign, so 100 list rows were
+        // 21 MB and the dashboard's list failed to load. The list carries
+        // `event_count`; one campaign's events come with
+        // /api/v1/store/agent-campaigns/{id}.
+        "agent-campaigns" => ("agent-intrusion-campaigns", "@timestamp", "date", &["events"]),
         // #3111: auth_token is the platform's password-equivalent
         // management credential (canarytokens.rs's dedicated list/create
         // endpoints already strip it via redact_record()) -- this generic
@@ -748,6 +753,12 @@ mod store_config_tests {
         // credential leaks to any authenticated non-admin operator.
         let (_, _, _, excludes) = store_config("canarytokens").expect("canarytokens is a known store");
         assert!(excludes.contains(&"auth_token"), "canarytokens store must exclude auth_token");
+    }
+
+    #[test]
+    fn agent_campaign_list_rows_leave_out_their_events() {
+        let (_, _, _, excludes) = store_config("agent-campaigns").expect("agent-campaigns is a known store");
+        assert!(excludes.contains(&"events"));
     }
 
     #[test]

@@ -224,19 +224,31 @@ macro_rules! document_route {
 }
 
 #[utoipa::path(get, path = "/api/v1/store/{name}/{id}", summary = "One allowlisted store document.",
-    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, agent-campaigns or dead-letters."), ("id" = inline(String), Path, description = "Document id.")),
+    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, agent-campaigns or dead-letters (the list's own index)."), ("id" = inline(String), Path, description = "Document id.")),
     responses((status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"), (status = 404, description = "No such document or store.", body = inline(serde_json::Value), content_type = "application/json"), (status = 502, description = "Elasticsearch failed.", body = String, content_type = "text/plain")), security(("serviceToken" = [])))]
 pub async fn store_detail(State(state): State<AppState>, Path((name, id)): Path<(String, String)>) -> Response {
-    let index = match name.as_str() {
-        "ml-anomalies" => "ml-worker-state",
-        "llm-analysis" => "llm-worker-state",
-        "agent-campaigns" => "agent-campaigns-v1",
+    let Some(index) = store_detail_index(&name) else {
+        return Ok((StatusCode::NOT_FOUND, Json(Value::Null)));
+    };
+    doc(&state, index, id).await
+}
+
+/// The index behind each store that serves single documents.
+fn store_detail_index(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // #3854: each one reads the index its list reads (stores.rs
+        // `store_config`). These were "ml-worker-state" and
+        // "llm-worker-state" (the workers' own bookkeeping) and
+        // "agent-campaigns-v1" (no such index), so every anomaly, analysis
+        // and agent campaign detail was a 404.
+        "ml-anomalies" => "ml-anomalies",
+        "llm-analysis" => "llm-analysis",
+        "agent-campaigns" => "agent-intrusion-campaigns",
         // The whole rejected event, which the list cuts (stores.rs
         // `summarize_dead_letter`).
         "dead-letters" => "dead-letter-honeypot",
-        _ => return Ok((StatusCode::NOT_FOUND, Json(Value::Null))),
-    };
-    doc(&state, index, id).await
+        _ => return None,
+    })
 }
 
 // campaigns-v1 is written by campaign_correlator; it is empty on a fresh
@@ -2677,5 +2689,21 @@ mod provider_cluster_tests {
         assert!(parse_entity("ioc:provider:hosting").is_err());
         assert!(parse_entity("cluster:provider:").is_err());
         assert!(parse_entity("cluster:provider:hosting").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod store_detail_tests {
+    use super::store_detail_index;
+
+    #[test]
+    fn every_detail_reads_the_index_its_list_reads() {
+        for name in ["ml-anomalies", "llm-analysis", "agent-campaigns", "dead-letters"] {
+            let (list_index, ..) = crate::stores::store_config(name).expect("a known store");
+            assert_eq!(store_detail_index(name), Some(list_index), "{name}");
+        }
+        assert_eq!(store_detail_index("agent-campaigns"), Some("agent-intrusion-campaigns"));
+        assert_eq!(store_detail_index("dead-letters"), Some("dead-letter-honeypot"));
+        assert_eq!(store_detail_index("nope"), None);
     }
 }
