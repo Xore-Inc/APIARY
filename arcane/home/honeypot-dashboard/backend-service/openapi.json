@@ -11930,7 +11930,7 @@
         "operationId": "get_api_v1_store__name___id_",
         "parameters": [
           {
-            "description": "ml-anomalies, llm-analysis, agent-campaigns or dead-letters.",
+            "description": "ml-anomalies, llm-analysis, agent-campaigns or dead-letters (the list's own index).",
             "in": "path",
             "name": "name",
             "required": true,
