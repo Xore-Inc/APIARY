@@ -7,7 +7,7 @@
 # it unchanged. All six *_patch.py scripts were retargeted accordingly.
 # Keep the @sha256: pin: a bare tag is mutable and could roll onto an
 # image with a different Python root, breaking every patch at build time.
-FROM dtagdevsec/conpot:24.04.1@sha256:ff37c322037ad8c1f4f05c2c93f7b60cc5f56b7f37a2c4cbc16901ec70bddb5b
+FROM dtagdevsec/conpot:24.04.2@sha256:be17a238709c78909c7d2e0da55bc3ea66dc3aa46618f0d89b7080f3e7dda3e8
 
 USER root
 COPY persona_patch.py /tmp/persona_patch.py
