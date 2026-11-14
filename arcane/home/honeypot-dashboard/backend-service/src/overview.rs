@@ -61,6 +61,16 @@ pub struct OverviewKpis {
     pub sessions_24h: u64,
     /// Same count over the 24h before that, for the trend.
     pub sessions_previous24h: u64,
+    /// Distinct source addresses in the last 24h (rolling), and in the 24h
+    /// before that. `unique_ips` above covers the whole 48h window, which a
+    /// "last 24h vs. previous 24h" tile cannot show a trend for.
+    pub unique_ips_24h: u64,
+    pub unique_ips_previous24h: u64,
+    /// Login attempts in the last 24h and in the 24h before that, split the
+    /// same way as `last24h`/`previous24h` (hour-aligned on the rollup path,
+    /// rolling on the live one). `logins` above is their sum.
+    pub logins_24h: u64,
+    pub logins_previous24h: u64,
     /// The last 24 hours as 24 hourly buckets, oldest first, with an ISO
     /// timestamp and per-protocol counts. Totals match `hourly`.
     pub hourly_by_protocol: Vec<HourlyByProtocol>,
@@ -88,6 +98,8 @@ pub struct HourlyByProtocol {
 #[derive(Debug, Default, PartialEq)]
 struct LiveWindow {
     unique_ips: u64,
+    unique_ips_24h: u64,
+    unique_ips_previous24h: u64,
     sessions_24h: u64,
     sessions_previous24h: u64,
     hourly_by_protocol: Vec<HourlyByProtocol>,
@@ -96,27 +108,46 @@ struct LiveWindow {
 /// KPI values pulled out of rolled `_all` hour docs: totals summed over the
 /// window, 24h splits aligned to the current hour boundary, and the
 /// always-length-24 oldest-first sparkline.
+/// What `kpis_from_rollup` reads out of the rolled hours.
+#[derive(Debug, PartialEq)]
+struct RollupKpis {
+    total: u64,
+    last24h: u64,
+    previous24h: u64,
+    hourly: Vec<u64>,
+    logins: u64,
+    logins_24h: u64,
+    logins_previous24h: u64,
+}
+
 fn kpis_from_rollup(
     now: chrono::DateTime<chrono::Utc>,
     docs: Vec<(chrono::DateTime<chrono::Utc>, serde_json::Value)>,
-) -> Option<(u64, u64, u64, Vec<u64>, u64)> {
+) -> Option<RollupKpis> {
     let current_hour = rollups::hour_floor(now);
     let day_start = current_hour - chrono::Duration::hours(23);
-    let prev_end = current_hour - chrono::Duration::hours(24);
+    // The 24 hours before `day_start`: hours -47..=-24. (Until #3851 this
+    // was `- 24`, which left the "previous 24h" a single hour.)
+    let prev_start = current_hour - chrono::Duration::hours(47);
     let mut total = 0u64;
     let mut last24h = 0u64;
     let mut previous24h = 0u64;
     let mut logins = 0u64;
+    let mut logins_24h = 0u64;
+    let mut logins_previous24h = 0u64;
     let mut by_hour: std::collections::HashMap<chrono::DateTime<chrono::Utc>, u64> =
         std::collections::HashMap::new();
     for (hour, doc) in &docs {
         let events = doc["events"].as_u64().unwrap_or(0);
+        let hour_logins = doc["logins"].as_u64().unwrap_or(0);
         total += events;
-        logins += doc["logins"].as_u64().unwrap_or(0);
+        logins += hour_logins;
         if *hour >= day_start {
             last24h += events;
-        } else if *hour >= prev_end {
+            logins_24h += hour_logins;
+        } else if *hour >= prev_start {
             previous24h += events;
+            logins_previous24h += hour_logins;
         }
         by_hour.insert(*hour, events);
     }
@@ -126,7 +157,7 @@ fn kpis_from_rollup(
     let hourly: Vec<u64> = (0..24)
         .map(|offset| by_hour.get(&(day_start + chrono::Duration::hours(offset))).copied().unwrap_or(0))
         .collect();
-    Some((total, last24h, previous24h, hourly, logins))
+    Some(RollupKpis { total, last24h, previous24h, hourly, logins, logins_24h, logins_previous24h })
 }
 
 fn change24h_str(previous24h: u64, last24h: u64) -> String {
@@ -165,6 +196,14 @@ fn sessions_from_aggs(window_aggs: &Value) -> u64 {
 fn live_window_aggs() -> Value {
     json!({
         "unique_ips": {"cardinality": {"field": "source.ip"}},
+        "unique_ips_last24h": {
+            "filter": {"range": {"@timestamp": {"gte": "now-24h"}}},
+            "aggs": {"ips": {"cardinality": {"field": "source.ip"}}}
+        },
+        "unique_ips_previous24h": {
+            "filter": {"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}},
+            "aggs": {"ips": {"cardinality": {"field": "source.ip"}}}
+        },
         "sessions_last24h": session_aggs(json!({"range": {"@timestamp": {"gte": "now-24h"}}})),
         "sessions_previous24h": session_aggs(
             json!({"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}})
@@ -194,6 +233,8 @@ fn parse_live_window(aggregations: &Value) -> LiveWindow {
         .unwrap_or(&[]);
     LiveWindow {
         unique_ips: aggregations["unique_ips"]["value"].as_u64().unwrap_or(0),
+        unique_ips_24h: aggregations["unique_ips_last24h"]["ips"]["value"].as_u64().unwrap_or(0),
+        unique_ips_previous24h: aggregations["unique_ips_previous24h"]["ips"]["value"].as_u64().unwrap_or(0),
         sessions_24h: sessions_from_aggs(&aggregations["sessions_last24h"]),
         sessions_previous24h: sessions_from_aggs(&aggregations["sessions_previous24h"]),
         hourly_by_protocol: timeline_from_buckets(buckets),
@@ -284,20 +325,22 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     // deploy, disabled loop) or the rollup read itself errors. The session
     // and protocol-timeline figures are live-only on both paths.
     if let Ok(docs) = rollups::fleet_hours(&state, 48).await {
-        if let Some((total, last24h, previous24h, hourly, logins)) =
-            kpis_from_rollup(chrono::Utc::now(), docs)
-        {
+        if let Some(rolled) = kpis_from_rollup(chrono::Utc::now(), docs) {
             let window = live_window(&state).await?;
             return Ok(Json(OverviewKpis {
-                total,
-                last24h,
-                previous24h,
-                change24h: change24h_str(previous24h, last24h),
+                total: rolled.total,
+                last24h: rolled.last24h,
+                previous24h: rolled.previous24h,
+                change24h: change24h_str(rolled.previous24h, rolled.last24h),
                 unique_ips: window.unique_ips,
-                hourly,
-                logins,
+                hourly: rolled.hourly,
+                logins: rolled.logins,
                 sessions_24h: window.sessions_24h,
                 sessions_previous24h: window.sessions_previous24h,
+                unique_ips_24h: window.unique_ips_24h,
+                unique_ips_previous24h: window.unique_ips_previous24h,
+                logins_24h: rolled.logins_24h,
+                logins_previous24h: rolled.logins_previous24h,
                 hourly_by_protocol: window.hourly_by_protocol,
                 ready: true,
             }));
@@ -314,6 +357,9 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     });
     aggs["previous24h"] = json!({"filter": {"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}}});
     aggs["logins"] = json!({"filter": logins_filter()});
+    aggs["logins_last24h"] = json!({"filter": {"bool": {"filter": [logins_filter(), {"range": {"@timestamp": {"gte": "now-24h"}}}]}}});
+    aggs["logins_previous24h"] =
+        json!({"filter": {"bool": {"filter": [logins_filter(), {"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}}]}}});
     let body = json!({
         "size": 0,
         "track_total_hits": true,
@@ -330,6 +376,8 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     let last24h = result["aggregations"]["last24h"]["doc_count"].as_u64().unwrap_or(0);
     let previous24h = result["aggregations"]["previous24h"]["doc_count"].as_u64().unwrap_or(0);
     let logins = result["aggregations"]["logins"]["doc_count"].as_u64().unwrap_or(0);
+    let logins_24h = result["aggregations"]["logins_last24h"]["doc_count"].as_u64().unwrap_or(0);
+    let logins_previous24h = result["aggregations"]["logins_previous24h"]["doc_count"].as_u64().unwrap_or(0);
     let hourly: Vec<u64> = result["aggregations"]["last24h"]["hourly"]["buckets"]
         .as_array()
         .into_iter()
@@ -350,6 +398,10 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
         logins,
         sessions_24h: window.sessions_24h,
         sessions_previous24h: window.sessions_previous24h,
+        unique_ips_24h: window.unique_ips_24h,
+        unique_ips_previous24h: window.unique_ips_previous24h,
+        logins_24h,
+        logins_previous24h,
         hourly_by_protocol: window.hourly_by_protocol,
         ready: true,
     }))
@@ -501,6 +553,38 @@ mod tests {
         assert_eq!(window.sessions_previous24h, 2);
         assert_eq!(window.hourly_by_protocol.len(), 1);
         assert_eq!(window.hourly_by_protocol[0].counts["other"], 8);
+    }
+
+    #[test]
+    fn unique_ips_is_also_split_into_the_two_24h_windows() {
+        let aggs = live_window_aggs();
+        assert_eq!(aggs["unique_ips_last24h"]["filter"]["range"]["@timestamp"], json!({"gte": "now-24h"}));
+        assert_eq!(aggs["unique_ips_previous24h"]["filter"]["range"]["@timestamp"], json!({"gte": "now-48h", "lt": "now-24h"}));
+        for window in ["unique_ips_last24h", "unique_ips_previous24h"] {
+            assert_eq!(aggs[window]["aggs"]["ips"], json!({"cardinality": {"field": "source.ip"}}));
+        }
+        let window = parse_live_window(&json!({
+            "unique_ips": {"value": 50},
+            "unique_ips_last24h": {"doc_count": 9, "ips": {"value": 31}},
+            "unique_ips_previous24h": {"doc_count": 7, "ips": {"value": 27}}
+        }));
+        assert_eq!((window.unique_ips, window.unique_ips_24h, window.unique_ips_previous24h), (50, 31, 27));
+    }
+
+    #[test]
+    fn the_rollup_splits_logins_on_the_same_hour_boundary_as_events() {
+        let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(HOUR_MS + 1_800_000).unwrap();
+        let current = rollups::hour_floor(now);
+        let docs: Vec<_> = (0..48)
+            .map(|back| {
+                let recent = back < 24;
+                (current - chrono::Duration::hours(back), json!({"events": 10, "logins": if recent { 3 } else { 1 }}))
+            })
+            .collect();
+        let rolled = kpis_from_rollup(now, docs).expect("48 hours cover the window");
+        assert_eq!((rolled.last24h, rolled.previous24h), (240, 240));
+        assert_eq!((rolled.logins_24h, rolled.logins_previous24h), (72, 24));
+        assert_eq!(rolled.logins, 96);
     }
 
     #[test]
