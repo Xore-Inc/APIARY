@@ -557,10 +557,100 @@ pub async fn generic(
     let Some((index, sort, sort_type, excludes)) = store_config(&name) else {
         return Err((StatusCode::NOT_FOUND, format!("unknown store {name}")));
     };
-    store_page_excluding(&state, &[index], sort, sort_type, &q, None, excludes)
+    let mut page = store_page_excluding(&state, &[index], sort, sort_type, &q, None, excludes)
         .await
-        .map(Json)
-        .map_err(bad_gateway)
+        .map_err(bad_gateway)?;
+    if name == "dead-letters" {
+        if let Some(rows) = page["rows"].as_array_mut() {
+            for row in rows.iter_mut() {
+                summarize_dead_letter(row);
+            }
+        }
+    }
+    Ok(Json(page))
+}
+
+/// The longest `message` or `error.message` a dead-letter LIST row carries,
+/// in bytes. Filebeat stores the whole rejected event in `message` and
+/// Elasticsearch's refusal, including a "Preview of field's value", in
+/// `error.message`; a rejected zeek redis line runs to ~450 KB in each, so
+/// 100 full rows were 84 MB and the page died reading them. The full
+/// document stays one click away at `/api/v1/store/dead-letters/{id}`.
+pub(crate) const DEAD_LETTER_PREVIEW_BYTES: usize = 4096;
+/// The longest refusal reason lifted into `failure.reason`, in bytes.
+const DEAD_LETTER_REASON_BYTES: usize = 1024;
+
+/// Cuts `text` to at most `max` bytes on a char boundary. True when it cut.
+fn cut_at(text: &mut String, max: usize) -> bool {
+    if text.len() <= max {
+        return false;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    true
+}
+
+/// One dead-letter list row, made readable and bounded.
+///
+/// Before anything is cut, the two facts a list needs are lifted out of the
+/// strings that hold them, because a truncated JSON string no longer parses:
+/// - `origin`: where the rejected event came from (`logset`, `pipeline`,
+///   `path` = its `log.file.path`), read from the event in `message`.
+/// - `failure`: why Elasticsearch refused it (`type`, `reason`), read from
+///   the JSON in `error.message`; `type` falls back to the row's own
+///   `error.type` (Filebeat writes the HTTP status there).
+///
+/// Then `message` and `error.message` are cut to
+/// `DEAD_LETTER_PREVIEW_BYTES`, and `_truncated` names the fields that were.
+/// Only keys that exist are written; nothing is invented.
+pub(crate) fn summarize_dead_letter(row: &mut Value) {
+    let Some(map) = row.as_object_mut() else { return };
+    if let Some(original) = map.get("message").and_then(Value::as_str).and_then(|m| serde_json::from_str::<Value>(m).ok()) {
+        let mut origin = serde_json::Map::new();
+        for (key, value) in [
+            ("logset", &original["logset"]),
+            ("pipeline", &original["pipeline"]),
+            ("path", &original["log"]["file"]["path"]),
+        ] {
+            if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
+                origin.insert(key.into(), json!(text));
+            }
+        }
+        if !origin.is_empty() {
+            map.insert("origin".into(), Value::Object(origin));
+        }
+    }
+    let refusal = map.get("error.message").and_then(Value::as_str).and_then(|m| serde_json::from_str::<Value>(m).ok());
+    let mut failure = serde_json::Map::new();
+    let kind = refusal.as_ref().and_then(|r| r["type"].as_str().map(String::from)).or_else(|| match map.get("error.type") {
+        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    });
+    if let Some(kind) = kind {
+        failure.insert("type".into(), json!(kind));
+    }
+    if let Some(mut reason) = refusal.as_ref().and_then(|r| r["reason"].as_str().map(String::from)) {
+        cut_at(&mut reason, DEAD_LETTER_REASON_BYTES);
+        failure.insert("reason".into(), json!(reason));
+    }
+    if !failure.is_empty() {
+        map.insert("failure".into(), Value::Object(failure));
+    }
+    let mut cut = Vec::new();
+    for field in ["message", "error.message"] {
+        if let Some(Value::String(text)) = map.get_mut(field) {
+            if cut_at(text, DEAD_LETTER_PREVIEW_BYTES) {
+                cut.push(field);
+            }
+        }
+    }
+    if !cut.is_empty() {
+        map.insert("_truncated".into(), json!(cut));
+    }
 }
 
 #[derive(Deserialize)]
@@ -711,5 +801,66 @@ mod store_config_tests {
         ] {
             assert!(full_document.get(kept).is_some(), "excludes dropped {kept} along with the credential");
         }
+    }
+}
+
+#[cfg(test)]
+mod dead_letter_tests {
+    use super::{summarize_dead_letter, DEAD_LETTER_PREVIEW_BYTES};
+    use serde_json::{json, Value};
+
+    /// The live shape (2026-11-14): Filebeat's dead-letter document for a
+    /// zeek redis line whose `cmd.value` broke the flattened `zeek` field.
+    fn rejected(value_len: usize) -> Value {
+        let blob = "\\x7f".repeat(value_len / 4);
+        let original = json!({"@timestamp": "2026-11-09T08:00:15.466Z", "pipeline": "honeypot", "logset": "zeek",
+            "log": {"file": {"path": "/logs/zeek/redis.2026-11-09-07-00-00.log"}}, "zeek": {"cmd.value": blob}});
+        let refusal = json!({"type": "document_parsing_exception",
+            "reason": format!("[1:462] failed to parse field [zeek] of type [flattened] in document with id 'x'. Preview of field's value: '{blob}'")});
+        json!({"@timestamp": "2026-11-09T08:00:15.466Z", "_doc_id": "qJJS", "error.type": 400,
+            "error.message": refusal.to_string(), "message": original.to_string()})
+    }
+
+    #[test]
+    fn a_huge_row_is_cut_but_keeps_its_origin_and_reason() {
+        let mut row = rejected(450_000);
+        assert!(row.to_string().len() > 900_000);
+        summarize_dead_letter(&mut row);
+        assert!(row.to_string().len() < 3 * DEAD_LETTER_PREVIEW_BYTES + 2048, "row is still {} bytes", row.to_string().len());
+        assert_eq!(row["message"].as_str().unwrap().len(), DEAD_LETTER_PREVIEW_BYTES);
+        assert_eq!(row["_truncated"], json!(["message", "error.message"]));
+        assert_eq!(row["origin"], json!({"logset": "zeek", "pipeline": "honeypot", "path": "/logs/zeek/redis.2026-11-09-07-00-00.log"}));
+        assert_eq!(row["failure"]["type"], "document_parsing_exception");
+        let reason = row["failure"]["reason"].as_str().unwrap();
+        assert!(reason.starts_with("[1:462] failed to parse field [zeek]"));
+        assert!(reason.len() <= 1024);
+        assert_eq!(row["_doc_id"], "qJJS");
+    }
+
+    #[test]
+    fn a_small_row_is_left_whole() {
+        let mut row = rejected(40);
+        let message = row["message"].clone();
+        summarize_dead_letter(&mut row);
+        assert_eq!(row["message"], message);
+        assert!(row.get("_truncated").is_none());
+        assert_eq!(row["origin"]["logset"], "zeek");
+    }
+
+    #[test]
+    fn a_row_without_json_keeps_only_what_it_has() {
+        let mut row = json!({"@timestamp": "t", "_doc_id": "a", "error.type": "mapper_parsing_exception", "message": "plain text line"});
+        summarize_dead_letter(&mut row);
+        assert!(row.get("origin").is_none());
+        assert_eq!(row["failure"], json!({"type": "mapper_parsing_exception"}));
+        assert!(row.get("_truncated").is_none());
+    }
+
+    #[test]
+    fn a_cut_never_splits_a_character() {
+        let mut row = json!({"message": "é".repeat(DEAD_LETTER_PREVIEW_BYTES)});
+        summarize_dead_letter(&mut row);
+        let message = row["message"].as_str().unwrap();
+        assert!(message.len() <= DEAD_LETTER_PREVIEW_BYTES && message.chars().all(|c| c == 'é'));
     }
 }
