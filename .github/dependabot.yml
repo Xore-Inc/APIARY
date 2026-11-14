@@ -68,7 +68,6 @@ updates:
       - /arcane/home/honeypot-agent-intrusion-worker/analysis/agent-intrusion-corpus
       - /arcane/home/honeypot-dashboard/analysis/es-results-importer
       - /analysis/ghidra/service
-      - /analysis/ghidra/statictools
       - /arcane/home/honeypot-payload-analysis/analysis/yara
       - /auth-events-worker
       - /arcane/home/honeypot-cisco-asa-honeypot/cisco-asa-honeypot
@@ -82,8 +81,6 @@ updates:
       - /arcane/home/honeypot-endlessh/endlessh-honeypot
       - /arcane/home/honeypot-http/http-honeypot
       - /arcane/home/honeypot-dashboard/backend-service
-      - /llm-worker
-      - /ml-worker
       - /arcane/home/honeypot-multipot/multipot
       - /portbridge
       - /arcane/home/honeypot-rdp-honeypot/rdp-honeypot
@@ -143,6 +140,34 @@ updates:
         group-by: dependency-name
     ignore:
       - dependency-name: python
+    labels: [dependencies, containers]
+
+  # #3774: python 3.14 -> 3.15 for these three. Dependabot proposed it as a
+  # minor bump inside the shared group, but pydantic-core (llm-worker,
+  # ml-worker) and python-flirt / pyo3 0.27 (ghidra statictools) publish no
+  # cp315 wheels and fail to build from source, and the 3.15-slim digest
+  # carried unexempted HIGH findings. Split out of the shared entry (a
+  # directory may sit in only one docker entry) so the ignore stays scoped
+  # to these three; 3.14 patch/digest updates still arrive. Drop the ignore
+  # once those dependencies ship 3.15 wheels.
+  - package-ecosystem: docker
+    directories:
+      - /analysis/ghidra/statictools
+      - /llm-worker
+      - /ml-worker
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:45"
+      timezone: Europe/Berlin
+    groups:
+      container-compatible:
+        patterns: ["*"]
+        update-types: [minor, patch]
+        group-by: dependency-name
+    ignore:
+      - dependency-name: python
+        versions: [">=3.15"]
     labels: [dependencies, containers]
 
   - package-ecosystem: pip
