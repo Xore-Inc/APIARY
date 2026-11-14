@@ -37,6 +37,7 @@ Keys, preshared keys, join tokens, the VPS public endpoint and the homeserver LA
 | `hosts/homeserver-arcane-authorized_keys.fragment` | one line of `~xore/.ssh/authorized_keys` | homeserver |
 | `hosts/precision-fstab.fragment` | `/etc/fstab` lines (XFS volume and three bind mounts) | precision |
 | `hosts/precision-runners.txt` | runner units from `scripts/github-ci-runner/install-ci-runner.sh`, registry mirror from `install-registry-mirror.sh` | precision |
+| `overlay-attach.py`, `apiary-overlay-attach.service`, `hosts/homeserver-overlay-attach.txt`, `hosts/vps-overlay-attach.txt` | `/usr/local/libexec/apiary-overlay-attach`, `/etc/systemd/system/apiary-overlay-attach.service` (enabled, `WantedBy=docker.service`), the host's list as `/etc/apiary/overlay-attach.txt` (#3837) | homeserver (VPS: list ready, not installed yet) |
 | `swarm-membership.sh` | runs on the admin workstation (SSH aliases `homeserver`, `precision`, `vps`) | swarm |
 | `scripts/install-vps.sh` (`live-restore: false`) | `/etc/docker/daemon.json` | VPS |
 
@@ -77,6 +78,27 @@ The 2026-10-11 read-only sweep found three pre-existing misses in unrelated
 containers: `pentagi-ollama-embedding`, `pgexporter`, and `technitium-dns`.
 They were left running; the next rejoin will repair their records.
 
+## Runbook: Compose containers on swarm overlays after a dockerd restart (#3837)
+
+dockerd restores every container with a restart policy before its swarm part is up. A Compose container whose networks include an attachable swarm overlay (`hp-tanner` on `sensor-snare_decoy`, `hp-tftp-relay` on `sensor-dionaea_decoy`, `hp-galah` and `ghidra-ollama-1` on the `galah-broker_*` overlays) fails that start with `could not find a network matching network mode ...` and dockerd never retries it. Which ones lose depends on whether a local swarm task created the overlay first, so a restart can leave any of them down (2026-11-13: two after a dockerd restart, three after a reboot).
+
+`apiary-overlay-attach.service` finishes the restore. It is pulled in by `docker.service` and ordered after it, with no `Before=`; `Type=exec` makes it active at once, so nothing waits for it and it cannot close a boot ordering cycle (#3742, #3839). It waits for swarm `active`, then starts each listed container that is not running, has restart policy `always`/`unless-stopped` and a `State.Error`, i.e. one dockerd tried and failed to start. A container stopped on purpose has no `State.Error` and stays down (the `hp-galah` rollback, `ghidra-ollama-1` while the benchmark has the GPU). If a start fails because the overlay is not on this node yet, it attaches a throwaway `docker run --rm --pull never` anchor (busybox, read-only, no capabilities) to each of the container's overlays, retries, and removes the anchors: the #3722 dance without a swarm service. `--rm` means no stopped non-compose container is left for `hp-docker-hygiene` to prune (#3841). It retries every 10 s for 15 min, then every 5 min, and warns about any unlisted compose container that failed on a network.
+
+The list is the one place that names these containers: `hosts/homeserver-overlay-attach.txt` (and `hosts/vps-overlay-attach.txt` for the VPS OIDC proxies on `edge-*_gw`). `scripts/tests/test_3837_overlay_attach.py` fails when a compose file joins a swarm stack overlay that the host's list does not name.
+
+```bash
+sudo install -m 0755 ops/swarm/overlay-attach.py /usr/local/libexec/apiary-overlay-attach
+sudo install -m 0644 ops/swarm/hosts/homeserver-overlay-attach.txt /etc/apiary/overlay-attach.txt
+sudo install -m 0644 ops/swarm/apiary-overlay-attach.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now apiary-overlay-attach.service
+sudo python3 -I /usr/local/libexec/apiary-overlay-attach status /etc/apiary/overlay-attach.txt
+journalctl -u apiary-overlay-attach -b   # what the last restore did
+```
+
+After maintenance, start listed containers deliberately (no `State.Error` gate): `sudo python3 -I /usr/local/libexec/apiary-overlay-attach start /etc/apiary/overlay-attach.txt hp-tanner hp-tftp-relay`.
+
+**D2 (`apiary-es`, #3582).** Elasticsearch is not put on the overlay in `honeypot-elk/compose.yml`: that would make `hp-elasticsearch`, and with it the whole pipeline, depend on this race. Instead the list carries `connect hp-elasticsearch apiary-es elasticsearch` (commented out until the overlay exists). The service attaches ES after it runs, re-attaches after a Compose recreate, and disconnects it on stop (`ExecStop`, also when dockerd stops, via `PartOf=`), so the endpoint is never in the container's saved config when dockerd next restores it. To enable: create `apiary-es` (`10.200.101.0/24`, reserved below), uncomment the line, `systemctl restart apiary-overlay-attach`.
+
 ## Stacks under Arcane GitOps (#3590)
 
 Copy [`swarm/template/stack.yml`](../../swarm/template/stack.yml) to
@@ -95,7 +117,7 @@ value files never enter git. Rotate by creating `_v(N+1)`, changing the stack
 file to reference it, merging, and deploying. Keep the old secret through the
 next version so a rollback can still start.
 
-The block `10.200.100.0/24`-`10.200.119.0/24` is reserved for the #3579 BFF split, outside the sequential subnet count: `.100` host-gateway (`host`), `.101` the D2 overlay `apiary-es` (alias `elasticsearch`), `.102` backend-api `bff` (the dashboard attaches).
+The block `10.200.100.0/24`-`10.200.119.0/24` is reserved for the #3579 BFF split, outside the sequential subnet count: `.100` host-gateway (`host`), `.101` the D2 overlay `apiary-es` (alias `elasticsearch`; `hp-elasticsearch` joins it through `apiary-overlay-attach`, not compose, #3837), `.102` backend-api `bff` (the dashboard attaches).
 
 ```bash
 python3 scripts/check-swarm-stacks.py

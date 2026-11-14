@@ -1,0 +1,11 @@
+# VPS: Compose containers on attachable swarm overlays (#3837). Same format and
+# tool as homeserver-overlay-attach.txt; installed to /etc/apiary/overlay-attach.txt.
+# vps/docker-compose.yml: each OIDC proxy reaches its edge stack's gateway.
+anchor-image busybox:1.37.0  # the local busybox on the VPS (--pull never)
+
+start oidc-kibana edge-kibana_gw
+start oidc-tanner edge-tanner_gw
+start oidc-evebox edge-evebox_gw
+start oidc-arkime edge-arkime_gw
+start oidc-revdeck edge-revdeck_gw
+start oidc-unsloth edge-unsloth_gw
