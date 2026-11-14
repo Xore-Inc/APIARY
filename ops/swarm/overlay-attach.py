@@ -37,6 +37,9 @@ dockerd restores it. Without that, the next restore would fail on it.
                               State.Error (after maintenance; the live proof)
   detach CONFIG               disconnect every `connect` network (ExecStop)
   status CONFIG               one line per listed container
+
+A listed container that runs without one of its `start` overlays is reported as
+an ERROR and keeps the pass unsettled; that needs a compose recreate.
 """
 from __future__ import annotations
 
@@ -230,7 +233,22 @@ class Attacher:
                 return False
             self._said.pop(t.name, None)
             info = self.docker.container(t.name) or info
-        return self.connect(t, info) if t.connect else True
+        settled = self.check_start_nets(t, info)
+        return (self.connect(t, info) and settled) if t.connect else settled
+
+    def check_start_nets(self, t: Target, info: dict) -> bool:
+        """A start that failed after its endpoints were created (seen with a port
+        conflict on 2026-11-14) drops the overlay from the container's saved
+        networks: later starts then succeed without it. Not repaired here (the
+        compose aliases are gone with it); recreate the container with compose."""
+        missing = [n for n in t.start_nets if n not in info["networks"]]
+        if not missing:
+            self._said.pop(f"{t.name}/start-nets", None)
+            return True
+        self.say_once(f"{t.name}/start-nets",
+                      f"ERROR {t.name}: running without {', '.join(missing)}; recreate it "
+                      "(compose up -d --no-deps --force-recreate <service>)")
+        return False
 
     # -- passes ------------------------------------------------------------
     def reconcile(self, forced: set[str] = frozenset()) -> bool:
