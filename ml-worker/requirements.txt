@@ -94,6 +94,6 @@ llvmlite==0.50.0
 redis==8.1.0
 
 # Utilities
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
 requests==2.34.2
 loguru==0.7.3
