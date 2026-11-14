@@ -1029,6 +1029,22 @@ fn bad_entity(message: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, message.to_string())
 }
 
+/// Cluster kinds that are not indicator kinds: an infrastructure cluster can
+/// also group sources by their provider class (`source.as.type`, e.g.
+/// `hosting`, `isp`, `network`), which the dashboard's clusters page lists.
+const CLUSTER_ONLY_KINDS: &[&str] = &["provider"];
+
+/// `cluster:` accepts every indicator kind plus `CLUSTER_ONLY_KINDS`.
+fn cluster_pair(text: &str) -> Result<(String, String), (StatusCode, String)> {
+    if let Some((kind, value)) = text.split_once(':') {
+        let (kind, value) = (kind.trim(), value.trim());
+        if CLUSTER_ONLY_KINDS.contains(&kind) && !value.is_empty() && value.len() <= 2048 {
+            return Ok((kind.to_string(), value.to_string()));
+        }
+    }
+    indicator_pair(text)
+}
+
 fn indicator_pair(text: &str) -> Result<(String, String), (StatusCode, String)> {
     let (kind, value) = text.split_once(':').ok_or_else(|| bad_entity("expected kind:value after ioc:/cluster:"))?;
     let kind = kind.trim();
@@ -1040,7 +1056,7 @@ fn indicator_pair(text: &str) -> Result<(String, String), (StatusCode, String)> 
 
 /// Parses an entity id. `kind:value` with kind one of ip (source), cidr
 /// (network, net), asn, session, payload (hash, sha256), identity, campaign,
-/// cluster or ioc. A bare id is inferred: an address, a CIDR, `AS<n>`, a
+/// cluster (an indicator kind, or `provider`) or ioc. A bare id is inferred: an address, a CIDR, `AS<n>`, a
 /// 32/40/64-digit hex hash, otherwise a session id.
 fn parse_entity(raw: &str) -> Result<Entity, (StatusCode, String)> {
     let raw = raw.trim();
@@ -1065,7 +1081,7 @@ fn parse_entity(raw: &str) -> Result<Entity, (StatusCode, String)> {
                 "payload" | "hash" | "sha256" => Ok(Entity::Payload(rest.to_ascii_lowercase())),
                 "identity" => Ok(Entity::Identity { id: rest.to_string(), ips: vec![] }),
                 "campaign" => valid_cidr(rest).map(Entity::Campaign).ok_or_else(|| bad_entity("campaign ids are CIDRs")),
-                "cluster" => indicator_pair(rest).map(|(kind, value)| Entity::Cluster { kind, value }),
+                "cluster" => cluster_pair(rest).map(|(kind, value)| Entity::Cluster { kind, value }),
                 _ => indicator_pair(rest).map(|(kind, value)| Entity::Ioc { kind, value }),
             };
         }
@@ -1111,6 +1127,7 @@ fn entity_clause(entity: &Entity) -> Value {
         Entity::Payload(hash) => json!({"term": {"honeypot.canonical_shasum": hash}}),
         Entity::Identity { ips, .. } if ips.is_empty() => json!({"match_none": {}}),
         Entity::Identity { ips, .. } => json!({"terms": {"source.ip": ips}}),
+        Entity::Cluster { kind, value } if kind == "provider" => json!({"term": {"source.as.type": value}}),
         Entity::Cluster { kind, value } | Entity::Ioc { kind, value } => {
             ioc_kind(kind).and_then(|def| ioc_value_clause(def, value).ok()).unwrap_or_else(|| json!({"match_none": {}}))
         }
@@ -2245,6 +2262,7 @@ mod tests {
         assert_eq!(parse_entity("identity:e69").unwrap(), Entity::Identity { id: "e69".into(), ips: vec![] });
         assert_eq!(parse_entity("campaign:203.0.113.0/24").unwrap(), Entity::Campaign("203.0.113.0/24".into()));
         assert_eq!(parse_entity("cluster:fingerprint:JA4:t13").unwrap(), Entity::Cluster { kind: "fingerprint".into(), value: "JA4:t13".into() });
+        assert_eq!(parse_entity("cluster:provider:hosting").unwrap(), Entity::Cluster { kind: "provider".into(), value: "hosting".into() });
         assert_eq!(parse_entity("ioc:credential:root:toor").unwrap(), Entity::Ioc { kind: "credential".into(), value: "root:toor".into() });
     }
 
@@ -2302,6 +2320,7 @@ mod tests {
         assert!(rendered(&entity_clause(&Entity::Identity { id: "i".into(), ips: vec![] })).contains("match_none"));
         assert!(rendered(&entity_clause(&Entity::Ioc { kind: "signature".into(), value: "ET X".into() })).contains("suricata.eve.alert.signature.keyword"));
         assert!(rendered(&entity_clause(&Entity::Cluster { kind: "bogus".into(), value: "x".into() })).contains("match_none"));
+        assert!(rendered(&entity_clause(&Entity::Cluster { kind: "provider".into(), value: "network".into() })).contains("\"source.as.type\":\"network\""));
     }
 
     #[test]
@@ -2646,5 +2665,17 @@ mod tests {
         }
         let nothing = related_response(&Entity::Asn(1), "now-7d", &[], [&json!({}), &Value::Null, &Value::Null, &Value::Null, &Value::Null]);
         assert_eq!(nothing["groups"], json!([]));
+    }
+}
+
+#[cfg(test)]
+mod provider_cluster_tests {
+    use super::parse_entity;
+
+    #[test]
+    fn provider_is_a_cluster_kind_but_not_an_indicator_kind() {
+        assert!(parse_entity("ioc:provider:hosting").is_err());
+        assert!(parse_entity("cluster:provider:").is_err());
+        assert!(parse_entity("cluster:provider:hosting").is_ok());
     }
 }
