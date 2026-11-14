@@ -224,13 +224,16 @@ macro_rules! document_route {
 }
 
 #[utoipa::path(get, path = "/api/v1/store/{name}/{id}", summary = "One allowlisted store document.",
-    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, or agent-campaigns."), ("id" = inline(String), Path, description = "Document id.")),
+    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, agent-campaigns or dead-letters."), ("id" = inline(String), Path, description = "Document id.")),
     responses((status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"), (status = 404, description = "No such document or store.", body = inline(serde_json::Value), content_type = "application/json"), (status = 502, description = "Elasticsearch failed.", body = String, content_type = "text/plain")), security(("serviceToken" = [])))]
 pub async fn store_detail(State(state): State<AppState>, Path((name, id)): Path<(String, String)>) -> Response {
     let index = match name.as_str() {
         "ml-anomalies" => "ml-worker-state",
         "llm-analysis" => "llm-worker-state",
         "agent-campaigns" => "agent-campaigns-v1",
+        // The whole rejected event, which the list cuts (stores.rs
+        // `summarize_dead_letter`).
+        "dead-letters" => "dead-letter-honeypot",
         _ => return Ok((StatusCode::NOT_FOUND, Json(Value::Null))),
     };
     doc(&state, index, id).await
