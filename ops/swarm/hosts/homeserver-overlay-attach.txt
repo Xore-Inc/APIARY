@@ -1,0 +1,27 @@
+# Homeserver: Compose containers on attachable swarm overlays (#3837). Installed to
+# /etc/apiary/overlay-attach.txt and read by overlay-attach.py.
+# dockerd starts these before its swarm part is up, the start fails and is
+# never retried; apiary-overlay-attach.service finishes it. Only containers
+# whose dockerd start failed are started, so a deliberately stopped one stays
+# down. scripts/tests/test_3837_overlay_attach.py fails if a compose file joins
+# a swarm stack overlay that is not listed here.
+#
+#   start   CONTAINER NETWORK            overlay is in the container's compose file
+#   connect CONTAINER NETWORK [ALIAS...] attached after start, never in compose
+#   anchor-image IMAGE                   local image for the throwaway attachment
+anchor-image busybox:1.38.0
+
+# arcane/home/honeypot-tanner: snare (swarm) reaches tanner on this overlay (#3593)
+start hp-tanner sensor-snare_decoy
+# arcane/home/honeypot-dionaea: the TFTP relay reaches sensor-dionaea (#3593)
+start hp-tftp-relay sensor-dionaea_decoy
+# arcane/home/honeypot-galah: rollback only since sensor-galah (#3593); stopped,
+# so it stays down unless dockerd itself was starting it
+start hp-galah galah-broker_front
+# analysis/ghidra: Ollama behind the Galah broker (stopped while the benchmark runs)
+start ghidra-ollama-1 galah-broker_back
+
+# D2 (#3582): Elasticsearch on the dedicated overlay, alias elasticsearch.
+# Uncomment once apiary-es (10.200.101.0/24) exists, then
+# `systemctl restart apiary-overlay-attach`. No honeypot-elk compose change.
+# connect hp-elasticsearch apiary-es elasticsearch
