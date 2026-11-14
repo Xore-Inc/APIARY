@@ -226,6 +226,20 @@ class ReconcileTest(unittest.TestCase):
         self.assertTrue(d.containers["hp-tanner"]["running"])
         self.assertFalse(d.containers["hp-galah"]["running"])
 
+    def test_running_without_its_overlay_is_an_error_not_a_repair(self):
+        """2026-11-14 live: a start that failed after endpoint creation left the
+        container's saved networks without its overlay; later starts succeed
+        without it. Report it, keep the pass unsettled, never connect it blindly."""
+        d = FakeDocker(self.overlays(**{"sensor-snare_decoy": True}))
+        d.add("hp-tanner", ["tanner_local"], running=True)
+        a, logs = attacher("start hp-tanner sensor-snare_decoy", d)
+        self.assertFalse(a.reconcile())
+        self.assertFalse(a.reconcile())
+        self.assertEqual(sum("ERROR hp-tanner: running without sensor-snare_decoy" in l for l in logs), 1, logs)
+        self.assertFalse([c for c in d.calls if c[:2] == ("network", "connect")])
+        d.containers["hp-tanner"]["nets"].append("sensor-snare_decoy")  # recreated
+        self.assertTrue(a.reconcile())
+
     def test_unlisted_network_failure_is_reported(self):
         d = FakeDocker(self.overlays())
         d.add("hp-new", ["edge-x_gw"], error=NETWORK_ERROR.format("edge-x_gw"))
