@@ -215,8 +215,8 @@ fn render(document: &mut Value) {
                          valid one on every mutation and on any request that \
                          names an actor (X-Actor-Username, X-Actor-Role, or \
                          an actor field in the query or body), answers 401 \
-                         without one and 403 to a verified viewer on an \
-                         admin mutation, and replaces every client-named \
+                         without one and 403 to a verified viewer on any \
+                         mutation (viewers are read-only), and replaces every client-named \
                          actor field with the asserted identity. See \
                          docs/BACKEND-TRUST-BOUNDARY.md."
                 }

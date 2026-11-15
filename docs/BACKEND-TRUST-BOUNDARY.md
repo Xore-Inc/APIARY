@@ -119,12 +119,13 @@ Under `enforce`, for requests on the BFF credential:
   or `x-actor-role` without one.
 - A plain read with no actor claim passes on the bearer token alone
   (machine reads such as diagnostics and the source-health check).
-- A verified `viewer` may perform only the mutations the dashboard grants
-  viewers (`trust::VIEWER_MUTATIONS`, mirroring the dashboard's
-  `ADMIN_QUERIES` in `src/server/authorize.ts`): alert ack, canarytoken
-  create, config validate, own preferences, problem-report submit, report
-  preview. Every other mutation, the service actions included, needs
-  `admin`: 403, whatever `x-actor-role` says.
+- A verified `viewer` is strictly read-only (#3857): every mutation needs
+  `admin`, 403 to a viewer whatever `x-actor-role` says. There is no
+  per-route allow-list for viewers; a new mutation is admin-only by
+  default. Alert ack and reopen, canarytoken create, config validate,
+  preferences save and reset, problem-report submit and report preview,
+  which viewers could make until #3857, are no exception. The dashboard's
+  own policy (`src/server/authorize.ts`) refuses the same requests first.
 - The client's `x-actor-username`/`x-actor-role` are dropped and rewritten
   from the verified assertion, and the verified actor is attached to the
   request, so handlers never see a client-supplied identity. Service
@@ -203,8 +204,9 @@ Production state: both backends (`honeypot-dashboard-backend` and the
 mounted one in `honeypot-dashboard`) have run `enforce` since 2026-11-09
 (#3749), after the legacy `dashboard-next` stopped. Verified then:
 actor-scoped reads from the dashboard answer 200, an assertion signed with
-the deployed key passes a viewer mutation, the same call unsigned is a 401,
-and a viewer on an admin route is a 403. Dashboard mutations through the
+the deployed key passed what was then a viewer mutation, the same call
+unsigned is a 401, and a viewer on an admin route is a 403. Since #3857
+there are no viewer mutations; a viewer's mutation is a 403 on every route. Dashboard mutations through the
 browser were not exercised end to end at that point, because of
 Xore-Inc/apiary-dashboard#291 (refused by the dashboard's own CSRF guard
 before they reach the backend).
