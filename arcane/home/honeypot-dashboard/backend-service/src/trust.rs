@@ -72,21 +72,11 @@ const MAX_ASSERTION_LEN: usize = 4096;
 /// The one route the export credential may call.
 pub const EXPORT_ROUTE: &str = "/api/v1/ip-block-export";
 
-/// Mutations a `viewer` may perform under `enforce`. Everything else that
-/// is not GET/HEAD/OPTIONS needs `admin`. This mirrors the dashboard's own
-/// policy (apiary-dashboard `src/server/authorize.ts`: every mutation not in
-/// `ADMIN_QUERIES`), keyed by the router's matched path. Deny by default: a
-/// route missing here is refused to a viewer, which `log` mode reports
-/// before `enforce` turns it on.
-pub const VIEWER_MUTATIONS: &[(&str, &str)] = &[
-    ("POST", "/api/v1/alerts/{key}/ack"),
-    ("POST", "/api/v1/canarytokens"),
-    ("POST", "/api/v1/config/validate"),
-    ("PUT", "/api/v1/preferences"),
-    ("POST", "/api/v1/preferences/reset"),
-    ("POST", "/api/v1/problem-reports"),
-    ("POST", "/api/v1/reports/preview"),
-];
+// A `viewer` is strictly read-only (#3857): under `enforce`, every request
+// that is not GET/HEAD/OPTIONS needs `admin`. There is no per-route
+// allow-list for viewers; a new mutation is admin-only by default. The
+// dashboard's own policy (apiary-dashboard `src/server/authorize.ts`)
+// refuses the same requests before they get here.
 
 /// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410): SEQUENCE {
 /// SEQUENCE { OID 1.3.101.112 }, BIT STRING (0 unused bits) } followed by
@@ -224,13 +214,12 @@ impl Trust {
     /// - An assertion that does not verify is a 401, whatever the route.
     /// - No assertion: a mutation, or any request claiming an actor through
     ///   the plain headers, is a 401. A plain read passes as Anonymous.
-    /// - A verified viewer on a mutation outside [`VIEWER_MUTATIONS`] is a
-    ///   403, whatever `x-actor-role` says.
+    /// - A verified viewer on any mutation is a 403, whatever `x-actor-role`
+    ///   says: viewers are read-only.
     pub fn evaluate(
         &self,
         method: &Method,
         path: &str,
-        matched: Option<&str>,
         headers: &HeaderMap,
         now: DateTime<Utc>,
     ) -> Verdict {
@@ -259,7 +248,7 @@ impl Trust {
                 )
             }
         };
-        if mutation && actor.role != Role::Admin && !viewer_may(method, matched) {
+        if mutation && actor.role != Role::Admin {
             return Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into());
         }
         Verdict::Actor(actor)
@@ -496,12 +485,6 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ActorBinding {
 /// The export credential's whole surface.
 pub fn export_may(method: &Method, matched: Option<&str>) -> bool {
     *method == Method::GET && matched == Some(EXPORT_ROUTE)
-}
-
-fn viewer_may(method: &Method, matched: Option<&str>) -> bool {
-    matched.is_some_and(|path| {
-        VIEWER_MUTATIONS.iter().any(|(m, p)| *m == method.as_str() && *p == path)
-    })
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
@@ -836,8 +819,8 @@ mod tests {
 
     // ---- assertions ---------------------------------------------------------
 
-    fn verdict(trust: &Trust, method: Method, path: &str, matched: &str, pairs: &[(&'static str, &str)]) -> Verdict {
-        trust.evaluate(&method, path, Some(matched), &headers(pairs), at(NOW))
+    fn verdict(trust: &Trust, method: Method, path: &str, pairs: &[(&'static str, &str)]) -> Verdict {
+        trust.evaluate(&method, path, &headers(pairs), at(NOW))
     }
 
     #[test]
@@ -847,7 +830,7 @@ mod tests {
         let path = "/api/v1/services/cowrie/restart";
         let token = signer.mint("admin", "POST", path, NOW);
         assert_eq!(
-            verdict(&trust, Method::POST, path, "/api/v1/services/{name}/{action}", &[("x-actor-assertion", &token)]),
+            verdict(&trust, Method::POST, path, &[("x-actor-assertion", &token)]),
             Verdict::Actor(VerifiedActor { subject: "sub-alice".into(), username: "alice".into(), role: Role::Admin })
         );
     }
@@ -856,11 +839,11 @@ mod tests {
     fn forged_actor_headers_without_an_assertion_are_refused() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
         let forged = [("x-actor-username", "root"), ("x-actor-role", "admin")];
-        let Verdict::Deny(status, _) = verdict(&trust, Method::GET, "/api/v1/workbench/runs", "/api/v1/workbench/runs", &forged) else {
+        let Verdict::Deny(status, _) = verdict(&trust, Method::GET, "/api/v1/workbench/runs", &forged) else {
             panic!("a read claiming an actor without proof must be refused");
         };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
-        let Verdict::Deny(status, _) = verdict(&trust, Method::POST, "/api/v1/services/x/stop", "/api/v1/services/{name}/{action}", &forged) else {
+        let Verdict::Deny(status, _) = verdict(&trust, Method::POST, "/api/v1/services/x/stop", &forged) else {
             panic!("a mutation without an assertion must be refused");
         };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -869,20 +852,20 @@ mod tests {
     #[test]
     fn a_plain_read_needs_no_assertion() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
-        assert_eq!(verdict(&trust, Method::GET, "/api/v1/events", "/api/v1/events", &[]), Verdict::Anonymous);
+        assert_eq!(verdict(&trust, Method::GET, "/api/v1/events", &[]), Verdict::Anonymous);
     }
 
     #[test]
     fn a_missing_assertion_on_a_mutation_is_refused() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
         assert!(matches!(
-            verdict(&trust, Method::PUT, "/api/v1/preferences", "/api/v1/preferences", &[]),
+            verdict(&trust, Method::PUT, "/api/v1/preferences", &[]),
             Verdict::Deny(StatusCode::UNAUTHORIZED, _)
         ));
     }
 
     fn rejected(trust: &Trust, token: &str, method: Method, path: &str) -> String {
-        match trust.evaluate(&method, path, Some(path), &headers(&[("x-actor-assertion", token)]), at(NOW)) {
+        match trust.evaluate(&method, path, &headers(&[("x-actor-assertion", token)]), at(NOW)) {
             Verdict::Deny(StatusCode::UNAUTHORIZED, reason) => reason,
             other => panic!("expected a 401, got {other:?}"),
         }
@@ -897,7 +880,7 @@ mod tests {
         assert!(rejected(&trust, &token, Method::GET, "/api/v1/events").contains("expired"));
         // Inside the skew it still verifies.
         let token = signer.mint("admin", "GET", "/api/v1/events", NOW - 89);
-        assert!(matches!(verdict(&trust, Method::GET, "/api/v1/events", "/api/v1/events", &[("x-actor-assertion", &token)]), Verdict::Actor(_)));
+        assert!(matches!(verdict(&trust, Method::GET, "/api/v1/events", &[("x-actor-assertion", &token)]), Verdict::Actor(_)));
     }
 
     #[test]
@@ -978,26 +961,50 @@ mod tests {
         let path = "/api/v1/services/cowrie/stop";
         let token = signer.mint("viewer", "POST", path, NOW);
         assert_eq!(
-            verdict(&trust, Method::POST, path, "/api/v1/services/{name}/{action}",
-                &[("x-actor-assertion", &token), ("x-actor-role", "admin"), ("x-actor-username", "root")]),
+            verdict(&trust, Method::POST, path, &[("x-actor-assertion", &token), ("x-actor-role", "admin"), ("x-actor-username", "root")]),
             Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into())
         );
     }
 
+    /// Every mutation the dashboard used to let viewers make (#3857), reopen
+    /// (the ack route with `ack: false`) included: a viewer is refused, an
+    /// admin is not.
+    const FORMER_VIEWER_MUTATIONS: [(&str, &str); 7] = [
+        ("POST", "/api/v1/alerts/k1/ack"),
+        ("POST", "/api/v1/canarytokens"),
+        ("POST", "/api/v1/config/validate"),
+        ("PUT", "/api/v1/preferences"),
+        ("POST", "/api/v1/preferences/reset"),
+        ("POST", "/api/v1/problem-reports"),
+        ("POST", "/api/v1/reports/preview"),
+    ];
+
     #[test]
-    fn a_viewer_keeps_the_mutations_the_dashboard_grants_viewers() {
+    fn a_viewer_may_make_no_mutation_at_all() {
         let signer = Signer::generate();
         let trust = trust_with(&signer, AssertionMode::Enforce);
-        let token = signer.mint("viewer", "PUT", "/api/v1/preferences", NOW);
+        for (method, path) in FORMER_VIEWER_MUTATIONS {
+            let method: Method = method.parse().unwrap();
+            let token = signer.mint("viewer", method.as_str(), path, NOW);
+            assert_eq!(
+                verdict(&trust, method.clone(), path, &[("x-actor-assertion", &token)]),
+                Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into()),
+                "{method} {path}"
+            );
+            let token = signer.mint("admin", method.as_str(), path, NOW);
+            assert!(
+                matches!(
+                    verdict(&trust, method.clone(), path, &[("x-actor-assertion", &token)]),
+                    Verdict::Actor(VerifiedActor { role: Role::Admin, .. })
+                ),
+                "{method} {path}"
+            );
+        }
+        // Reads stay open to a viewer.
+        let token = signer.mint("viewer", "GET", "/api/v1/preferences", NOW);
         assert!(matches!(
-            verdict(&trust, Method::PUT, "/api/v1/preferences", "/api/v1/preferences", &[("x-actor-assertion", &token)]),
+            verdict(&trust, Method::GET, "/api/v1/preferences", &[("x-actor-assertion", &token)]),
             Verdict::Actor(VerifiedActor { role: Role::Viewer, .. })
-        ));
-        let path = "/api/v1/alerts/k1/ack";
-        let token = signer.mint("viewer", "POST", path, NOW);
-        assert!(matches!(
-            verdict(&trust, Method::POST, path, "/api/v1/alerts/{key}/ack", &[("x-actor-assertion", &token)]),
-            Verdict::Actor(_)
         ));
     }
 

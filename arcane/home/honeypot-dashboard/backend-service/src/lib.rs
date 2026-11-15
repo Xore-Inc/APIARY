@@ -484,7 +484,7 @@ async fn require_service_token(
     }
     let path = request.uri().path().to_string();
     let route = format!("{method} {}", matched.as_deref().unwrap_or(path.as_str()));
-    let verdict = trust.evaluate(&method, &path, matched.as_deref(), request.headers(), now);
+    let verdict = trust.evaluate(&method, &path, request.headers(), now);
     if trust.mode == trust::AssertionMode::Log {
         match &verdict {
             trust::Verdict::Deny(status, reason) => tracing::warn!(

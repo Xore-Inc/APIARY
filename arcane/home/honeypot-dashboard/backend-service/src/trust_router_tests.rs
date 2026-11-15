@@ -173,12 +173,24 @@ async fn enforce_refuses_a_viewer_whatever_the_role_header_says() {
     let (status, body) = call(app.clone(), "POST", SERVICES,
         &[("x-service-token", BFF), ("x-actor-assertion", &viewer), ("x-actor-role", "admin"), ("x-actor-username", "root")]).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    // The mutations the dashboard grants viewers still pass, matched by the
-    // router's path template ({key}), not by the literal path.
-    for (method, uri) in [("PUT", "/api/v1/preferences"), ("POST", "/api/v1/alerts/k1/ack")] {
+    // Viewers are read-only (#3857): the mutations the dashboard once let
+    // viewers make are refused too, alert reopen (ack with `ack: false`)
+    // included, while an admin still gets past the boundary.
+    for (method, uri) in [
+        ("POST", "/api/v1/alerts/k1/ack"),
+        ("POST", "/api/v1/canarytokens"),
+        ("POST", "/api/v1/config/validate"),
+        ("PUT", "/api/v1/preferences"),
+        ("POST", "/api/v1/preferences/reset"),
+        ("POST", "/api/v1/problem-reports"),
+        ("POST", "/api/v1/reports/preview"),
+    ] {
         let viewer = signer.mint("viewer", method, uri, now());
         let (status, body) = call(app.clone(), method, uri, &[("x-service-token", BFF), ("x-actor-assertion", &viewer)]).await;
-        assert!(let_in(status), "{method} {uri}: {status} {body}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "viewer {method} {uri}: {body}");
+        let admin = signer.mint("admin", method, uri, now());
+        let (status, body) = call(app.clone(), method, uri, &[("x-service-token", BFF), ("x-actor-assertion", &admin)]).await;
+        assert!(let_in(status), "admin {method} {uri}: {status} {body}");
     }
 }
 
@@ -485,10 +497,10 @@ async fn stamped_attribution_is_the_verified_operator_under_enforce_only() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{mode:?}: {text}");
         assert!(text.contains("expires_days"), "{mode:?}: {text}");
 
-        // A viewer may file a problem report; the display name the client
-        // supplied cannot be verified, so enforce drops it and the record
-        // falls back to the asserted username.
-        let (status, text) = b.send(Some("viewer"), "POST",
+        // A problem report (admin-only since #3857): the display name the
+        // client supplied cannot be verified, so enforce drops it and the
+        // record falls back to the asserted username.
+        let (status, text) = b.send(Some("admin"), "POST",
             "/api/v1/problem-reports?actor_subject=sub-bob&actor_username=bob&actor_display_name=Bob",
             Some(json!({"expected": "it works"}))).await;
         assert!(let_in(status), "{mode:?}: {status} {text}");
@@ -504,7 +516,8 @@ async fn enforce_binds_preferences_to_the_verified_operator() {
     for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
         // A viewer naming bob, and an admin doing the same: nothing in the
         // dashboard edits another operator's preferences, so admin is bound
-        // too.
+        // too. Under enforce a viewer may not write at all (#3857), so only
+        // its read is bound.
         for role in ["viewer", "admin"] {
             let b = bound(mode, &format!("prefs-{role}")).await;
             let (subject, username) = expected(mode);
@@ -512,23 +525,33 @@ async fn enforce_binds_preferences_to_the_verified_operator() {
                 doc["payload"]["users"].as_array().unwrap().iter().find(|u| u["subject"] == who).cloned().unwrap()
             };
 
-            let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
-                Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
-            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
-            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
-            let other = if subject == "sub-alice" { "sub-bob" } else { "sub-alice" };
-            let untouched = if other == "sub-alice" { "light" } else { "system" };
-            assert_eq!(mine(&written, subject)["preferences"]["theme"], "dark", "{mode:?} {role}: {written}");
-            assert_eq!(mine(&written, other)["preferences"]["theme"], untouched, "{mode:?} {role}: {written}");
-            let event = b.audited("preferences.update");
-            assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
+            if role == "viewer" && mode == AssertionMode::Enforce {
+                let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
+                    Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+                let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
+                    Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+                assert!(b.upstream.bodies("POST", "/dashboard-users-v1/_doc/users").is_empty(), "a refused write reached the store");
+            } else {
+                let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
+                    Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
+                assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+                let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+                let other = if subject == "sub-alice" { "sub-bob" } else { "sub-alice" };
+                let untouched = if other == "sub-alice" { "light" } else { "system" };
+                assert_eq!(mine(&written, subject)["preferences"]["theme"], "dark", "{mode:?} {role}: {written}");
+                assert_eq!(mine(&written, other)["preferences"]["theme"], untouched, "{mode:?} {role}: {written}");
+                let event = b.audited("preferences.update");
+                assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
 
-            let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
-                Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
-            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
-            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
-            assert_eq!(mine(&written, subject)["preferences_revision"], 1, "{mode:?} {role}: reset hit the wrong operator: {written}");
-            assert_eq!(mine(&written, other)["preferences_revision"], 0, "{mode:?} {role}: {written}");
+                let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
+                    Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
+                assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+                let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+                assert_eq!(mine(&written, subject)["preferences_revision"], 1, "{mode:?} {role}: reset hit the wrong operator: {written}");
+                assert_eq!(mine(&written, other)["preferences_revision"], 0, "{mode:?} {role}: {written}");
+            }
 
             // A read is bound the same way: naming bob reads alice's own
             // preferences under enforce, bob's otherwise.
@@ -616,9 +639,9 @@ async fn attribution_on_routes_with_external_dependencies() {
         assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["rotated_by"], username, "{mode:?}");
 
-        // Canarytoken creation is a viewer mutation; `created_by` was the
-        // client's display name until #3577.
-        let (status, text) = b.send(Some("viewer"), "POST", "/api/v1/canarytokens",
+        // Canarytoken creation (admin-only since #3857); `created_by` was
+        // the client's display name until #3577.
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/canarytokens",
             Some(json!({"token_type": "adobe_pdf", "memo": "m", "created_by": "Bob Display"}))).await;
         assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
         let created = if mode == AssertionMode::Enforce { "alice" } else { "Bob Display" };
