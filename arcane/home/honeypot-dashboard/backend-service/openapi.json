@@ -14,7 +14,7 @@
         "type": "apiKey"
       },
       "serviceToken": {
-        "description": "The BFF credential: the secret the dashboard BFF presents on every /api/v1 call (SERVICE_TOKEN, or SERVICE_TOKEN_PREVIOUS inside its rotation window; lib.rs's require_service_token, #2183, #3577). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly. An instance may also trust a separate dev token (DEV_SERVICE_TOKEN, #3866) in this same header; it is a bound pair with a dev assertion key, so it needs an actorAssertion signed by that key on every request, and what it does is recorded with a dev marker.",
+        "description": "The BFF credential: the secret the dashboard BFF presents on every /api/v1 call (SERVICE_TOKEN, or SERVICE_TOKEN_PREVIOUS inside its rotation window; lib.rs's require_service_token, #2183, #3577). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly. An instance may also trust a separate dev token (DEV_SERVICE_TOKEN, #3866) in this same header; it is a bound pair with a dev assertion key: an actorAssertion that goes with it must be signed by that key, and without one it is treated exactly as the production token without one. What it does is recorded with a dev marker.",
         "in": "header",
         "name": "X-Service-Token",
         "type": "apiKey"

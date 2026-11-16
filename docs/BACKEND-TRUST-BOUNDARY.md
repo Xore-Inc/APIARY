@@ -73,7 +73,11 @@ A dashboard running on a workstation (`bun run dev` through the
 `dev-backend-tunnel.sh` script in apiary-dashboard) reaches the homeserver
 backend with its own credentials, so the production token and signing key
 never leave the homeserver (#3866). Two optional variables, set on the
-backend that serves it (today `honeypot-dashboard-backend`):
+backend that serves it. A dev dashboard uses both (the tunnel's 8081 and
+8082), so set them on both: `honeypot-dashboard-backend` (`backend-service`)
+**and** `honeypot-dashboard` (`backend-service-mounted`, the write path). Each
+compose project reads its own Arcane project env, nothing is shared, so the
+same two values go into each project's `.env`:
 
 | Variable | Holds |
 |---|---|
@@ -86,13 +90,22 @@ backend that serves it (today `honeypot-dashboard-backend`):
   `ACTOR_ASSERTION_PUBLIC_KEY` value, a private key, and a dev pair on an
   instance with no `SERVICE_TOKEN`. Empty counts as unset, so the compose
   passthrough (`${DEV_SERVICE_TOKEN:-}`) is harmless.
-- **Bound pair.** The dev token is believed only with an assertion that the
-  dev key verifies, and the production token only with one the production
-  key verifies. Dev token with a production-signed assertion, or production
-  token with a dev-signed one, is a 401 like any assertion that does not
-  verify. Unlike the production token, the dev token has no anonymous read:
-  under `enforce` it needs an assertion on every request, reads included, so
-  a leaked dev token alone opens nothing.
+- **Bound pair.** An assertion that comes with the dev token is verified
+  against the dev key only, and one that comes with the production token
+  against the production key only. Dev token with a production-signed
+  assertion, or production token with a dev-signed one, is a 401 like any
+  assertion that does not verify.
+- **Parity with production without an assertion.** A dev token with no
+  assertion behaves exactly like the production token with none, under every
+  mode: under `enforce` a plain read passes (with no actor, so no
+  attribution; the request log still says `credential: dev`), a mutation or
+  a request that claims an actor is a 401. A local dev instance therefore
+  behaves like production (machine reads such as the live stream work the
+  same), and a test against it is not misleading. Because that read needs no
+  assertion, a leaked dev token alone opens what a leaked production token
+  alone would: the dev pair limits the blast radius to what you register,
+  revoked by unsetting it, and keeps production's token and key off the
+  workstation, it does not make the token a weaker secret.
 - **No rotation slots.** The dev pair never uses `_PREVIOUS`/`_UNTIL`, and
   does not occupy the production ones, so the next real rotation is
   unaffected. To rotate, replace both values; to revoke, unset both and
@@ -441,10 +454,13 @@ Where the values go:
   (apiary-dashboard); it keeps the token and private key in 0600 files and
   prints the public key. Set `DEV_ACTOR_ASSERTION_PUBLIC_KEY` to that key and
   `DEV_SERVICE_TOKEN` to the token (the one value that has to travel, to the
-  backend's env only; never to git, an issue or a log), redeploy the backend.
+  backends' env only; never to git, an issue or a log) in **both** project
+  envs, `honeypot-dashboard-backend` and `honeypot-dashboard`, and redeploy
+  both backends (the mounted one is `backend-service-mounted`).
   Check: with the pair, a read answers 200 and its request log line carries
-  `credential: dev`; with the dev token and no assertion, or with the
-  production-signed one, it answers 401; production traffic is unchanged.
+  `credential: dev`; with the dev token and a production-signed assertion it
+  answers 401, and a write with no assertion is a 401 as for production;
+  production traffic is unchanged.
 - **Rotate:** generate a new pair on the workstation (`--force`), replace both
   values on the backend, redeploy.
 - **Revoke:** unset both (empty is unset) and redeploy the backend. The

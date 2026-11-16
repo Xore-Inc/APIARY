@@ -44,8 +44,10 @@
 //!    local dashboard its own credentials, so the production token and
 //!    signing key never leave the homeserver. The pair is bound: the dev
 //!    token is only believed with an assertion signed by the dev key, and
-//!    the production token only with one signed by the production key. It
-//!    uses no rotation slot. Everything it does is marked `dev`.
+//!    the production token only with one signed by the production key. With
+//!    no assertion at all it is the production token with none, whatever
+//!    that allows under the mode. It uses no rotation slot, and everything
+//!    it does is marked `dev`.
 //!
 //! Every secret can be given as `NAME` or as `NAME_FILE` (the swarm secret
 //! convention from #3590), never both.
@@ -258,9 +260,11 @@ impl Trust {
     /// - A verified viewer on any mutation is a 403, whatever `x-actor-role`
     ///   says: viewers are read-only.
     /// - The dev credential (#3866) is a bound pair: its assertion is checked
-    ///   against the dev key only, and there is no anonymous read, so a bare
-    ///   dev token is a 401 on every route. The verified actor it yields
-    ///   carries [`DEV_ACTOR_PREFIX`].
+    ///   against the dev key only. Without an assertion it is exactly the
+    ///   production token without one (a plain read passes as Anonymous, a
+    ///   mutation or an actor claim is a 401), so a local dev instance
+    ///   behaves like production. The verified actor it yields carries
+    ///   [`DEV_ACTOR_PREFIX`].
     pub fn evaluate(
         &self,
         principal: Principal,
@@ -273,7 +277,7 @@ impl Trust {
         let Some(raw) = headers.get(ASSERTION_HEADER) else {
             let claims_actor = headers.contains_key(ACTOR_USERNAME_HEADER)
                 || headers.contains_key(ACTOR_ROLE_HEADER);
-            if mutation || claims_actor || principal == Principal::Dev {
+            if mutation || claims_actor {
                 return Verdict::Deny(
                     StatusCode::UNAUTHORIZED,
                     "actor assertion required: send x-actor-assertion signed by the BFF".into(),
@@ -1343,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dev_token_needs_an_assertion_signed_by_the_dev_key() {
+    fn a_dev_token_is_bound_to_the_dev_key_and_otherwise_acts_like_the_production_token() {
         let (prod, dev) = (Signer::generate(), Signer::generate());
         let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
         let path = "/api/v1/services/cowrie/restart";
@@ -1374,15 +1378,20 @@ mod tests {
             Verdict::Actor(VerifiedActor { subject: "sub-alice".into(), username: "alice".into(), role: Role::Admin })
         );
 
-        // The token alone is no credential: not on a mutation, and not on a
-        // read either, where the production token alone would pass.
-        for method in [Method::POST, Method::GET] {
+        // The bare token behaves exactly as the production token does: a
+        // read passes with no actor, a write or an actor claim is a 401.
+        for principal in [Principal::Dev, Principal::Bff] {
+            assert_eq!(dev_verdict(&trust, principal, Method::GET, "/api/v1/events", None), Verdict::Anonymous, "{principal:?}");
             assert!(matches!(
-                dev_verdict(&trust, Principal::Dev, method.clone(), path, None),
+                dev_verdict(&trust, principal, Method::POST, path, None),
                 Verdict::Deny(StatusCode::UNAUTHORIZED, _)
-            ), "{method}");
+            ), "{principal:?}");
+            let claim = headers(&[("x-actor-username", "root")]);
+            assert!(matches!(
+                trust.evaluate(principal, &Method::GET, "/api/v1/events", &claim, at(NOW)),
+                Verdict::Deny(StatusCode::UNAUTHORIZED, _)
+            ), "{principal:?}");
         }
-        assert_eq!(dev_verdict(&trust, Principal::Bff, Method::GET, "/api/v1/events", None), Verdict::Anonymous);
     }
 
     #[test]

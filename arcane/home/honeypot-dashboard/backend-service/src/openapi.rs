@@ -185,10 +185,11 @@ fn render(document: &mut Value) {
                          Browsers never reach this service directly. An \
                          instance may also trust a separate dev token \
                          (DEV_SERVICE_TOKEN, #3866) in this same header; it \
-                         is a bound pair with a dev assertion key, so it \
-                         needs an actorAssertion signed by that key on \
-                         every request, and what it does is recorded with a \
-                         dev marker."
+                         is a bound pair with a dev assertion key: an \
+                         actorAssertion that goes with it must be signed by \
+                         that key, and without one it is treated exactly as \
+                         the production token without one. What it does is \
+                         recorded with a dev marker."
                 },
                 "exportToken": {
                     "type": "apiKey",

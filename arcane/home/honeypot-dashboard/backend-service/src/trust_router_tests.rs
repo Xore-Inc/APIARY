@@ -770,12 +770,20 @@ async fn the_dev_pair_is_accepted_and_each_mixed_pair_is_refused() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!d.audit.exists(), "a refused request was audited");
 
-    // The dev token with no assertion at all: no anonymous read either.
-    let (status, _) = d.send("pair-bare", "GET", "/api/v1/events", &[("x-service-token", DEV)]).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // The production token alone still reads under enforce, as before.
-    let (status, _) = d.send("pair-bff", "GET", "/api/v1/events", &[("x-service-token", BFF)]).await;
-    assert!(let_in(status), "{status}");
+    // The bare token acts as the production token does without an assertion:
+    // a read passes (marked dev, no actor), a write or an actor claim is a 401.
+    for (id, token) in [("bare-dev", DEV), ("bare-bff", BFF)] {
+        let (status, body) = d.send(&format!("{id}-read"), "GET", "/api/v1/events", &[("x-service-token", token)]).await;
+        assert!(let_in(status), "{id} read: {status} {body}");
+        let (status, _) = d.send(&format!("{id}-write"), "POST", SERVICES, &[("x-service-token", token)]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{id} write");
+        let (status, _) = d.send(&format!("{id}-claim"), "GET", "/api/v1/events",
+            &[("x-service-token", token), ("x-actor-username", "root")]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{id} actor claim");
+    }
+    assert_eq!(d.logged("bare-dev-read").await["credential"], "dev");
+    assert!(d.logged("bare-bff-read").await.get("credential").is_none());
+    assert!(!d.audit.exists(), "a bare read or a refused write was audited");
 }
 
 #[tokio::test]
