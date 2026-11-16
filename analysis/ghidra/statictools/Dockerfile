@@ -4,7 +4,7 @@
 # See server.py's module docstring for why: worker/ghidra-worker.py is
 # deliberately stdlib-only on the host, and these are exactly the compiled/
 # C-extension dependencies that rule exists to keep off it.
-FROM python:3.14-slim@sha256:c3e521df8b2b498a7a682e7e18676771cb80c6b75b8699af886b2d554ce40151
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential libfuzzy-dev curl ca-certificates \
