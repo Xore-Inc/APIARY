@@ -139,6 +139,11 @@ services:
       - ACTOR_ASSERTION_PUBLIC_KEY=${ACTOR_ASSERTION_PUBLIC_KEY:-}
       - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS:-}
       - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL:-}
+      # #3866: the optional dev credential pair for a local dashboard, the
+      # same two values as in honeypot-dashboard-backend (this project reads
+      # its own env). Both or neither; unset is no dev access.
+      - DEV_SERVICE_TOKEN=${DEV_SERVICE_TOKEN:-}
+      - DEV_ACTOR_ASSERTION_PUBLIC_KEY=${DEV_ACTOR_ASSERTION_PUBLIC_KEY:-}
       - SANDBOX_REQUEST_DIR=/sandbox-requests
       - WINDOWS_SANDBOX_REQUEST_DIR=${WINDOWS_SANDBOX_REQUEST_DIR:-}
       - GHOSTS_SANDBOX_REQUEST_DIR=${GHOSTS_SANDBOX_REQUEST_DIR:-}

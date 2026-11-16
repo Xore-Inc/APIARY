@@ -170,6 +170,11 @@ services:
       - ACTOR_ASSERTION_PUBLIC_KEY=${ACTOR_ASSERTION_PUBLIC_KEY:-}
       - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS:-}
       - ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL=${ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL:-}
+      # #3866: the optional dev credential pair for a local dashboard. Both
+      # or neither (one alone refuses to boot with [E-TRUST-CONFIG]); unset
+      # is no dev access. Never a rotation slot of the production values.
+      - DEV_SERVICE_TOKEN=${DEV_SERVICE_TOKEN:-}
+      - DEV_ACTOR_ASSERTION_PUBLIC_KEY=${DEV_ACTOR_ASSERTION_PUBLIC_KEY:-}
       - CANARYTOKENS_API_URL=${CANARYTOKENS_API_URL:-}
       # The minted token calls this adapter when fired. Override per host
       # when the backend API moves to precision (#3576).
