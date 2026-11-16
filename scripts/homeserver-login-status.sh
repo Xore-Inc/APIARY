@@ -105,7 +105,7 @@ fi
 
 section "Web service health"
 http_status Dockge http://127.0.0.1:5001/
-http_status Dashboard http://10.8.0.2:19090/healthz
+http_status Dashboard http://10.8.0.2:19092/healthz
 http_status EveBox http://10.8.0.2:19636/
 http_status Kibana http://10.8.0.2:19601/api/status
 http_status Arkime http://10.8.0.2:19080/

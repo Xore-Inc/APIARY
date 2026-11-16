@@ -585,8 +585,8 @@ The failure this section exists for is quoted above: a content-change
 redeploy leaves the dashboard *"green, healthy, running the old code."*
 Everything else about that state is a lie by omission — a fresh container
 id, a passing healthcheck and a recent image build all say the machinery
-ran, not that this code is what is running. So both dashboard images now
-carry the git revision they were built from, in three places, and
+ran, not that this code is what is running. So the backend image now
+carries the git revision it was built from, in three places, and
 `scripts/verify-deploy.sh` compares them.
 
 **Where the stamp is.**
@@ -602,15 +602,12 @@ carry the git revision they were built from, in three places, and
   `cargo:rerun-if-env-changed=GIT_SHA`, which is load-bearing: without it
   cargo reuses a cached build and the second build of an identical tree
   keeps the *first* revision, producing the exact failure this fixes.
-- **Frontend** (removed with `frontend-next` in #3749; the production
-  dashboard, apiary-dashboard, is pinned by digest instead) — a static
-  `public/build.json` (`{"revision":…,"built":…, "source":…}`), written by
-  `frontend-next/scripts/write-build-info.mjs`
-  into the build stage before `npm run build` so vite copies it into the
-  output. Served by Nitro from `public/`, the same mechanism the image
-  healthcheck already uses for `/static/theme.css`. It is gitignored: a
-  committed `build.json` would be a revision claim about nobody's build.
-- **Both** — `org.opencontainers.image.revision` (plus `.source` and
+- **Dashboard** — not built here. The dashboard is
+  Xore-Inc/apiary-dashboard, a GHCR image pinned by tag and digest in its
+  Arcane project's `.env`; its revision is that repository's commit, on the
+  image's `org.opencontainers.image.revision` label. (The in-repo frontend's
+  `public/build.json` stamp left with it in #3749.)
+- **Labels** — `org.opencontainers.image.revision` (plus `.source` and
   `.created`) as image labels, readable without running anything:
   `docker image inspect apiary-backend:latest --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'`.
 

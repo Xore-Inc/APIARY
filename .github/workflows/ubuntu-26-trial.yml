@@ -69,5 +69,4 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" -m pip install -q pytest pyyaml
           "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s scripts/tests -p 'test_*.py' -v
           python3 scripts/check-ci-runner-capabilities.py
-          python3 branding/scripts/check_theme_sync.py
 

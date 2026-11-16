@@ -33,7 +33,7 @@
 #
 # The scopes applied are stock Keycloak's own set for this client, and match
 # every user-facing client already declared in this realm
-# (apiary-dashboard, arcane, arkime, evebox, kibana, revdeck, tanner,
+# (apiary-dashboard-rewrite, arcane, arkime, evebox, kibana, revdeck, tanner,
 # traefik-dashboard, unsloth all carry exactly these five).
 #
 # Idempotent: re-running is a no-op, so it is safe on every install and safe

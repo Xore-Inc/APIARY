@@ -248,8 +248,8 @@ jobs:
           # per-sensor counts, cluster status, dead letters, filebeat,
           # unattributed), asked of the backend directly with the service
           # token from the backend stack's own .env -- the exact seam
-          # verify-stack.py uses (#3749: the old /bff passthrough left with
-          # dashboard-next). The token is read into a variable and
+          # verify-stack.py uses (the dashboard has no public passthrough).
+          # The token is read into a variable and
           # sent as a header; it is never echoed.
           report 'The backend derives these from its own tail plus a live Elasticsearch query,'
           report 'so a coherent set here is the end-to-end pipeline check Gate 0 asks for.'

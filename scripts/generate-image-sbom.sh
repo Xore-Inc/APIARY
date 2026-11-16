@@ -4,7 +4,7 @@
 # #3321.
 #
 # The problem this closes: there was no inventory of what is inside
-# apiary-backend or dashboard-next, so answering "are we affected?" when a
+# apiary-backend, so answering "are we affected?" when a
 # CVE lands meant rebuilding the image or exec-ing into the running
 # container. The build already produces the answer and then throws it away;
 # this keeps it.

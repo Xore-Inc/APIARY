@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
 # provision-dashboard-oidc-secret.sh -- a fresh --import-realm generates a
-# new random client secret for apiary-dashboard (same reasoning as
+# new random client secret for the dashboard's OIDC client (same reasoning as
 # provision-events-poller.sh's own comment: no realm-JSON concept for
-# pinning a client secret). Nothing ever wrote that secret to where the
-# dashboard binary itself expects it
-# (arcane/home/honeypot-dashboard/compose.yml's OIDC_CLIENT_SECRET_FILE=
-# /run/dashboard-secrets/oidc-client-secret) -- sync-client-secrets.sh
-# covers the *gateway* sidecars' copies on the VPS, not this one. Found
-# live during #787's homeserver reinstall (2026-08-09): both dashboard and
-# dashboard-b crash-looped forever on "OIDC_CLIENT_SECRET(_FILE) must
-# contain at least 32 characters" because secrets/ was simply empty.
+# pinning a client secret), and nothing else writes it to where the
+# dashboard reads it (OIDC_CLIENT_SECRET_FILE=/run/dashboard-secrets/
+# oidc-client-secret, bind-mounted from DASHBOARD_SECRETS_DIR).
+# sync-client-secrets.sh covers the *gateway* sidecars' copies on the VPS,
+# not this one. Found live during #787's homeserver reinstall (2026-08-09):
+# the dashboard crash-looped on "OIDC_CLIENT_SECRET(_FILE) must contain at
+# least 32 characters" because secrets/ was simply empty.
 #
 # Idempotent: safe to re-run after a realm re-import (the secret file is
-# simply overwritten with the current value). Both dashboard containers
-# have restart: unless-stopped, so writing the file here is enough --
-# no need to also restart them, their own crash-restart loop picks it up.
+# simply overwritten with the current value). The dashboard has
+# restart: unless-stopped, so writing the file here is enough.
 #
-# #3578/#3749: DASHBOARD_CLIENT_ID selects the client. The default is the
-# production dashboard's client, apiary-dashboard-rewrite, whose secret file
-# lives in the apiary-dashboard Arcane project (DASHBOARD_SECRETS_DIR). The
-# legacy apiary-dashboard client served dashboard-next, removed in #3749.
+# DASHBOARD_CLIENT_ID selects the client. The default is the dashboard's
+# client, apiary-dashboard-rewrite (Xore-Inc/apiary-dashboard), whose secret
+# file lives in the apiary-dashboard Arcane project (DASHBOARD_SECRETS_DIR).
 #
 # Run on the homeserver as root. #3824: authenticates with the permanent admin
 # client (secrets/admin-client-secret) through lib-admin.sh.
@@ -39,15 +36,9 @@ client_uuid="$(kc_client_uuid "${REALM}" "${CLIENT_ID}")"
 
 # Group-own the secret by the group apiary-dashboard's compose joins the
 # container to (group_add DEPLOY_RUNNER_GID), so the unprivileged dashboard
-# can read it. History below is from the legacy dashboard-next (#3749).
-#
-# The comment that used to sit here said these services "run as root:root" and
-# matched ownership accordingly. That described the RETIRED Go dashboard, which
-# had no USER in its Dockerfile and so bypassed file permissions entirely.
-# dashboard-next runs as the frontend-next image's unprivileged `node` user
-# (uid 1000), which is exactly why its compose carries a group_add -- and
-# root:root 440 defeats that, because no group membership can grant read on a
-# file whose group IS root. Live symptom, found after the 2026-09-03 rebuild:
+# (uid 1000) can read it. Do not go back to root:root 440: no group
+# membership can grant read on a file whose group IS root. Live symptom when
+# that happened (2026-09-03 rebuild):
 #
 #   [auth] /auth/login could not start sign-in:
 #     Error: EACCES: permission denied, open '/run/dashboard-secrets/oidc-client-secret'

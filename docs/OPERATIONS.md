@@ -73,110 +73,23 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
 
 - **Dashboard** → `https://honeypot.<domain>`, served since 2026-10-30 by
   [Xore-Inc/apiary-dashboard](https://github.com/Xore-Inc/apiary-dashboard)
-  (Arcane project `apiary-dashboard`; the in-repo `frontend-next` was removed
-  in #3749). The feature notes below were written for frontend-next and
-  describe the same backend views. Authenticated via its own native OIDC
-  session against Keycloak directly (no gateway hop, unlike the investigation
-  UIs below -- #1026). Live
-  KPIs, feed-freshness states, per-sensor/protocol counts, top IPs/creds/commands,
-  payload downloads, attack chains, and 7-day `/24`/`/64` campaign correlation
-  scored across sensors, credentials, ports, IDS alerts, and payload hashes.
-  The interface is organized as an operations console rather than a shortcut
-  collection: task-based navigation separates monitoring, investigation, and the
-  Elasticsearch archive. Four top-level overview tabs group live operations,
-  the threat landscape, attacker behavior, and evidence/campaigns so only one
-  workflow is visible at a time; the selected tab survives live refreshes.
-  Every KPI and ranked value pivots directly into the relevant
-  investigation, while explanatory labels make states and metrics usable
-  without a separate legend. The responsive navigation becomes an accessible
-  menu on narrow displays, and light, dark, and automatic themes remain
-  available.
-  The frontend follows the shared [**Xore/theme**](https://github.com/Xore/theme)
-  design system (migration guide:
-  [MIGRATE-HONEYPOT-STACK.md](https://github.com/Xore/theme/blob/main/docs/MIGRATE-HONEYPOT-STACK.md)):
-  a semantic, server-rendered application shell (toolbar, sidebar, main
-  canvas, command bar) styled only by the byte-identical vendored `theme.css`.
-  APIARY does not carry a custom dashboard stylesheet; new selectors are
-  implemented in `Xore/theme` and re-vendored. The theme and Leaflet are
-  served from the dashboard binary rather than a JavaScript CDN.
-  The fixed desktop sidebar becomes a compact rail and then an off-canvas
-  navigation panel on narrow screens, while the 32px application toolbar keeps
-  activity, health, and theme controls (dark, light, system) available across
-  every investigation page.
-  The command bar also routes IP addresses, payload hashes, session IDs, ASNs,
-  HTTP paths, and free-text input directly to the appropriate investigation.
-  Event results use server-side pagination (25 rows by default; `per_page`
-  accepts 25–500).
-  Every longer table and API-fed list initially displays 25 entries, then
-  reveals the next 25 near the end of the page or through an accessible
-  **Load 25 more** control. This also covers payloads, alerts, sandbox results,
-  commands, source lists, and Elasticsearch dead letters. Payload, event, and
-  attack-source rows are fetched from the server in 25-row chunks, avoiding
-  large initial HTML responses even when an inventory contains thousands of
-  records.
-  Attacker profiles combine network enrichment, behavior aggregates, and a
-  chronological progression view. `/sessions/<id>` provides an oldest-to-newest
-  session replay, and both views add conservative MITRE ATT&CK Enterprise/ICS
-  behavior mappings with links and explicit evidence (behavior context, never
-  actor attribution). `/clusters` finds fingerprints, payloads, ASNs, and
-  provider classes shared by multiple source IPs. Campaign rows now explain
-  exactly which cross-sensor, credential, payload, alert, or fingerprint factors
-  produced their correlation score. The navbar alert badge shows unacknowledged
-  alert state, while source health uses neutral metric tiles for feeds,
-  Elasticsearch, Filebeat, and dead letters.
-  `/api/v1/campaigns` exposes the same correlation data. A balanced recent feed
-  prevents one noisy sensor from hiding lower-volume sensors. The
-  portbridge connection log is used only to recover real source IPs; it is not
-  counted as a sensor or displayed as an event.
-  The overview attack map uses the vendored Leaflet 1.9.4 client with a
-  hardcoded OpenStreetMap raster basemap and GeoLite2 City/ASN coordinates
-  from `/api/map-points`. Attack origins are geographic circles whose physical
-  radius is weighted by event count, so their displayed size changes naturally
-  with zoom. Hover shows IP/city/ASN/provider details and selecting a circle
-  opens every event for that attacker. Live refreshes retain the Leaflet map DOM
-  and update only its GeoJSON layer, preserving pan and zoom. If the map library
-  or tiles fail, the current OpenStreetMap container remains visible with an
-  availability message; there is no local basemap fallback.
-  #2425: `HONEYPOT_MAP_TILE_URL` / `HONEYPOT_MAP_ATTRIBUTION` are gone --
-  they fed the retired Go dashboard's server-side template, and the dashboard
-  has no basemap env surface to set anymore.
-  The hourly activity chart also exposes exact counts on hover/focus. The 24-hour
-  KPI compares activity with the preceding 24 hours and labels large changes;
-  source health reports dashboard process uptime and memory (RSS + virtual)
-  as the runtime card on `/api/v1/source-health` — the Go heap/goroutine
-  figures that card used to show have no Rust equivalent and are gone.
-  Event metadata is directly pivotable: sessions, HASSH/JA3/JA4/User-Agent
-  fingerprints, exact commands and credentials, HTTP paths, IDS signatures and
-  categories, payload hashes, ASNs, organizations, and provider classes all
-  open their related events. Source-health tail counts open normalized events;
-  Elasticsearch source totals open a pre-populated historical query.
-  Management-ready A4 PDF reports are available from the overview, alert
-  center, campaign view, attacker profiles, sessions, and every filtered Event
-  Explorer result. `/export/report.pdf` applies the same filters as Event
-  Explorer, including source IP/CIDR, ASN, organization/provider, country,
-  sensor, signature/category, payload, session, protocol/port, HTTP path,
-  fingerprint, and time window. Reports contain an executive risk summary,
-  ranked sources and indicators, operational alert state, recommendations, and
-  a bounded representative-evidence appendix. Report downloads require the
-  dashboard's own Keycloak-derived `admin` role because they contain hostile-source telemetry.
-  The overview also ranks fingerprints, ASNs, and provider classes with the
-  same one-click pivots.
-  ASN/provider pivots,
-  `/commands` session-aware command analysis, and `/payload-analysis/<hash>`
-  with bounded hashes, entropy, hex, strings, PE/ELF and script classification,
-  behavior indicators, packing likelihood, extracted URL/domain/IP indicators,
-  real YARA rule matches from a networkless, read-only scanner, risk scoring, and
-  Base64/hex/URL/PowerShell UTF-16 decoding. Payload inventory scans run in the
-  background and refresh every two minutes, so walking large capture volumes
-  cannot block `/payloads`; source filters and duplicate provenance are
-  preserved. Download event rows link directly to the matching static report. `/history` adds
-  Elasticsearch search/export; `/source-health` shows Filebeat/Elasticsearch
-  diagnostics. Alerts have persistent cooldown/acknowledgment, live refresh uses
-  SSE, and events pivot directly to Kibana, EveBox, Arkime, and VirusTotal.
-  Event tables support keyboard-accessible sorting, selectable columns, and an
-  expandable normalized-row JSON view; live events on investigation pages raise
-  a transient notification. Browser API contracts live in apiary-dashboard
-  (`src/data/contracts`), pinned against this repo's `openapi.json`.
+  (Arcane project `apiary-dashboard`, container `hp-apiary-dashboard` on
+  `10.8.0.2:19092`). It authenticates with its own native OIDC session
+  against Keycloak directly (client `apiary-dashboard-rewrite`; no gateway
+  hop, unlike the investigation UIs below, #1026) and reads everything
+  through its server functions from `backend-service`; the browser never
+  talks to Elasticsearch. Its pages, features, themes (Astryx, in that repo's
+  `src/themes/`) and visual decisions (`DESIGN.md`, `PRODUCT.md`) are
+  documented in that repository, not here. Browser API contracts live there
+  too (`src/data/contracts`), pinned against this repo's `openapi.json`.
+  What this repo still owns for it is the API surface: server-side
+  pagination, `/api/v1/campaigns` correlation data, map points, payload
+  analysis, reports and the rest of the `backend-service` routes. Report
+  downloads, alert acknowledgements and captured-malware downloads require
+  the dashboard's own Keycloak-derived `admin` role; anyone without it is a
+  read-only viewer. (The feature tour this bullet used to carry described the
+  retired in-repo dashboards, the Go dashboard and then `frontend-next`
+  (#3749); it is in git history before #3834.)
 - **Operational APIs** — `/metrics` exposes Prometheus text metrics for event,
   sensor, ingestion, Filebeat, runtime, dead-letter, and YARA health.
   `/dead-letters` investigates rejected Elasticsearch documents, and
@@ -184,8 +97,6 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   are readable through the generic index-store route
   `/api/v1/store/intelligence` (there is no dedicated intelligence route
   in the Rust router).
-  Alert acknowledgements and captured-malware downloads require the
-  dashboard's own Keycloak-derived `admin` role.
 - **Safe payload triage** — `yara-scanner` inventories all mounted Dionaea,
   Cowrie, and script captures without network access or execution. Its results
   enrich `/payloads`, static-analysis reports, risk scores, alerts, and health.
@@ -393,11 +304,10 @@ scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
 ```
 
-The `--healthz-url` form read the legacy frontend's `/build.json` on 19090,
-which left with frontend-next in #3749. The dashboard (Xore-Inc/apiary-dashboard)
-carries its revision in the image label `org.opencontainers.image.revision`
-(`docker inspect hp-apiary-dashboard`); `--healthz-url` still works for any
-endpoint whose JSON body carries `revision`.
+The dashboard (Xore-Inc/apiary-dashboard) carries its revision in the image
+label `org.opencontainers.image.revision` (`docker inspect
+hp-apiary-dashboard`). `--healthz-url` works for any endpoint whose JSON body
+carries `revision`.
 
 Exit codes are the point, and are deliberately three-valued: **0** the
 deployed revision matches; **1** a finding (missing, unstamped, malformed, or

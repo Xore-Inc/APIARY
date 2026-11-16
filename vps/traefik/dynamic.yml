@@ -83,11 +83,6 @@ http:
       entryPoints: [traefik-oidc]
       service: api@internal
 
-    dashboard-oidc-upstream:
-      rule: "PathPrefix(`/`)"
-      entryPoints: [dashboard-oidc]
-      service: honeypot-dashboard
-
     # Same api@internal service as traefik-api above, on the public entrypoint
     # instead of loopback-only traefik-local. No socat bridge needed — unlike
     # every other honeypot-revdeck-style router, this points at a service that
@@ -533,11 +528,6 @@ http:
     oidc-traefik:
       loadBalancer:
         servers: [{url: "http://oidc-traefik:4180"}]
-        passHostHeader: true
-
-    oidc-dashboard:
-      loadBalancer:
-        servers: [{url: "http://oidc-dashboard:4180"}]
         passHostHeader: true
 
     honeypot-hellpot:

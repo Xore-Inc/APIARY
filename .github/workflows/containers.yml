@@ -107,24 +107,22 @@ jobs:
             context: arcane/home/honeypot-agent-intrusion-worker/analysis/agent-intrusion-corpus
           - image: backend-service
             context: arcane/home/honeypot-dashboard/backend-service
-            # #3321: the two images whose contents had no inventory, so
-            # "are we affected?" for a dashboard CVE meant rebuilding or
+            # #3321: the image whose contents had no inventory, so
+            # "are we affected?" for a backend CVE meant rebuilding or
             # exec-ing into the running container. `sbom: true` opts the row
             # into the digest-keyed CycloneDX + Trivy steps below. Absent on
             # the other sixteen rows, so they build exactly as before.
             sbom: true
-            # #3315: the dashboard images (this one only since dashboard-next
-            # left with #3749) that now report which commit
-            # they were built from -- one compiled into the binary (where
-            # /livez and its /healthz alias answer it as `revision`) or baked
-            # into the served /build.json, and both on the image's
-            # org.opencontainers.image.revision label. Only these two
-            # Dockerfiles declare `ARG GIT_SHA`, so only these two rows pass
-            # it; the other sixteen would take an unused-build-arg warning
-            # per build for an arg they do not read.
+            # #3315: this image reports which commit it was built from --
+            # compiled into the binary (where /livez and its /healthz alias
+            # answer it as `revision`) and on the image's
+            # org.opencontainers.image.revision label. Only this Dockerfile
+            # declares `ARG GIT_SHA`, so only this row passes it; the other
+            # rows would take an unused-build-arg warning per build for an
+            # arg they do not read.
             stamp: true
-            # #3316: ...and the two images that are actually deployed as
-            # long-lived HTTP services are also started and waited on
+            # #3316: ...and, as the image actually deployed as a
+            # long-lived HTTP service, it is also started and waited on
             # below. `boot_smoke: true` is the reason a build row needs a
             # local image to run, which is a different requirement on each
             # event -- see the `load:` input's comment. The remaining rows
@@ -518,7 +516,7 @@ jobs:
       # the previous label's value and apiary.ci.build-row never existed as
       # its own key. The run log shows it exactly as it reached buildkit:
       #
-      #   "label:org.opencontainers.image.version": "sha-047a7a3\\napiary.ci.build-row=dashboard-next-36338870116-1"
+      #   "label:org.opencontainers.image.version": "sha-047a7a3\\napiary.ci.build-row=<row>-36338870116-1"
       #
       # which made the `--filter "label=apiary.ci.build-row=..."` lookup in
       # the boot-smoke step below unmatchable -- every pull_request run

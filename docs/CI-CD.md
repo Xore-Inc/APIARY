@@ -9,7 +9,6 @@ Every push to `main` and every pull request runs:
 
 - the public-repository leak and forbidden-artifact scanner;
 - Go formatting and tests for every Go module;
-- TypeScript checks and a reproducible Tailwind frontend build;
 - Python and shell syntax checks plus high-severity ShellCheck findings;
 - Docker Compose validation for the home and VPS stacks;
 - actionlint over every workflow (warning-level ShellCheck in `run:` blocks),
@@ -17,16 +16,15 @@ Every push to `main` and every pull request runs:
   #3313's hardening still owns (#3314);
 
 A red run also leaves evidence behind: machine-readable JUnit XML from the
-frontend unit, browser, and pytest suites, a retained Playwright report with
-per-failure traces, and the Rust test log. See
+pytest suites and the Rust test log. See
 [Test evidence retained on failure](#test-evidence-retained-on-failure-3319)
 below.
 - hadolint over every tracked Dockerfile, failing on warnings and errors
   (policy and exemptions in `.hadolint.yaml`, #3320);
-- a digest-bound CycloneDX SBOM for the `backend-service` image (the
-  `dashboard-next` one left with frontend-next, #3749), uploaded as an artifact and kept on the homeserver
-  at `/var/image-sbom/`, plus a `trivy sbom` scan over that same file
-  (#3321, [below](#digest-bound-sboms-for-the-two-dashboard-images-3321));
+- a digest-bound CycloneDX SBOM for the `backend-service` image, uploaded as
+  an artifact and kept on the homeserver at `/var/image-sbom/`, plus a
+  `trivy sbom` scan over that same file
+  (#3321, [below](#digest-bound-sbom-for-the-backend-image-3321));
 - CodeQL for Go, JavaScript/TypeScript, and Python;
 - dependency review on pull requests;
 
@@ -42,7 +40,7 @@ a red job is the evidence for pinning the matching `quality.yml` job to
 ### Advisory frontend testing pilot (#3326), retired
 
 `frontend-testing-pilot.yml` (nightly fast-check and Stryker runs over the
-dashboard-next frontend's pure logic) left with `frontend-next` in #3749,
+retired in-repo frontend's pure logic) left with it in #3749,
 together with the four `frontend-next*` Quality jobs and the design-lab
 read-only job. The production dashboard, Xore-Inc/apiary-dashboard, runs its
 own suites in that repository's CI. The record of the pilot stays in
@@ -868,9 +866,8 @@ remains in `APIARY`: the root `docker-compose.yml` is `services: {}`.
 The dashboard is Xore-Inc/apiary-dashboard, its own Arcane project
 (`apiary-dashboard`), pinned by release tag and digest in that project's
 host-local `.env`. A redeploy is an Arcane redeploy of that project; nothing
-is built on the host. The legacy `dashboard-next` this section used to
-describe was removed in #3749, after production moved on 2026-10-30.
-`honeypot-dashboard` now carries only `backend-service-mounted`.
+is built on the host. `honeypot-dashboard` carries only
+`backend-service-mounted`.
 
 ### honeypot-dashboard-backend (#1622)
 
@@ -878,11 +875,11 @@ describe was removed in #3749, after production moved on 2026-10-30.
 Arcane-managed stack at `/opt/stacks/honeypot-dashboard-backend`, carrying
 just the modernization-port `backend-service` (moved out of
 `honeypot-dashboard` above, #1608's Rust request/response tier) so it can be
-restarted/redeployed without touching `dashboard-next` or anything else in
+restarted/redeployed without touching the dashboard tier or anything else in
 the combined stack -- the deployment-layer counterpart to #1608's
 `SERVE_MODE`/`BFF_INTERNAL_URL` cross-host application-code work.
-Since then the workers moved to `honeypot-backend-workers` (#3575) and
-`dashboard-next` was removed (#3749), so `honeypot-dashboard` carries only
+Since then the workers moved to `honeypot-backend-workers` (#3575) and the
+in-repo dashboard was removed (#3749), so `honeypot-dashboard` carries only
 `backend-service-mounted`.
 
 The dashboard (apiary-dashboard) still resolves
@@ -1622,11 +1619,11 @@ timeout against a 7-day floor cannot be mistaken for an abandoned directory.
 run, near 0 when every unit was still fresh. That count -- not a cache-hit
 log line -- is the evidence the cache is doing anything.
 
-### Digest-bound SBOMs for the two dashboard images (#3321)
+### Digest-bound SBOM for the backend image (#3321)
 
-Since #3749 only the backend image remains of the two; `dashboard-next` left
-with frontend-next. There used to be no inventory of what is inside
-`apiary-backend` (`honeypot-backend-service`) or `dashboard-next`. Every other image in the
+There used to be no inventory of what is inside `apiary-backend`
+(`honeypot-backend-service`). (The SBOM also covered the in-repo dashboard
+image until that left in #3749.) Every other image in the
 fleet was at least covered at its base — `image-security-scan.yml` walks the
 tree's Dockerfiles and compose files and Trivy-scans every base image they
 pull — but a built dashboard image is its base plus everything `COPY`ed in
@@ -1634,12 +1631,12 @@ after it, and nothing recorded that difference. Answering "are we affected?"
 when a CVE landed meant rebuilding the image or `exec`-ing into the running
 container.
 
-`containers.yml` now produces a CycloneDX SBOM for those two images at build
+`containers.yml` now produces a CycloneDX SBOM for that image at build
 time, keyed by the pushed manifest digest.
 
-**Only those two rows, and only where there is a digest to key to.** The
-matrix gained an `sbom: true` opt-in on `backend-service` and
-`dashboard-next`; every step below is gated on it, so the other sixteen rows
+**Only that row, and only where there is a digest to key to.** The
+matrix has an `sbom: true` opt-in on `backend-service`; every step below is
+gated on it, so the other rows
 build exactly as before and pay no syft run and no advisory-DB download. The
 steps are also limited to events that push. A `pull_request` row builds with
 `push: false` and `load: false`, so it produces no image and therefore no

@@ -138,7 +138,7 @@ info "[3] HTTP layer-7 probes (direct to app, no Traefik)"
 
 echo
 probe "EveBox"              "$HOME_WG_IP" 19636
-probe "Honeypot dashboard" "$HOME_WG_IP" 19090
+probe "Honeypot dashboard" "$HOME_WG_IP" 19092
 probe "Kibana"             "$HOME_WG_IP" 19601
 probe "Tanner web"         "$HOME_WG_IP" 19091
 probe "Snare"              "$HOME_WG_IP" 19082
@@ -165,7 +165,7 @@ info "[5] Port visibility from VPS ($VPS_SSH)"
   if [[ -z "$HOME_WG" ]]; then
     warn "Could not determine WireGuard IP — skipping VPS-side checks"
   else
-    for spec in "19636:evebox" "19090:dashboard" "19601:kibana" "19091:tanner" "19082:snare" "19080:arkime" "19081:http-honeypot" "18083:api-honeypot"; do
+    for spec in "19636:evebox" "19092:dashboard" "19601:kibana" "19091:tanner" "19082:snare" "19080:arkime" "19081:http-honeypot" "18083:api-honeypot"; do
       IFS=: read -r port lbl <<< "$spec"
       result=$(ssh -p "$VPS_SSH_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$VPS_SSH" \
         "timeout 3 bash -c '</dev/tcp/${HOME_WG}/${port}' 2>/dev/null && echo OPEN || echo CLOSED" 2>/dev/null)
