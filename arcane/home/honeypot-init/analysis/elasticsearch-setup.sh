@@ -892,8 +892,9 @@ JSON
 # dashboard-backend-app / dashboard-backend-mounted-app inputs.
 #
 # One template covers BOTH backend-service instances: they are the same
-# image emitting the same nine fields; only the logset value distinguishes
-# them at query time. Their records are pure request metadata -- method,
+# image emitting the same nine fields (plus `credential: dev` on a request the
+# dev credential pair authenticated, #3866); only the logset value
+# distinguishes them at query time. Their records are pure request metadata -- method,
 # path, status, duration, request.id -- plus service/level/event.category;
 # nothing here is attacker-controlled beyond url.path, which is mapped as
 # plain keyword exactly like traefik-access above (no analysis, capped by
@@ -924,7 +925,8 @@ curl -fsS -X PUT "$es_url/_index_template/dashboard-backend-app" \
         "http.request.method": { "type": "keyword" },
         "url.path": { "type": "keyword", "ignore_above": 1024 },
         "status_code": { "type": "integer" },
-        "duration_ms": { "type": "long" }
+        "duration_ms": { "type": "long" },
+        "credential": { "type": "keyword" }
       }
     }
   }

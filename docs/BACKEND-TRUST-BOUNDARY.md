@@ -27,6 +27,7 @@ what a connection may do.
 | `SERVICE_TOKEN` | `x-service-token` | every `/api/v1` route | the BFF (dashboard) only |
 | `EXPORT_TOKEN` | `x-export-token` | `GET /api/v1/ip-block-export` only; 403 everywhere else | the VPS blocklist pull |
 | actor assertion key | `x-actor-assertion` | proves the operator behind a BFF request | private half: the BFF; public half: the backend |
+| `DEV_SERVICE_TOKEN` + `DEV_ACTOR_ASSERTION_PUBLIC_KEY` (optional, #3866) | `x-service-token` + `x-actor-assertion` | what a BFF reaches, bound to its own key and marked `dev` | a local dev dashboard on a workstation |
 | `HOST_GATEWAY_TOKEN` | `x-host-gateway-token` | the host gateway's `/host/v1` only, never `/api/v1` (#3582) | the gateway and the two HTTP services, once they run off the sensor host |
 
 - No accepted credential is a 401, as before #3577.
@@ -37,11 +38,14 @@ what a connection may do.
   otherwise. Unset means there is no export credential.
 - Each value only counts in its own header: the export token sent as
   `x-service-token` is no credential at all.
+- The dev pair (below) must differ from every other token: the backend also
+  refuses to boot if `DEV_SERVICE_TOKEN` equals `SERVICE_TOKEN`, its
+  `_PREVIOUS` or `EXPORT_TOKEN`.
 - Every secret can be given as `NAME` or `NAME_FILE` (the swarm secret
   convention from #3590: the variable names a file under `/run/secrets/`).
   Setting both refuses to boot. Values never enter git, issues or PRs.
-- `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN` and
-  `EXPORT_TOKEN`; both the gateway and its clients refuse to boot otherwise.
+- `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN`,
+  `EXPORT_TOKEN` and `DEV_SERVICE_TOKEN`; both the gateway and its clients refuse to boot otherwise.
   See [BACKEND-HOST-GATEWAY.md](BACKEND-HOST-GATEWAY.md).
 - `HONEYPOT_SELF_IPS[_FILE]` (#3790) is not a credential, but it is the
   fleet's real public addresses, so the swarm stacks pass it as a secret too.
@@ -62,6 +66,58 @@ A job that pulled the backend directly over the overlay would send the same
 header to `/api/v1/ip-block-export` with the backend's export token. Use a
 separate value for each so either can be revoked alone. The VPS never holds
 `DASHBOARD_SERVICE_TOKEN`.
+
+## Dev credential pair
+
+A dashboard running on a workstation (`bun run dev` through
+`scripts/dev-backend-tunnel.sh` in apiary-dashboard) reaches the homeserver
+backend with its own credentials, so the production token and signing key
+never leave the homeserver (#3866). Two optional variables, set on the
+backend that serves it (today `honeypot-dashboard-backend`):
+
+| Variable | Holds |
+|---|---|
+| `DEV_SERVICE_TOKEN[_FILE]` | the dev dashboard's bearer token, sent as `x-service-token` |
+| `DEV_ACTOR_ASSERTION_PUBLIC_KEY[_FILE]` | the public half of the dev dashboard's own Ed25519 key, same PEM or one-line base64 as `ACTOR_ASSERTION_PUBLIC_KEY` |
+
+- **Both or neither.** Either one alone refuses to boot with
+  `[E-TRUST-CONFIG]`. So does a dev token equal to `SERVICE_TOKEN`, its
+  `_PREVIOUS`, `EXPORT_TOKEN` or `HOST_GATEWAY_TOKEN`, a dev key equal to an
+  `ACTOR_ASSERTION_PUBLIC_KEY` value, a private key, and a dev pair on an
+  instance with no `SERVICE_TOKEN`. Empty counts as unset, so the compose
+  passthrough (`${DEV_SERVICE_TOKEN:-}`) is harmless.
+- **Bound pair.** The dev token is believed only with an assertion that the
+  dev key verifies, and the production token only with one the production
+  key verifies. Dev token with a production-signed assertion, or production
+  token with a dev-signed one, is a 401 like any assertion that does not
+  verify. Unlike the production token, the dev token has no anonymous read:
+  under `enforce` it needs an assertion on every request, reads included, so
+  a leaked dev token alone opens nothing.
+- **No rotation slots.** The dev pair never uses `_PREVIOUS`/`_UNTIL`, and
+  does not occupy the production ones, so the next real rotation is
+  unaffected. To rotate, replace both values; to revoke, unset both and
+  redeploy. Unsetting the pair changes nothing for production.
+- **Same rules otherwise.** The role comes from the signed assertion and
+  `ACTOR_ASSERTION_MODE` (`off`, `log`, `enforce`) means what it does for the
+  production pair, so a dev viewer is read-only (#3857) and a dev admin may
+  write. Under `off`, as for production, nothing is verified, so the dev
+  token is then just a second bearer token; run `log` or `enforce`.
+- **Marked as dev.** A request authenticated by the dev token is logged with
+  `credential: dev` in the durable request log
+  (`dashboard-backend-v1-*`; a production line has no such field) and on
+  the request's `tracing` span, whatever the outcome (a refused dev
+  request is marked too). Under `enforce`, the verified subject and
+  username are recorded as `dev:<sub>` and `dev:<username>` everywhere the
+  verified actor is recorded: the audit trail (`GET /api/v1/audit`), config
+  history, preferences, and `created_by`, `BlockedBy`, `AckedBy` and the other
+  stamped attribution fields. Dev writes can therefore be found, and they
+  never touch a production operator's preferences. Under `log`, the request
+  log is marked and the existing `[E-ACTOR-ASSERTION]` lines apply, with
+  `dev:` shown as what `enforce` will record.
+
+The matching workstation side is `scripts/dev-credentials.sh` in
+apiary-dashboard, which generates the token and key pair into 0600 files
+and prints only the public key to register here.
 
 ## Actor assertions
 
@@ -312,7 +368,7 @@ listener, in every mode. Decision:
 On the host that owns the secret, never in git or a ticket:
 
 ```bash
-# bearer credentials (SERVICE_TOKEN, EXPORT_TOKEN): 256 bits, URL-safe
+# bearer credentials (SERVICE_TOKEN, EXPORT_TOKEN, DEV_SERVICE_TOKEN): 256 bits, URL-safe
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > token-value
 
 # actor assertion key pair
@@ -379,6 +435,21 @@ Where the values go:
   The VPS job then fails closed and keeps its last good list
   (`portbridge-manual-blackhole-refresh.sh`, #3403).
 
+### Dev credential pair
+
+- **Install:** on the workstation run `scripts/dev-credentials.sh`
+  (apiary-dashboard); it keeps the token and private key in 0600 files and
+  prints the public key. Set `DEV_ACTOR_ASSERTION_PUBLIC_KEY` to that key and
+  `DEV_SERVICE_TOKEN` to the token (the one value that has to travel, to the
+  backend's env only; never to git, an issue or a log), redeploy the backend.
+  Check: with the pair, a read answers 200 and its request log line carries
+  `credential: dev`; with the dev token and no assertion, or with the
+  production-signed one, it answers 401; production traffic is unchanged.
+- **Rotate:** generate a new pair on the workstation (`--force`), replace both
+  values on the backend, redeploy.
+- **Revoke:** unset both (empty is unset) and redeploy the backend. The
+  production credentials are not touched.
+
 ### Actor assertion key
 
 - **Install:** see the rollout order above.
@@ -403,5 +474,7 @@ only on `GET /api/v1/ip-block-export`) and `actorAssertion`
 (`X-Actor-Assertion`). Every BFF operation accepts `serviceToken` alone or
 `serviceToken` plus `actorAssertion`: an alternative rather than a second
 requirement, because the default mode does not ask for an assertion; the
-scheme's description says when `enforce` does. `info.x-api-version` stays 1:
+scheme's description says when `enforce` does. The dev pair (#3866) travels in
+the same two headers, so it adds no scheme; the descriptions of
+`serviceToken` and `actorAssertion` mention it. `info.x-api-version` stays 1:
 the additions are additive.

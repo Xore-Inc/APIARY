@@ -2,7 +2,7 @@
   "components": {
     "securitySchemes": {
       "actorAssertion": {
-        "description": "The operator behind a BFF request (#3577): a compact JWS, alg EdDSA, signed with an Ed25519 key that is not the service token. Claims sub, username, role (admin or viewer), aud=apiary-backend, iat and exp (at most 300 s apart, 30 s clock skew), and htm/htu, the method and path it was minted for. Never sufficient on its own: it rides alongside serviceToken. Whether it is required depends on ACTOR_ASSERTION_MODE: off (the default) ignores it; log verifies it and only logs; enforce requires a valid one on every mutation and on any request that names an actor (X-Actor-Username, X-Actor-Role, or an actor field in the query or body), answers 401 without one and 403 to a verified viewer on any mutation (viewers are read-only), and replaces every client-named actor field with the asserted identity. See docs/BACKEND-TRUST-BOUNDARY.md.",
+        "description": "The operator behind a BFF request (#3577): a compact JWS, alg EdDSA, signed with an Ed25519 key that is not the service token. Claims sub, username, role (admin or viewer), aud=apiary-backend, iat and exp (at most 300 s apart, 30 s clock skew), and htm/htu, the method and path it was minted for. Never sufficient on its own: it rides alongside serviceToken. Whether it is required depends on ACTOR_ASSERTION_MODE: off (the default) ignores it; log verifies it and only logs; enforce requires a valid one on every mutation and on any request that names an actor (X-Actor-Username, X-Actor-Role, or an actor field in the query or body), answers 401 without one and 403 to a verified viewer on any mutation (viewers are read-only), and replaces every client-named actor field with the asserted identity. A request on the dev token (#3866) is verified against the dev public key only, never the production one, and the verified subject and username are recorded with a dev: prefix. See docs/BACKEND-TRUST-BOUNDARY.md.",
         "in": "header",
         "name": "X-Actor-Assertion",
         "type": "apiKey"
@@ -14,7 +14,7 @@
         "type": "apiKey"
       },
       "serviceToken": {
-        "description": "The BFF credential: the secret the dashboard BFF presents on every /api/v1 call (SERVICE_TOKEN, or SERVICE_TOKEN_PREVIOUS inside its rotation window; lib.rs's require_service_token, #2183, #3577). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly.",
+        "description": "The BFF credential: the secret the dashboard BFF presents on every /api/v1 call (SERVICE_TOKEN, or SERVICE_TOKEN_PREVIOUS inside its rotation window; lib.rs's require_service_token, #2183, #3577). Compared in constant time, and a wrong or missing value is a 401 before the route is even resolved. Browsers never reach this service directly. An instance may also trust a separate dev token (DEV_SERVICE_TOKEN, #3866) in this same header; it is a bound pair with a dev assertion key, so it needs an actorAssertion signed by that key on every request, and what it does is recorded with a dev marker.",
         "in": "header",
         "name": "X-Service-Token",
         "type": "apiKey"
