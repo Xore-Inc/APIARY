@@ -530,11 +530,6 @@ http:
         servers: [{url: "http://oidc-traefik:4180"}]
         passHostHeader: true
 
-    oidc-dashboard:
-      loadBalancer:
-        servers: [{url: "http://oidc-dashboard:4180"}]
-        passHostHeader: true
-
     honeypot-hellpot:
       loadBalancer:
         servers:
