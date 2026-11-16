@@ -654,6 +654,8 @@ async fn attribution_on_routes_with_external_dependencies() {
 //
 // One instance trusting both pairs, with the durable request log on, so a test
 // can read what the audit trail and the request log say about each request.
+// The dev pair only exists under `enforce` (a boot refusal otherwise, tested
+// in trust.rs), so that is the only mode these run in.
 
 const DEV: &str = "dev-token-for-tests";
 
@@ -826,23 +828,4 @@ async fn a_dev_viewer_is_refused_a_write_and_a_dev_admin_gets_through() {
     let viewer = d.dev.mint("viewer", "GET", "/api/v1/events", now());
     let (status, _) = d.send("role-read", "GET", "/api/v1/events", &[("x-service-token", DEV), ("x-actor-assertion", &viewer)]).await;
     assert!(let_in(status), "{status}");
-}
-
-#[tokio::test]
-async fn the_dev_pair_follows_the_assertion_mode_like_production() {
-    // off: nothing is verified for anyone, so the dev token is a service
-    // token that is marked, exactly as the production token is believed.
-    let d = dev_state(AssertionMode::Off, "mode-off", true);
-    let (status, body) = d.send("off-dev", "GET", "/api/v1/events", &[("x-service-token", DEV)]).await;
-    assert!(let_in(status), "off: {status} {body}");
-    assert_eq!(d.logged("off-dev").await["credential"], "dev");
-    // log: verified and reported, never refused.
-    let d = dev_state(AssertionMode::Log, "mode-log", true);
-    let wrong = d.prod.mint("admin", "POST", SERVICES, now());
-    let (status, body) = d.send("log-dev", "POST", SERVICES, &[("x-service-token", DEV), ("x-actor-assertion", &wrong)]).await;
-    assert!(let_in(status), "log: {status} {body}");
-    assert_eq!(d.logged("log-dev").await["credential"], "dev");
-    // A token no one holds is refused in every mode.
-    let (status, _) = d.send("log-stranger", "GET", "/api/v1/events", &[("x-service-token", "nope")]).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

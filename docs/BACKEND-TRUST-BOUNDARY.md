@@ -43,9 +43,17 @@ what a connection may do.
   `_PREVIOUS` or `EXPORT_TOKEN`.
 - Every secret can be given as `NAME` or `NAME_FILE` (the swarm secret
   convention from #3590: the variable names a file under `/run/secrets/`).
-  Setting both refuses to boot. Values never enter git, issues or PRs.
-- `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN`,
-  `EXPORT_TOKEN` and `DEV_SERVICE_TOKEN`; both the gateway and its clients refuse to boot otherwise.
+  Setting both refuses to boot. Either form has surrounding whitespace
+  removed, and a blank value is unset (a client's header value is stripped
+  of whitespace on the wire, so a padded value could never match). Values never enter git, issues or PRs.
+- `HOST_GATEWAY_TOKEN[_FILE]` (#3582) must differ from `SERVICE_TOKEN` and
+  `EXPORT_TOKEN`; both the gateway and its clients refuse to boot otherwise.
+  `DEV_SERVICE_TOKEN` is checked the same way on both sides (#3866): the
+  clients (the API listeners that use the gateway) compare it with the
+  gateway token they hold, and the gateway compares its own token with
+  `SERVICE_TOKEN`, `EXPORT_TOKEN` and `DEV_SERVICE_TOKEN` if its environment
+  has them (an unset one is nothing to compare). The comparison is
+  current values only, as it is for the other two.
   See [BACKEND-HOST-GATEWAY.md](BACKEND-HOST-GATEWAY.md).
 - `HONEYPOT_SELF_IPS[_FILE]` (#3790) is not a credential, but it is the
   fleet's real public addresses, so the swarm stacks pass it as a secret too.
@@ -86,18 +94,28 @@ same two values go into each project's `.env`:
 
 - **Both or neither.** Either one alone refuses to boot with
   `[E-TRUST-CONFIG]`. So does a dev token equal to `SERVICE_TOKEN`, its
-  `_PREVIOUS`, `EXPORT_TOKEN` or `HOST_GATEWAY_TOKEN`, a dev key equal to an
-  `ACTOR_ASSERTION_PUBLIC_KEY` value, a private key, and a dev pair on an
-  instance with no `SERVICE_TOKEN`. Empty counts as unset, so the compose
-  passthrough (`${DEV_SERVICE_TOKEN:-}`) is harmless.
+  `_PREVIOUS`, `EXPORT_TOKEN` or its `_PREVIOUS`, or (when
+  `HOST_GATEWAY_URL` or `SERVICES_ADAPTER_URL` is set, which is the only
+  time the host-gateway client check runs) `HOST_GATEWAY_TOKEN`; a dev token
+  shorter than 32 characters; a dev key equal to an `ACTOR_ASSERTION_PUBLIC_KEY`
+  value; a private key; and a dev pair on an instance with no `SERVICE_TOKEN`.
+  Blank counts as unset, so the compose passthrough
+  (`${DEV_SERVICE_TOKEN:-}`) is harmless.
+- **Only under `enforce`.** With `ACTOR_ASSERTION_MODE` anything else, `off`
+  or `log`, the dev pair refuses to boot. Under those modes the actor of a
+  request is whatever the client names and nothing is rewritten, so the
+  dev token would be a plain bearer credential and its writes would be
+  attributed without the `dev:` marker, which is what the pair exists to
+  prevent. A dev dashboard therefore only talks to a backend that runs
+  `enforce`, as production does.
 - **Bound pair.** An assertion that comes with the dev token is verified
   against the dev key only, and one that comes with the production token
   against the production key only. Dev token with a production-signed
   assertion, or production token with a dev-signed one, is a 401 like any
   assertion that does not verify.
 - **Parity with production without an assertion.** A dev token with no
-  assertion behaves exactly like the production token with none, under every
-  mode: under `enforce` a plain read passes (with no actor, so no
+  assertion behaves exactly like the production token with none under
+  `enforce`: a plain read passes (with no actor, so no
   attribution; the request log still says `credential: dev`), a mutation or
   a request that claims an actor is a 401. A local dev instance therefore
   behaves like production (machine reads such as the live stream work the
@@ -110,11 +128,12 @@ same two values go into each project's `.env`:
   does not occupy the production ones, so the next real rotation is
   unaffected. To rotate, replace both values; to revoke, unset both and
   redeploy. Unsetting the pair changes nothing for production.
-- **Same rules otherwise.** The role comes from the signed assertion and
-  `ACTOR_ASSERTION_MODE` (`off`, `log`, `enforce`) means what it does for the
-  production pair, so a dev viewer is read-only (#3857) and a dev admin may
-  write. Under `off`, as for production, nothing is verified, so the dev
-  token is then just a second bearer token; run `log` or `enforce`.
+- **Same rules otherwise.** The role comes from the signed assertion, so a
+  dev viewer is read-only (#3857) and a dev admin may write. An assertion
+  signed with a production key may not carry a `sub` or `username` that
+  starts with `dev:` (a 401), so a production operator can never look like a
+  dev actor in the audit trail; a dev caller whose own username starts with
+  `dev:` is recorded as `dev:dev:<name>`.
 - **Marked as dev.** A request authenticated by the dev token is logged with
   `credential: dev` in the durable request log
   (`dashboard-backend-v1-*`; a production line has no such field) and on
@@ -124,9 +143,9 @@ same two values go into each project's `.env`:
   verified actor is recorded: the audit trail (`GET /api/v1/audit`), config
   history, preferences, and `created_by`, `BlockedBy`, `AckedBy` and the other
   stamped attribution fields. Dev writes can therefore be found, and they
-  never touch a production operator's preferences. Under `log`, the request
-  log is marked and the existing `[E-ACTOR-ASSERTION]` lines apply, with
-  `dev:` shown as what `enforce` will record.
+  never touch a production operator's preferences. A request on a bare dev
+  token (a read with no assertion) has no actor, so only its request log
+  line is marked.
 
 The matching workstation side is the `dev-credentials.sh` script in
 apiary-dashboard, which generates the token and key pair into 0600 files
