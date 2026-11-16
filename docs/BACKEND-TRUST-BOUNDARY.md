@@ -69,8 +69,8 @@ separate value for each so either can be revoked alone. The VPS never holds
 
 ## Dev credential pair
 
-A dashboard running on a workstation (`bun run dev` through
-`scripts/dev-backend-tunnel.sh` in apiary-dashboard) reaches the homeserver
+A dashboard running on a workstation (`bun run dev` through the
+`dev-backend-tunnel.sh` script in apiary-dashboard) reaches the homeserver
 backend with its own credentials, so the production token and signing key
 never leave the homeserver (#3866). Two optional variables, set on the
 backend that serves it (today `honeypot-dashboard-backend`):
@@ -115,7 +115,7 @@ backend that serves it (today `honeypot-dashboard-backend`):
   log is marked and the existing `[E-ACTOR-ASSERTION]` lines apply, with
   `dev:` shown as what `enforce` will record.
 
-The matching workstation side is `scripts/dev-credentials.sh` in
+The matching workstation side is the `dev-credentials.sh` script in
 apiary-dashboard, which generates the token and key pair into 0600 files
 and prints only the public key to register here.
 
@@ -437,7 +437,7 @@ Where the values go:
 
 ### Dev credential pair
 
-- **Install:** on the workstation run `scripts/dev-credentials.sh`
+- **Install:** on the workstation run `dev-credentials.sh`
   (apiary-dashboard); it keeps the token and private key in 0600 files and
   prints the public key. Set `DEV_ACTOR_ASSERTION_PUBLIC_KEY` to that key and
   `DEV_SERVICE_TOKEN` to the token (the one value that has to travel, to the
