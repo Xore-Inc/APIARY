@@ -1,6 +1,11 @@
 # The design lab
 
-The tooling and the record behind the dashboard's current look.
+> **Historical record (#3834, 2026-11-16).** This is the tooling and the
+> record behind the look of the *retired* in-repo dashboards (the Go dashboard,
+> then `frontend-next`, removed in #3749), which were styled by `Xore/theme`.
+> The live dashboard is Xore-Inc/apiary-dashboard; its themes are Astryx
+> themes in that repo's `src/themes/`, and nothing here feeds them. The
+> vendored `theme.css` these variants were layered on was removed in #3834.
 
 Until this directory existed, all of it lived in one Claude job's temp
 directory and nowhere else. `theme.css` is full of comments like *pick 6E,
@@ -105,7 +110,8 @@ went with `frontend-next` in #3749, and its CI job (`Design lab is read-only`)
 with it. The production dashboard (Xore-Inc/apiary-dashboard) does not use
 Xore/theme, so there is no UI to serve these variants against. The stylesheets
 and notes here stay as the record of the palette decisions; the vendored
-`theme.css` they layer on is now `branding/vendor/xore-theme/theme.css`.
+`theme.css` they layered on was removed in #3834 (it is in Xore/theme's
+history at the pins named above).
 
 `OIDC_DISABLED=1` supplies the stubbed session, so there is no login
 round-trip per variant per page.

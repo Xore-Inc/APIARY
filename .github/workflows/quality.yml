@@ -86,8 +86,7 @@ jobs:
   # library set for its user -- preinstalled, because the user still has
   # no sudo by design and every sudo-apt path in a check would otherwise
   # be a guaranteed relocation failure. Everything Quality runs is
-  # therefore homeserver-eligible: the job families ship as pairs (the
-  # frontend-next and browser pairs left with #3749), and every
+  # therefore homeserver-eligible: the job families ship as pairs, and every
   # docker-bound scripts-and-compose row is
   # flagged `home: true` (#2389's docker-less audit criterion graduated
   # to "docker or no engine needed").
@@ -736,47 +735,6 @@ jobs:
       # cannot pass on one toolchain and fail on the other.
       - name: OpenAPI contract is not stale (#3325)
         run: cargo run --quiet --bin openapi | diff -u openapi.json -
-
-  vendored-theme:
-    name: Vendored Xore/theme is in sync
-    needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver == 'true'
-    runs-on: [self-hosted, linux, x64, honeypot-ci]
-    timeout-minutes: 10
-
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: theme.css matches the pinned commit
-        run: scripts/check-vendored-theme.sh
-      # python3, not python: this job has no setup-python step, so on the
-      # self-hosted lane it runs on the runner's own PATH and the homeserver
-      # runner ships no bare `python` -- `python branding/...` died with
-      # exit 127 there (#2461) while the vendored sheet itself was fine.
-      - name: Portable APIARY tokens match Xore/theme
-        run: python3 branding/scripts/check_theme_sync.py
-
-  vendored-theme-cloud:
-    name: Vendored Xore/theme is in sync (GitHub-hosted)
-    needs: [ci-target]
-    if: needs.ci-target.outputs.homeserver != 'true'
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: theme.css matches the pinned commit
-        run: scripts/check-vendored-theme.sh
-      # Same python3 choice as the self-hosted twin above: one spelling
-      # across both lanes, valid on the runner's own PATH either way.
-      - name: Portable APIARY tokens match Xore/theme
-        run: python3 branding/scripts/check_theme_sync.py
 
   scripts-and-compose:
     # Per-row executor routing (#2389, widened by #2565): `home: true`
@@ -2161,8 +2119,6 @@ jobs:
       - go-modules-complete
       - backend-service
       - backend-service-cloud
-      - vendored-theme
-      - vendored-theme-cloud
       - scripts-and-compose-complete
       - ai-attribution
     runs-on: ubuntu-latest
@@ -2198,7 +2154,7 @@ jobs:
           fi
           single go-modules-complete
           single scripts-and-compose-complete
-          for p in public-safety backend-service vendored-theme; do
+          for p in public-safety backend-service; do
             pair "$p"
           done
           exit "$fail"

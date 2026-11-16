@@ -109,8 +109,7 @@ retained. Wire it into the same schedule as the existing host state copies
 1. Stop the two writers of `dashboard-state`: `docker stop hp-apiary-backend
    hp-apiary-backend-mounted` (`backend-service` and
    `backend-service-mounted`). The dashboard UI (apiary-dashboard) holds no
-   audit files; the legacy `dashboard-next` this step used to name was
-   removed in #3749.
+   audit files, so it can keep running.
 2. Untar the chosen archive into the volume:
    `docker run --rm -v dashboard-state:/state -v <backup-dir>:/backup alpine:3 tar xzf /backup/dashboard-state-<ts>.tar.gz -C /state`
 3. Start them again: `docker start hp-apiary-backend hp-apiary-backend-mounted`.

@@ -20,8 +20,8 @@ build of `arcane/home/honeypot-hellpot/hellpot`, pinned by digest from the
    - the task runs on `supermicro`, `healthy`;
    - a request through the VPS (public 8080, `portbridge` → `10.8.0.2:8080`)
      appears in `honeypot-v2` with the prober's public `honeypot.src_ip`;
-   - containers on their own networks still reach `hp-keycloak:8080`,
-     `hp-dashboard-next:8080` and `hp-canarytokens-adapter:8090`;
+   - containers on their own networks still reach `hp-keycloak:8080` and
+     `hp-canarytokens-adapter:8090`;
    - from the LAN, `nmap -Pn -p 8080,8090 <homeserver LAN address>` is
      `filtered`, and the guard's LOG/DROP counters for 8080,8090 increase.
 

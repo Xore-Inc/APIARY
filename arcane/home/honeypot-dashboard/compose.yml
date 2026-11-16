@@ -1,59 +1,22 @@
-# honeypot-dashboard -- since #3749 (2026-10-30) this project carries only
-# `backend-service-mounted`; the dashboard UI is Xore-Inc/apiary-dashboard
-# (arcane/home/apiary-dashboard there) and the workers are
-# honeypot-backend-workers. The history below explains the shared names.
+# honeypot-dashboard -- this project carries only `backend-service-mounted`,
+# the write-capable backend instance. The dashboard UI is
+# Xore-Inc/apiary-dashboard (its own Arcane project), the read API tier is
+# honeypot-dashboard-backend, and the workers and services-adapter are
+# honeypot-backend-workers. The project keeps its historical name (#258 split
+# the old dashboard + services-adapter pair into it).
 #
-# honeypot-dashboard — #258: dashboard + services-adapter split into their
-# own Dockge-managed stack, deployed as /opt/stacks/honeypot-dashboard.
+# Cross-stack access: backend-service-mounted reaches elasticsearch by
+# service-name DNS over the shared `honeynet` network and shares named
+# volumes with other stacks (dionaea-lib read-only; dashboard-state both
+# ways). Every shared network/volume carries an explicit, non-external
+# `name:` in every stack that touches it: Compose creates a named resource
+# if absent and reuses it if present, so no `external: true` pre-creation is
+# needed. Do not drop those `name:` keys -- an unnamed volume would silently
+# become a fresh project-scoped one.
 #
-# Unlike the standalone honeypot personas already split out (conpot, cowrie,
-# multipot, http, dnp3 -- see arcane/home/honeypot-conpot/compose.yml's header for that
-# reasoning), this pair genuinely needs cross-stack access: dashboard talks
-# to elasticsearch/filebeat by service-name DNS over the shared `honeynet`
-# network, and reads/writes three named volumes the main stack also touches
-# -- dionaea-lib and yara-results (dionaea/yara-scanner write, this stack
-# only reads), and dashboard-state (genuinely shared both ways: payload-
-# dedupe and yara-scanner in the main stack read/write retained script
-# payloads under /payloads/scripts, the same subtree this stack's own
-# SCRIPT_PAYLOAD_DIR=/state/script-payloads writes). This is the "harder
-# case" #258 raised -- resolved the same way this repo already resolves it
-# for honeypot-init (see docker-compose.yml's own networks: comment and
-# arcane/home/honeypot-init/compose.yml's header): give the shared network/volumes an
-# explicit, non-external `name:` in every stack that touches them. Compose
-# creates a named resource if absent or transparently reuses it if a
-# same-named one already exists -- no `external: true` pre-creation dance
-# needed, and no --link/legacy networking either. Confirmed this already
-# works live in production before relying on it here: honeypot-init's
-# elasticsearch-setup job resolves `http://elasticsearch:9200` by bare
-# service name across the project boundary, over this exact same honeynet,
-# today.
-#
-# services-adapter moves together with dashboard, not out on its own: the
-# two communicate over services-adapter-socket -- a volume that, at the time
-# of this #258 split, genuinely nothing else touched (confirmed -- grepped
-# for it across every compose file), so there was no reason to split them
-# into separate projects. Originally left unnamed/project-scoped here -- a
-# fresh volume in the new project, not migrated from the old one -- per
-# explicit instruction that this split does not need to preserve existing
-# state across the cutover. dashboard-state got the opposite treatment
-# (explicit shared name) precisely because, unlike the socket at the time,
-# other services still depended on it.
-#
-# That "nothing else touches it" premise no longer holds: #1622 moved
-# backend-service (a third consumer of this same socket) into the sibling
-# honeypot-dashboard-backend stack, so services-adapter-socket below now
-# also carries an explicit shared `name:`, same mechanism as dionaea-lib/
-# dashboard-state.
-#
-# The log-path half of this claim held; the EXPECTED_SENSORS half did not
-# survive: that expectation list was removed when the cutover completed
-# (commit 824aa33d, #1628), and source-health today derives sensor liveness
-# from observed event.sensor values (backend-service/src/health.rs) rather
-# than a static list (#2359). Every /logs-derived, host-bind-mounted path
-# is unaffected by the move: the dashboard reads sensor activity from log
-# files at their existing host paths regardless of which compose project
-# produced them, exactly as already proven by the five sensor splits before
-# this one.
+# Source health derives sensor liveness from observed event.sensor values
+# (backend-service/src/health.rs, #2359), not a static list, and reads
+# /logs-derived host paths regardless of which project produced them.
 
 name: honeypot-dashboard
 
@@ -65,10 +28,8 @@ x-runtime-defaults: &runtime-defaults
       max-file: "3"
 
 services:
-  # #3749: the legacy frontend (`dashboard-next`, frontend-next) and its
-  # session valkey (`oidc-sessions`) were removed after production moved to
-  # Xore-Inc/apiary-dashboard on 2026-10-30 (#3579 D4). Last legacy image:
-  # sha256:f5116658b71b73b7576aa5fc923ad19676f840411627b2d790d1d5f755f379ce.
+  # #3749 removed the in-repo dashboard and its session valkey from this
+  # project; do not re-add a UI here.
   #
   # #3575: backend-worker, backend-worker-importer, backend-worker-enrichment,
   # backend-worker-payload-inventory and services-adapter moved to
@@ -88,8 +49,8 @@ services:
   # network-reachable), where backend-worker only runs background loops and
   # binds loopback-only. Same image, same route table (routes aren't
   # container-specific — see main.rs) — reachable internally at
-  # http://backend-service-mounted:8082; BFF wiring is a follow-up (owned
-  # by the parallel frontend track).
+  # http://backend-service-mounted:8082, which the dashboard
+  # (apiary-dashboard) calls for its `{mounted:true}` requests.
   backend-service-mounted:
     <<: *runtime-defaults
     image: apiary-backend:latest

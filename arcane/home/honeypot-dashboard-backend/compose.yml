@@ -5,12 +5,12 @@
 # BFF_INTERNAL_URL application-code work: that issue made the frontend/BFF
 # tier able to run cross-host; this split is what lets Arcane actually
 # restart/redeploy the request/response backend tier without touching
-# dashboard-next (or vice versa), instead of both living behind one
+# the dashboard tier (or vice versa), instead of both living behind one
 # `docker compose` invocation in the combined honeypot-dashboard stack.
 #
 # Scope, deliberately narrow (per the #1622 task): only `backend-service`
 # moved here. Since then the workers went to honeypot-backend-workers (#3575)
-# and dashboard-next was removed (#3749); honeypot-dashboard keeps only
+# and the in-repo dashboard was removed (#3749); honeypot-dashboard keeps only
 # `backend-service-mounted`. The dashboard (apiary-dashboard) reaches this
 # service by bare service-name DNS (BACKEND_URL=http://backend-service:8081)
 # because both stacks attach to the same explicitly-named `honeynet` bridge

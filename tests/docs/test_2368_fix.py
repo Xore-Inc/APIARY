@@ -76,7 +76,7 @@ EXPECTED_GATEWAY_CLIENTS = {
 # sync-client-secrets.sh must NOT touch them: client id -> provisioner that
 # owns its rotation instead.
 NON_GATEWAY_PROVISIONERS = {
-    "apiary-dashboard": "provision-dashboard-oidc-secret.sh",
+    # #3834: the legacy apiary-dashboard client was removed from the realm.
     "apiary-dashboard-rewrite": "provision-dashboard-oidc-secret.sh",  # #3578
     "arcane": "provision-arcane-oidc-secret.sh",
     "auth-events-poller": "provision-events-poller.sh",
@@ -317,10 +317,10 @@ def test_non_gateway_client_is_documented_and_its_provisioner_exists(client, pro
 
 
 def test_script_preamble_states_the_realm_client_total():
-    """7 handled here + 4 elsewhere = 11. The count is what makes a future
+    """7 handled here + 3 elsewhere = 10 (#3834). The count is what makes a future
     reader notice the script is not the all-secrets rotater."""
-    assert re.search(r"\b11 confidential clients\b", SCRIPT_TEXT), (
-        "the preamble must state the realm's 11-confidential-client total"
+    assert re.search(r"\b10 confidential clients\b", SCRIPT_TEXT), (
+        "the preamble must state the realm's 10-confidential-client total"
     )
     assert re.search(r"\b7 VPS oauth2-proxy gateway\b", SCRIPT_TEXT), (
         "the preamble must state how many of them this script handles"
@@ -366,16 +366,16 @@ def test_runbook_carries_no_stale_gateway_or_client_counts():
     against 9 confidential clients, so neither number could be trusted."""
     stale = re.findall(
         r"\b(?:6|8|9|six|eight|nine)\s+(?:VPS\s+)?gateway\w*"
-        r"|\b(?:7|8|9|10|seven|eight|nine|ten)\s+confidential\w*",
+        r"|\b(?:7|8|9|11|seven|eight|nine|eleven)\s+confidential\w*",
         RUNBOOK_TEXT,
         re.IGNORECASE,
     )
     assert not stale, (
         f"the runbook still carries pre-#2368 counts: {stale!r}. There are seven "
-        f"VPS gateways and eleven confidential clients."
+        f"VPS gateways and ten confidential clients."
     )
     assert re.search(r"\b(?:7|seven)\s+(?:VPS\s+)?gateway", RUNBOOK_TEXT, re.IGNORECASE)
-    assert re.search(r"\b(?:11|eleven)\s+confidential", RUNBOOK_TEXT, re.IGNORECASE)
+    assert re.search(r"\b(?:10|ten)\s+confidential", RUNBOOK_TEXT, re.IGNORECASE)
 
 
 def test_runbook_never_names_dockge_as_a_client():

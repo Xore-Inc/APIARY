@@ -123,3 +123,6 @@ arcane/home/honeypot-dashboard/frontend-next/src/routes/llm-analysis.tsx # remov
 arcane/home/honeypot-dashboard/frontend-next/src/routes/ml-anomalies.tsx # removed in #3749; dated plan entry
 scripts/test-dashboard-oidc-pkce-totp-login.sh # removed in #3749 (port is #3750); cited by the dated 2026-09-03 audit
 scripts/test-dashboard-oidc-chaos.sh # removed in #3749 (port is #3750); cited by the dated 2026-09-03 audit
+
+# --- vendored Xore/theme gate, removed in #3834 (2026-11-16); era records that cite it ---
+scripts/sync-theme.sh # removed in #3834 with the vendored theme gate; docs/research/2891-gitspawn.md is a dated audit

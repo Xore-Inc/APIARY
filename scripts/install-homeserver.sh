@@ -907,7 +907,7 @@ step_clone_repo() {
 # ARCANE_OIDC_CLIENT_SECRET good enough to satisfy the compose file's `:?`
 # guard and start the container; step_provision_arcane_oidc_secret later
 # replaces it with the real per-realm secret Keycloak generates on
-# --import-realm (same pattern as apiary-dashboard's own client secret --
+# --import-realm (same pattern as the dashboard's own client secret --
 # see provision-arcane-oidc-secret.sh) and re-ups Arcane.
 #
 # Unresolved from-scratch chicken-and-egg (#1504, still needs a live call):
@@ -1512,8 +1512,8 @@ step_provision_buildx_cache() {
 }
 
 step_provision_image_sbom() {
-  # #3321: containers.yml writes a digest-keyed CycloneDX SBOM for the two
-  # dashboard images (backend-service; dashboard-next until #3749) to
+  # #3321: containers.yml writes a digest-keyed CycloneDX SBOM for the
+  # backend-service image to
   # /var/image-sbom/<image>/ whenever a build lands on this box's self-hosted
   # runners, so the inventory of what is in a running image sits next to the
   # image rather than only in a CI artifact that expires.
@@ -1925,9 +1925,9 @@ step_pin_deploy_runner_gid() {
 }
 
 step_provision_dashboard_oidc_secret() {
-  # #3749: the dashboard is apiary-dashboard (client apiary-dashboard-rewrite,
-  # secret under that project's secrets/); the legacy client's dashboard-next
-  # is gone. apiary-dashboard is one of the generic STACK_DEFS stacks
+  # The dashboard is apiary-dashboard (client apiary-dashboard-rewrite,
+  # secret under that project's secrets/). apiary-dashboard is one of the
+  # generic STACK_DEFS stacks
   # step_start_remaining_stacks already started (and it has no secret yet
   # at that point, so it crash-loops on first boot) -- this step runs
   # after that, once Keycloak is actually up, same as

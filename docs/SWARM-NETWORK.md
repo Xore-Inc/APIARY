@@ -110,7 +110,7 @@ Inbound swarm rules are bound to the interfaces in `apiary-swarm` (the fibre, `w
 | homeserver ↔ precision | fibre WG `10.8.1.0/30` over fibre UDP 51821; LAN fallback WG `10.8.2.0/30` over peer-scoped LAN UDP 51822; peer-scoped swarm ports above | Direct encrypted swarm path and failover. The only `public` addition is a peer-scoped accept for UDP 51822 | #3589 / live |
 | precision → homeserver | `wg-fibre`/`wg-lan`; TCP 22 to `10.8.0.2` | `arcane-fibre-tunnel` (`authorized_keys` `from="10.254.250.2,10.8.0.3"`, forward to `10.8.0.2:3552` only) | #3589 / live |
 | homeserver → VPS | H; TCP 2222 | Existing homeserver-initiated SSH to the VPS | existing; peer-scoped in #3589 |
-| VPS → homeserver Docker-published ports | H; `DOCKER-USER` chain `APIARY-WG-IN`: NEW flows from `10.8.0.1` to `10.8.0.2` on the [77-port list](../ops/firewall/hosts/homeserver-wg-ports.txt) only, all else dropped | Sensors and gateways; blocks wildcard publications (pentagi 28012-28013) on the hub | #3589 / live |
+| VPS → homeserver Docker-published ports | H; `DOCKER-USER` chain `APIARY-WG-IN`: NEW flows from `10.8.0.1` to `10.8.0.2` on the [76-port list](../ops/firewall/hosts/homeserver-wg-ports.txt) only, all else dropped | Sensors and gateways; blocks wildcard publications (pentagi 28012-28013) on the hub | #3589 / live |
 | BFF/backend overlay | rides the overlay (VXLAN/ESP above) | Encrypted BFF overlay; no extra host ports | #3579 |
 
 What the swarm-plane firewall does *not* cover:
