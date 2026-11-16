@@ -212,6 +212,39 @@ class Shapes(unittest.TestCase):
         self.assertEqual(starts, {("mailoney", "44990/900"): T + 1})
         self.assertEqual(bt.decide(body, pb, starts).outcome, bt.ATTRIBUTED)
 
+    def test_a_dionaea_start_is_read_from_incidents_the_worker_already_attributed(self):
+        # Live, the connection's first incident had its nested remote_ip
+        # rewritten to the client; a later incident of the same connection id
+        # (a download, the close) stayed on the tunnel peer. The backfill has
+        # to anchor it on the first incident, not on its own late time, where
+        # a stranger that reused the port one second earlier would win (#3832).
+        pb = portbridge(dial("203.0.113.40", 50600, T, "10.8.0.2:445"),
+                        dial("198.51.100.40", 50600, T + 699, "10.8.0.2:445"))
+        def incident(at, ip, key="connection"):
+            return {"event": {"sensor": "dionaea"}, "honeypot": {"timestamp": iso(at).rstrip("Z"), "data": {
+                key: {"remote_ip": ip, "remote_port": 50600, "local_port": 445, "transport": "tcp", "id": "c40"}}}}
+        first, late = incident(T + 1, "203.0.113.40"), incident(T + 700, PEER)
+        starts = {}
+        for doc in (late, first):  # order must not matter
+            bt.record_start(starts, doc)
+        self.assertEqual(starts, {("dionaea-incident", "c40"): T + 1})
+        self.assertEqual(bt.decide(late, pb, starts).writes["data.connection.remote_ip"], [PEER, "203.0.113.40"])
+        self.assertEqual(bt.decide(late, pb, {}).writes["data.connection.remote_ip"], [PEER, "198.51.100.40"],
+                         "without the start the late incident meets the stranger")
+
+    def test_dionaea_link_sides_and_healthchecks_in_pass_1(self):
+        def link(side_ip, at):
+            return {"event": {"sensor": "dionaea"}, "honeypot": {"timestamp": iso(at).rstrip("Z"), "data": {
+                "parent": {"remote_ip": side_ip, "remote_port": 50601, "local_port": 445, "id": "p1"},
+                "child": {"remote_ip": "127.0.0.1", "remote_port": 50602, "local_port": 445, "id": "k1"}}}}
+        starts = {}
+        bt.record_start(starts, link("203.0.113.41", T + 3))
+        self.assertEqual(starts, {("dionaea-incident", "p1"): T + 3},
+                         "a rewritten parent counts, a loopback child never does")
+        doc = link("203.0.113.41", T + 3)
+        bt.record_start({}, doc)
+        self.assertEqual(doc["honeypot"]["data"]["parent"]["remote_ip"], "203.0.113.41", "input is not mutated")
+
 
 class FakeES:
     def __init__(self, pb_hits, hp_hits):
