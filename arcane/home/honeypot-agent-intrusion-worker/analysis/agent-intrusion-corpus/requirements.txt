@@ -16,4 +16,4 @@
 # with a fresh recorded verification (.github/dependabot.yml ignores
 # elasticsearch for this directory for exactly that reason).
 elasticsearch==9.5.0
-loguru==0.7.3
+loguru==0.8.0
