@@ -52,7 +52,7 @@
 # on public udp 69 via portbridge -> 10.8.0.2:1069 -> hp-tftp-relay.
 services:
   dionaea:
-    image: ghcr.io/xore-inc/honeypot-dionaea@sha256:5cce1dd949a66122df17c996b942710e50071072cd8abeb6e69f29634f46ac18
+    image: ghcr.io/xore-inc/honeypot-dionaea@sha256:b1e1d067e7541fe31092ddb19fbcea8eab29c63fb8f6973684134564ce625604
     entrypoint:
       - /bin/sh
       - -c

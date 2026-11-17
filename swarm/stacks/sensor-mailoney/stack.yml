@@ -23,7 +23,7 @@
 # ip_enrichment tunnel join attributes by via_port, which host mode keeps).
 services:
   mailoney:
-    image: ghcr.io/xore-inc/honeypot-mailoney@sha256:ae1ad5d1cc24136830c5be98e8143e6028406190abfd7ea8ca4de42f329b728c
+    image: ghcr.io/xore-inc/honeypot-mailoney@sha256:319d3cbf2522019a80681b22499238d5d021861a5be1c623ee3319e7daea49d0
     ports:
       - target: 25
         published: 25

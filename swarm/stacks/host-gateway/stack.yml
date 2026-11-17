@@ -10,7 +10,7 @@ services:
   gateway:
     # Main build of 069e5f3a (gateway mode since #3785), Containers run
     # 42421930356, backend-service job; the same image as backend-api.
-    image: ghcr.io/xore-inc/honeypot-backend-service@sha256:0c7bf4cbdf9cfc1f9e0147eab408fb096c38d10c6076420065f8cbe387b2b245
+    image: ghcr.io/xore-inc/honeypot-backend-service@sha256:6e472f1582ca30a82e4c31a081beac76cddef9c7619a98466451de513be5fc86
     labels:
       apiary.swarm.migration: host-gateway
     environment:

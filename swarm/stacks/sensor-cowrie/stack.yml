@@ -30,7 +30,7 @@
 # ip_enrichment tunnel join attributes by via_port, which host mode keeps).
 services:
   cowrie:
-    image: ghcr.io/xore-inc/honeypot-cowrie@sha256:12fe1af4cb30da9cb73d482abe03de5aa53e94a52055e369ad282f5431162936
+    image: ghcr.io/xore-inc/honeypot-cowrie@sha256:b9a54881bca47bc51f668cad66102fe4224265144ffb9ce6cfd1155830347c5b
     entrypoint:
       - /bin/sh
       - -c

@@ -18,7 +18,7 @@
 # Reached from the VPS on public 3389 (portbridge, PROXY header).
 services:
   rdp:
-    image: ghcr.io/xore-inc/honeypot-rdp-honeypot@sha256:c75240515dfd41e3747ba80b333eae5c2c026e20c544dd134480c692b02d9a17
+    image: ghcr.io/xore-inc/honeypot-rdp-honeypot@sha256:22219c327b67e69cae5b12f7ea9f1981a33d7bd5221560ab81b0455515e025e3
     ports:
       - target: 3389
         published: 3389

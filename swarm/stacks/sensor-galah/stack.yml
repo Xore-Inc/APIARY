@@ -29,7 +29,7 @@
 # (socat-hp-galah -> 8890).
 services:
   galah:
-    image: ghcr.io/xore-inc/honeypot-galah@sha256:e27febd1918ee41e0808a1c46cba0d15dc4ff2fe0f1f4229eeb4c3a874e16b38
+    image: ghcr.io/xore-inc/honeypot-galah@sha256:c345860c0b3a4494d3aee84af21f9225df1bb45878199cf9a710698af47712a6
     ports:
       - target: 8888
         published: 8888

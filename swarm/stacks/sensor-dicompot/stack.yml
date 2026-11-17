@@ -14,7 +14,7 @@
 #   the lint requires it in the stack.
 services:
   dicompot:
-    image: ghcr.io/xore-inc/honeypot-dicompot@sha256:fe0770ecf1d13b7cd1dfa4abf5b00d12f5ce8220107111468030ed7415a61f85
+    image: ghcr.io/xore-inc/honeypot-dicompot@sha256:925750acfe98ca47334d3a35a84ccf77408d0ca172a7e919359c58a7bfd92dc2
     ports:
       - target: 11112
         published: 11112

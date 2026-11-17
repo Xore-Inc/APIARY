@@ -124,7 +124,7 @@ services:
 
   # ===== TRAEFIK =====
   traefik:
-    image: traefik:v3.7.17@sha256:30ff62491aacdb862ceb8c9edcf2627da638d7deafdd4b6dab32fe34f8aa3e90
+    image: traefik:v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf
     container_name: traefik
     restart: unless-stopped
     ports:
@@ -237,7 +237,7 @@ services:
   # at local-extract.zeek, and starting a pruner for a directory nothing writes
   # to would be misleading.
   zeek-extract-prune:
-    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    image: busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     container_name: hp-zeek-extract-prune
     restart: unless-stopped
     profiles: ["file-extract"]
@@ -307,7 +307,7 @@ services:
   # Same copy-truncate approach and cadence as portbridge-log-rotate rather
   # than a second mechanism -- Filebeat already tolerates it for that log.
   traefik-log-rotate:
-    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    image: busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     container_name: hp-traefik-log-rotate
     restart: unless-stopped
     # Shares Traefik's PID namespace so it can signal it without a Docker
@@ -346,98 +346,98 @@ services:
           memory: 32M
 
   socat-python-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-python-api
     restart: unless-stopped
     command: TCP4-LISTEN:5000,fork,reuseaddr TCP4:10.8.0.2:5000
     networks: [proxy]
 
   socat-redis-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-redis-api
     restart: unless-stopped
     command: TCP4-LISTEN:5001,fork,reuseaddr TCP4:10.8.0.2:5001
     networks: [proxy]
 
   socat-node-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-node-api
     restart: unless-stopped
     command: TCP4-LISTEN:3000,fork,reuseaddr TCP4:10.8.0.2:3000
     networks: [proxy]
 
   socat-uptime-kuma:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-uptime-kuma
     restart: unless-stopped
     command: TCP4-LISTEN:3001,fork,reuseaddr TCP4:10.8.0.2:3001
     networks: [proxy]
 
   socat-filebrowser:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-filebrowser
     restart: unless-stopped
     command: TCP4-LISTEN:8070,fork,reuseaddr TCP4:10.8.0.2:8070
     networks: [proxy]
 
   socat-vui-blog:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-vui-blog
     restart: unless-stopped
     command: TCP4-LISTEN:3000,fork,reuseaddr TCP4:10.8.0.2:3000
     networks: [proxy]
 
   socat-vui-blog-auth:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-vui-blog-auth
     restart: unless-stopped
     command: TCP4-LISTEN:3000,fork,reuseaddr TCP4:10.8.0.2:3000
     networks: [proxy]
 
   socat-svelte-blog:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-svelte-blog
     restart: unless-stopped
     command: TCP4-LISTEN:4174,fork,reuseaddr TCP4:10.8.0.2:4174
     networks: [proxy]
 
   socat-csharp-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-csharp-api
     restart: unless-stopped
     command: TCP4-LISTEN:5002,fork,reuseaddr TCP4:10.8.0.2:5002
     networks: [proxy]
 
   socat-go-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-go-api
     restart: unless-stopped
     command: TCP4-LISTEN:5003,fork,reuseaddr TCP4:10.8.0.2:5003
     networks: [proxy]
 
   socat-rust-api:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-rust-api
     restart: unless-stopped
     command: TCP4-LISTEN:5004,fork,reuseaddr TCP4:10.8.0.2:5004
     networks: [proxy]
 
   socat-upstream:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-upstream
     restart: unless-stopped
     command: TCP4-LISTEN:8123,fork,reuseaddr TCP4:10.8.0.2:8123
     networks: [proxy]
 
   socat-minecraft:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-minecraft
     restart: unless-stopped
     command: TCP4-LISTEN:25565,fork,reuseaddr TCP4:10.8.0.2:25565
     networks: [proxy]
 
   socat-game-udp:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-game-udp
     restart: unless-stopped
     command: UDP4-LISTEN:27015,fork,reuseaddr UDP4:10.8.0.2:27015
@@ -668,14 +668,14 @@ services:
   # join window spans a rotation instead of restarting from empty.
 
   socat-hp-http:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-http
     restart: unless-stopped
     command: TCP4-LISTEN:8081,fork,reuseaddr TCP4:10.8.0.2:19081
     networks: [proxy]
 
   socat-hp-snare:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-snare
     restart: unless-stopped
     command: TCP4-LISTEN:8082,fork,reuseaddr TCP4:10.8.0.2:19082
@@ -689,7 +689,7 @@ services:
   # (not the oidc-* gateway pattern below) -- a token's trigger request comes
   # from whoever opened the planted artifact, not an operator.
   socat-hp-canarytokens:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-canarytokens
     restart: unless-stopped
     command: TCP4-LISTEN:8083,fork,reuseaddr TCP4:10.8.0.2:19427
@@ -708,7 +708,7 @@ services:
   # gives it -- this is just a second, HTTP-hostname-routed path to the same
   # intentional destination, not a new capability.
   socat-hp-hellpot:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-hellpot
     restart: unless-stopped
     # #1908: 8090 (hellpot's Traefik-only listener), not the raw 8080 --
@@ -738,7 +738,7 @@ services:
   # edge addresses. The enrichment worker decides now, off the listen port
   # below.
   socat-hp-galah:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-galah
     restart: unless-stopped
     # #1891: 8890, not 8888. Both this and portbridge used to land on
@@ -762,7 +762,7 @@ services:
   # since 2026-10-30. The legacy socat-hp-dashboard bridge to dashboard-next
   # (19090) left with it. The container keeps its historical name.
   socat-hp-dashboard-next:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-dashboard-next
     restart: unless-stopped
     command: TCP4-LISTEN:8092,fork,reuseaddr TCP4:${DASHBOARD_CANDIDATE_HOST:-10.8.0.2}:${DASHBOARD_CANDIDATE_PORT:-19092}
@@ -773,7 +773,7 @@ services:
   # vps/traefik/dynamic.yml), which is the live issuer/admin path -- no
   # legacy auth-backend service exists any more.
   socat-hp-keycloak:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-keycloak
     restart: unless-stopped
     command: TCP4-LISTEN:8080,fork,reuseaddr TCP4:10.8.0.2:18080
@@ -783,7 +783,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-kibana. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-kibana
     restart: unless-stopped
     command: TCP4-LISTEN:5601,fork,reuseaddr TCP4:10.8.0.2:19601
@@ -815,7 +815,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-tanner. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-tanner
     restart: unless-stopped
     command: TCP4-LISTEN:8091,fork,reuseaddr TCP4:10.8.0.2:19091
@@ -847,7 +847,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-evebox. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-evebox
     restart: unless-stopped
     command: TCP4-LISTEN:5636,fork,reuseaddr TCP4:10.8.0.2:19636
@@ -879,7 +879,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-arkime. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-arkime
     restart: unless-stopped
     command: TCP4-LISTEN:8005,fork,reuseaddr TCP4:10.8.0.2:19080
@@ -914,7 +914,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-revdeck. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-revdeck
     restart: unless-stopped
     command: TCP4-LISTEN:5000,fork,reuseaddr TCP4:10.8.0.2:19500
@@ -952,7 +952,7 @@ services:
     # #3595: replaced by the swarm stack swarm/stacks/edge-unsloth. Kept for
     # rollback behind the legacy profile: a plain `up` no longer starts it.
     profiles: [legacy]
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-unsloth
     restart: unless-stopped
     command: TCP4-LISTEN:8899,fork,reuseaddr TCP4:10.8.0.2:8899
@@ -990,7 +990,7 @@ services:
   # same as every other non-gated app (svelte-blog etc.), instead of an
   # isolated oidc-<app> network.
   socat-hp-arcane:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     container_name: socat-hp-arcane
     restart: unless-stopped
     command: TCP4-LISTEN:3552,fork,reuseaddr TCP4:10.8.0.2:3552
@@ -1040,7 +1040,7 @@ services:
   # mounted yaml is ignored entirely and pcap-log never activates.
   # =====================================================================
   suricata-update:
-    image: jasonish/suricata:8.0.7@sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26
+    image: jasonish/suricata:8.0.8@sha256:d5a3a1785299ab40918d465e54fedf8e3afeeedba76bb64b0cc74dbc20bda2c3
     container_name: hp-suricata-update
     restart: "no"
     network_mode: host
@@ -1068,7 +1068,7 @@ services:
           --no-reload
 
   suricata:
-    image: jasonish/suricata:8.0.7@sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26
+    image: jasonish/suricata:8.0.8@sha256:d5a3a1785299ab40918d465e54fedf8e3afeeedba76bb64b0cc74dbc20bda2c3
     container_name: hp-suricata
     restart: unless-stopped
     network_mode: host
@@ -1122,7 +1122,7 @@ services:
   # cold-start guarantee -- it only keeps an already-running Suricata's
   # rules current. See suricata-rules-refresh.sh for the reload mechanism.
   suricata-rules-refresh:
-    image: jasonish/suricata:8.0.7@sha256:bf4bea5b45d9c10265a3ee6628e2ec8930b9d1fb7caf9d1afb63af413b9cbb26
+    image: jasonish/suricata:8.0.8@sha256:d5a3a1785299ab40918d465e54fedf8e3afeeedba76bb64b0cc74dbc20bda2c3
     container_name: hp-suricata-rules-refresh
     restart: unless-stopped
     network_mode: host
@@ -1155,7 +1155,7 @@ services:
   # log-maintenance service (that one's sshfs mount of this same directory
   # is read-only from the home side).
   suricata-log-maintenance:
-    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    image: busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     container_name: hp-suricata-log-maintenance
     restart: unless-stopped
     command: ["sh", "/usr/local/bin/suricata-log-maintenance.sh"]
@@ -1250,7 +1250,7 @@ services:
   # the home stack over a read-only sshfs/NFS mount, so the home side's
   # log-maintenance can't write here either).
   portbridge-log-maintenance:
-    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    image: busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     container_name: hp-portbridge-log-maintenance
     restart: unless-stopped
     command: ["sh", "/usr/local/bin/portbridge-log-maintenance.sh"]
@@ -1301,7 +1301,7 @@ services:
           memory: 64M
 
   autoheal:
-    image: willfarrell/autoheal@sha256:fc003424b710dec10b0a96527c1e5b256b8a00431e9a2342503eaa73f6c31e14
+    image: willfarrell/autoheal@sha256:3ed6515664bc09f636d0f107dcf9db914705ff086330351656c42a1c7bcff56c
     container_name: autoheal
     restart: unless-stopped
     environment:
