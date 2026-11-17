@@ -45,7 +45,7 @@ x-runtime-defaults: &runtime-defaults
 services:
   elasticsearch:
     <<: *runtime-defaults
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5@sha256:13b4a40bb095774f5fda635e45fd5677cc6a26565e42b24997b0c72b88e75984
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6@sha256:79b4f1de4c15e6eca824723086a51e5934406d614d410cc11be77748cafac537
     container_name: hp-elasticsearch
     restart: unless-stopped
     environment:
@@ -132,7 +132,7 @@ services:
           memory: 12G
   kibana:
     <<: *runtime-defaults
-    image: docker.elastic.co/kibana/kibana:9.5.5@sha256:13b72ce7222c36e4213229004ae62a87aeb32fd372ebfa6fb38f7a3285fdbb78
+    image: docker.elastic.co/kibana/kibana:9.5.6@sha256:c7ed45da5c3cfea020fc6c99ce027f4d21d19dab330379c5115d5eb95f6ecebc
     container_name: hp-kibana
     restart: unless-stopped
     environment:
@@ -162,7 +162,7 @@ services:
           memory: 2G
   filebeat:
     <<: *runtime-defaults
-    image: docker.elastic.co/beats/filebeat:9.5.5@sha256:4b2042fcbeb781800bc7271d400f764bb7d670310dfd4fe03ade53d6c7ab78aa
+    image: docker.elastic.co/beats/filebeat:9.5.6@sha256:13afd81be4fa1523865c987a22b7c4aebca739941270333c7ca0048a4c9efeb3
     container_name: hp-filebeat
     restart: unless-stopped
     user: root
@@ -535,7 +535,7 @@ services:
   # needed for the chmod once root no longer owns the path post-chown).
   arkime-pcap-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
+    image: ghcr.io/arkime/arkime/arkime:v6.9.2@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
     container_name: hp-arkime-pcap-init
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
@@ -557,7 +557,7 @@ services:
     # the exact deadlock this container hit live -- "Waiting for reader
     # slot N to drain, finishWaiting=255" repeating forever until manually
     # restarted. v6.8.0 is the latest stable release and includes it.
-    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
+    image: ghcr.io/arkime/arkime/arkime:v6.9.2@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
     container_name: hp-arkime-capture
     restart: unless-stopped
     # Offline import mode: -R watches the locally synced pcap dir (see
@@ -700,7 +700,7 @@ services:
     <<: *runtime-defaults
     # #1497: pinned for the same reason as arkime-capture above -- keep
     # both in lockstep, same image either way.
-    image: ghcr.io/arkime/arkime/arkime:v6.9.1@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
+    image: ghcr.io/arkime/arkime/arkime:v6.9.2@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
     container_name: hp-arkime-viewer
     restart: unless-stopped
     # #126: waits on the marker directly instead of depends_on-ing
@@ -784,7 +784,7 @@ services:
   # Networkless except for Elasticsearch: it reads two local paths and posts.
   # It never fetches anything, and it never executes what it reads.
   extracted-file-importer:
-    image: docker.io/library/python:3.15-alpine@sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb
+    image: docker.io/library/python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd
     container_name: hp-extracted-file-importer
     restart: unless-stopped
     read_only: true
