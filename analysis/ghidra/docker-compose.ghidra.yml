@@ -56,6 +56,13 @@ services:
       retries: 10
 
   ollama:
+    # #3594 (phase 7): LEGACY, the rollback for the swarm stack `llm`
+    # (swarm/stacks/llm). Not started by default; `docker compose up -d
+    # ollama` names it and starts it. Before that, pause the stack
+    # (`ops/swarm/stackctl.py pause llm`) and stop ollama-loopback: both
+    # want the GPU or 127.0.0.1:11434. This container keeps 0.34.4 and the
+    # volume ghidra_ollama_models, shared with the #3706 benchmark.
+    profiles: ['legacy']
     # Backs ai_triage in the Ghidra worker (#103). The worker speaks the
     # OpenAI-compatible dialect at /v1, so any local server of that shape can
     # take this slot. Ollama is retained because issue #144 benchmarked the
@@ -174,6 +181,36 @@ services:
     # docker-compose.ghidra.gpu.yml. Ollama on CPU is slower; the worker cannot
     # tell the difference.
 
+  ollama-loopback:
+    # #3594: the host-side consumers (honeypot-ghidra-worker, gpu-queue-drain,
+    # model-drift, llm-injection-suite) and the operator's ssh -L forward use
+    # 127.0.0.1:11434. A swarm port cannot bind loopback only, so this
+    # forwards that port to the `llm` stack's Ollama on the overlay
+    # llm_ollama. Same loopback-only rule as the legacy ollama above.
+    # Stop it while anything else owns 127.0.0.1:11434 (the #3706 benchmark
+    # container, or the legacy ollama).
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+    command: ['TCP4-LISTEN:11434,fork,reuseaddr', 'TCP4:ollama:11434']
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:11434:11434'
+    networks:
+      # default carries the published port (an internal overlay cannot).
+      default:
+      llm:
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # busybox nc in this image has no -z; socat probes the listener.
+      test: ['CMD', 'socat', '-u', '/dev/null', 'TCP4:127.0.0.1:11434,connect-timeout=2']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   statictools:
     # Fuzzy hashing (ssdeep/tlsh, #85), structural parsing (lief, #85), and
     # capa capability tagging (#78) for worker/ghidra-worker.py's
@@ -280,6 +317,11 @@ services:
       MODEL_NAME: '${REVDECK_MODEL:-qwen3:14b}'
       CHATS_DIR: '/data/chats'
       LOG_FILE: '/var/log/revdeck/web.log'
+    networks:
+      # default reaches ghidra; llm reaches the `llm` stack's Ollama as
+      # `ollama` (#3594; the legacy ollama answered on default).
+      default:
+      llm:
     depends_on:
       ghidra:
         condition: service_healthy
@@ -341,4 +383,10 @@ networks:
   # Galah itself stays on the separate front overlay.
   broker_back:
     name: galah-broker_back
+    external: true
+  # #3594: the `llm` stack's attachable overlay (alias ollama). External, so
+  # ollama-loopback only starts once that stack exists; apiary-overlay-attach
+  # finishes the start after a dockerd restart (#3837).
+  llm:
+    name: llm_ollama
     external: true

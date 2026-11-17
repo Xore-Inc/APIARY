@@ -18,8 +18,19 @@ start hp-tftp-relay sensor-dionaea_decoy
 # arcane/home/honeypot-galah: rollback only since sensor-galah (#3593); stopped,
 # so it stays down unless dockerd itself was starting it
 start hp-galah galah-broker_front
-# analysis/ghidra: Ollama behind the Galah broker (stopped while the benchmark runs)
+# analysis/ghidra: the legacy Compose Ollama (rollback for the llm stack, #3594);
+# stopped, so it stays down unless dockerd itself was starting it
 start ghidra-ollama-1 galah-broker_back
+# analysis/ghidra: 127.0.0.1:11434 -> the llm stack's Ollama (#3594); stopped
+# while the #3706 benchmark holds that port
+start ghidra-ollama-loopback-1 llm_ollama
+# analysis/ghidra: Rev-Deck (profile revdeck) reaches ollama on llm_ollama
+start ghidra-revdeck-1 llm_ollama
+
+# arcane/home/honeypot-dashboard-backend: LLM search / vault RAG reach the llm
+# stack's Ollama as `ollama` (#3594). connect, not compose: the backend must
+# start even when the swarm is not up yet.
+connect hp-apiary-backend llm_ollama
 
 # D2 (#3582): Elasticsearch on the dedicated overlay, alias elasticsearch.
 # Uncomment once apiary-es (10.200.101.0/24) exists, then

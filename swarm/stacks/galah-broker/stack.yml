@@ -1,5 +1,6 @@
-# #3591: stateless Galah-to-Ollama policy broker. The sensor and Ollama
-# remain in Compose; each joins only its side of this encrypted bridge.
+# #3591: stateless Galah-to-Ollama policy broker. The sensor joins `front`;
+# Ollama is the swarm stack `llm` (#3594), reached on its overlay llm_ollama.
+# The legacy Compose Ollama (rollback) joins `back`.
 services:
   broker:
     image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:895ab2a72a45a168ebf677e97af6b0e4abdcded74df66f4b4ceb837b1410d9ec
@@ -16,7 +17,10 @@ services:
     networks:
       front:
         aliases: [galah-llm-broker]
+      # #3594: Ollama is the `llm` stack (alias ollama on llm_ollama). `back`
+      # stays for the rollback, where the legacy Compose Ollama joins it.
       back: {}
+      llm: {}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -84,3 +88,7 @@ networks:
     driver_opts:
       com.docker.network.driver.overlay.encrypt: "true"
       com.docker.network.driver.mtu: "1310"
+  # #3594: owned by the `llm` stack; deploy that stack first.
+  llm:
+    name: llm_ollama
+    external: true

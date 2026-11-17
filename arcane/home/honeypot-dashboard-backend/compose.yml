@@ -302,6 +302,15 @@ networks:
   # list, so it sat dangling through the #1622 split that moved
   # backend-service into this file. Declared here instead, where the real
   # consumer now lives and can actually reach it.
+  #
+  # #3594 (phase 7): Ollama now runs as the swarm stack `llm`, alias `ollama`
+  # on the overlay llm_ollama. That overlay is NOT listed here: a container
+  # whose compose file names a swarm overlay cannot start before the swarm
+  # is up after a dockerd restart (#3837). apiary-overlay-attach connects
+  # hp-apiary-backend to llm_ollama after it starts (`connect` line in
+  # ops/swarm/hosts/homeserver-overlay-attach.txt), so OLLAMA_URL keeps
+  # http://ollama:11434. honeypot-llm stays for the rollback, where the
+  # legacy Compose Ollama answers on it.
   honeypot-llm:
     name: honeypot-llm
     external: true
