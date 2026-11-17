@@ -276,17 +276,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "cannot move without a migration this repo does not own. Names no "
         "FROM in the tree, so main() emits it bare and the digest is None."
     ),
-    "quay.io/keycloak/keycloak:26.8.2": (
-        "sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b",
-        "Measured 2026-11-09 (#3824): 1 fixable HIGH, guava 33.6.0 "
-        "(CVE-2026-102554, fixed in 33.7.2) bundled in the Keycloak server. "
-        "26.8.2 already carries the JDK fix the 26.8.1 entry was waiting for "
-        "(CVE-2026-91415), so the guava finding is the only residue. This "
-        "digest is 26.8.2 = 26.8 = latest, the newest Keycloak release "
-        "(quay.io tag list, 2026-11-05), so only an upstream rebuild moves "
-        "guava. The realm-import, PKCE/TOTP login, OIDC chaos and gateway "
-        "tests pin the same digest. Re-check at the next Keycloak release."
-    ),
     "technitium/dns-server:15.6.2": (
         "sha256:eb48ac5c135f4ab936b536f74f853d53e15ab39ef37fdbc9598a089b90d9f245",
         "Measured 2026-10-31: 1 fixable HIGH, the Ubuntu base layer's "
@@ -353,43 +342,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "is the image this pin holds, and the next line (29.9.0-rc.1) is a "
         "release candidate, which a sandbox base has no business taking. The "
         "fix is an upstream moby rebuild against patched modules."
-    ),
-    "docker.elastic.co/elasticsearch/elasticsearch:9.5.5": (
-        "sha256:13b4a40bb095774f5fda635e45fd5677cc6a26565e42b24997b0c72b88e75984",
-        "#3720: patch bump within the 9.5 line; re-measured 2026-10-24 at 19 "
-        "fixable (jackson 2.22.2, lz4-java 1.11.1, jsoup 1.21.2 in the "
-        "bundled jars; RHEL 9 libpcap/pcre2/openssl). Previous measurement, "
-        "carried over: "
-        "measured 103 fixable CRITICAL/HIGH, 73 of them jackson-core and "
-        "jackson-databind and 18 netty-codec-http bundled inside the "
-        "elasticsearch JVM. 9.5.4, the next patch, was scanned and measures "
-        "98 -- not clean, and not clean enough to justify moving an ELK "
-        "cluster version under it. 9.6.0 does not exist (404). The pinned "
-        "on-disk format is the lucene index and the cluster state; only an "
-        "upstream elastic rebuild moves these."
-    ),
-    "docker.elastic.co/kibana/kibana:9.5.5": (
-        "sha256:13b72ce7222c36e4213229004ae62a87aeb32fd372ebfa6fb38f7a3285fdbb78",
-        "#3720: patch bump within the 9.5 line; re-measured 2026-10-24 at 48 "
-        "fixable (bundled npm packages: axios, brace-expansion, undici, zod, "
-        "dompurify, handlebars, and RHEL 9 base packages). Previous "
-        "measurement, carried over: "
-        "measured 43 fixable CRITICAL/HIGH, mostly npm packages bundled into "
-        "the kibana node bundle (axios, adm-zip, brace-expansion) plus "
-        "libevent in the base. 9.5.4 was scanned and measures 43 -- the "
-        "bump does not clear any of it, so the pin stays. Same "
-        "no-newer-release-available situation as elasticsearch above."
-    ),
-    "docker.elastic.co/beats/filebeat:9.5.5": (
-        "sha256:4b2042fcbeb781800bc7271d400f764bb7d670310dfd4fe03ade53d6c7ab78aa",
-        "#3720: patch bump within the 9.5 line; re-measured 2026-10-24 at 15 "
-        "fixable (Go stdlib v1.26.8 and x/net compiled into filebeat; RHEL 9 "
-        "pcre2/openssl/expat). Previous measurement, carried over: "
-        "measured 17 fixable CRITICAL/HIGH, all in the RHEL 9 base the beat "
-        "is built on (libevent, curl-minimal, expat, libxml2, openssl) plus "
-        "one vendored golang.org/x/grpc. 9.5.4 was scanned and measures 17 "
-        "-- identical, so the patch release carries none of the fix. The fix "
-        "is an upstream beats rebuild on a current RHEL base."
     ),
     "nicolaka/netshoot:latest": (
         "sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70",
@@ -485,34 +437,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "the one unsloth reference main() emits with a digest already on it; "
         "the studio one is emitted bare and cannot be keyed this way."
     ),
-    "ghcr.io/arkime/arkime/arkime:v6.9.1": (
-        "sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0",
-        "#3720: moved to v6.9.1; re-measured 2026-10-24 at 1 fixable HIGH, "
-        "libbrotli1 1.1.0-2+b7 (CVE-2026-111497) in the debian trixie base. "
-        "Previous measurement, carried over: "
-        "measured 1 fixable CRITICAL/HIGH -- CVE-2026-103111 libpcre2-8-0 "
-        "10.46-1~deb13u2, the same upstream debian pcre2 advisory the python "
-        "entries below carry, on arkime's debian 13 (trixie) base. There is "
-        "nothing to move to: v6.8.0 is the newest v6 tag the registry "
-        "publishes (the tag list runs to v6.8.0 and nothing above it), and "
-        "`v6-latest` resolves to this same manifest-list digest, so the "
-        "floating tag carries the identical base. The fix is an arkime "
-        "rebuild on a trixie base with the pcre2 security update, which is "
-        "upstream's. Named by arcane/home/honeypot-elk/compose.yml (capture "
-        "and viewer).",
-    ),
-    "ghcr.io/arkime/arkime/arkime:v6-latest": (
-        "sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0",
-        "#3720: v6-latest is the same image as v6.9.1; re-measured 2026-10-24"
-        " at 1 fixable HIGH, libbrotli1 (CVE-2026-111497). Previous "
-        "measurement, carried over: "
-        "the floating v6 tag, named by arcane/home/honeypot-init/compose.yml "
-        "(arkime-init, the one-shot first-run index bootstrap) where v6.8.0 "
-        "is the tag honeypot-elk uses. Both resolve to the same manifest-list "
-        "digest and main() therefore emits two distinct digest-keyed "
-        "references for one image, so both keys exist under the exact-match "
-        "rule. Same single finding, same reason as the v6.8.0 entry above.",
-    ),
     # --- python: one shared story, five keys ---------------------------
     # All five are the same shape: the newest point release of each minor
     # (3.10.22, 3.11.17, 3.12.15, 3.13.16, 3.14.8 -- each measured, each
@@ -583,45 +507,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "and a floating-tag refresh does not help. Digest-keyed: the "
         "exemption retires itself the moment the pin moves."
     ),
-    "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5": (
-        "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
-        "measured 4 fixable HIGH in /usr/bin/oauth2-proxy: Go stdlib 1.26.8 "
-        "(CVE-2026-78667, CVE-2026-78669, CVE-2026-97031) and "
-        "golang.org/x/net v0.59.0 (CVE-2026-78669). v7.15.5 is the newest "
-        "published release, so there is no fixed tag to bump to. All are "
-        "denial of service, not auth bypass or data exposure, and the Range "
-        "finding needs net/http FileServer, which oauth2-proxy does not "
-        "use. It is reached through Traefik on the internal proxy network. "
-        "This is an accepted DoS exposure until upstream rebuilds on Go "
-        "1.26.9; digest-keyed so the next pin move re-applies the gate."
-    ),
-    "ghcr.io/getarcaneapp/arcane-headless:v2.17.0": (
-        "sha256:fd96a4c53f1ff1b28f449d175923c91a856ab4fecedb5c779ade294b5bc58492",
-        "the Arcane edge agent (ops/arcane-agent/compose.yml), same release "
-        "and same Go module graph as the manager entry below: measured the "
-        "same 6 fixable CRITICAL/HIGH, all labstack/echo (v5.4.0, v4.15.4 "
-        "indirect; fixed in 5.4.1 / 4.16.1) in echo's Proxy, BodyDump and "
-        "Decompress middleware, none of which Arcane registers. The agent "
-        "publishes no port (edge mode, dials out to the manager). "
-        "v2.17.0 is the newest release; digest-keyed so the next pin move "
-        "re-applies the gate (#3720)."
-    ),
-    "ghcr.io/getarcaneapp/manager:v2.17.0": (
-        "sha256:47af3e1aa8492eb17276d0dcc6c55fb1dfde98cfd928c12f2961023221891f5a",
-        "measured 6 fixable CRITICAL/HIGH in /app/arcane, all in "
-        "labstack/echo (v5.4.0 direct, v4.15.4 indirect; fixed in 5.4.1 / "
-        "4.16.1, advisories published 2026-10-23): GHSA-cxf3-9h37-7rr8 and "
-        "GHSA-9969-6676-49h5 (echo's Proxy middleware WebSocket tunnel), "
-        "GHSA-f48p-c9v4-h7xv (BodyDump middleware) and GHSA-h7wr-284f-5qvc "
-        "(Decompress middleware). Arcane v2.17.0 source registers none of "
-        "those three middlewares; it uses echo's Gzip, CORS, Recover, "
-        "RequestID and Static only, and its environment proxy is its own "
-        "code, not echo's Proxy. v2.16.1 carried the same six plus a Go "
-        "stdlib finding, so the bump is strictly better. v2.17.0 is the "
-        "newest Arcane release; hp-arcane is reached only over WireGuard "
-        "behind OIDC. Digest-keyed so the next pin move re-applies the "
-        "gate (#3720)."
-    ),
     # The other golang toolchain tags are deliberately absent. The stale
     # 1.23-bookworm and bare 1.23 pins are gone -- their three Dockerfiles
     # moved to golang:1.27-alpine, which measures 0 fixable CRITICAL/HIGH,
@@ -660,13 +545,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
     # 8.5-cli-alpine == 8.5-cli-alpine3.24), so there is no bump that
     # clears the finding. The only finding in each is that one HIGH.
     # Each retires itself on the next digest move.
-    "curlimages/curl:8.23.0": (
-        "sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac",
-        "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
-        "fixed in 1.2.1-r0). Used as a healthcheck/probe client against this "
-        "repo's own internal services, not to fetch content from untrusted "
-        "peers."
-    ),
     "php:8.5-cli-alpine": (
         "sha256:d386a12bad6b5dbee1f7dbd0291a4526dbfcbe5cfc0e8833de8d8309be8f3e50",
         "measured 1 fixable HIGH, brotli-libs 1.2.0-r1 (CVE-2026-111497, "
@@ -699,26 +577,6 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "requirements (each Dockerfile installs its pinned requirements on "
         "top), and the debian trixie base "
         "itself is clean. The tag is the newest 3.15, so only an upstream "
-        "rebuild clears them. Retires itself when the digest moves."
-    ),
-    "python:3.15-alpine": (
-        "sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb",
-        "#3720: the compose helper containers (elk, init, payload-analysis) "
-        "moved from python 3.12-alpine to 3.15-alpine. Measured 4 fixable "
-        "HIGH on 2026-10-24, "
-        "all pip packages baked into the official image: msgpack 1.1.2, "
-        "setuptools 70.3.0 and urllib3 2.7.0. The alpine base itself is "
-        "clean; only an upstream "
-        "rebuild clears them. Retires itself when the digest moves."
-    ),
-    "docker.io/library/python:3.15-alpine": (
-        "sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb",
-        "#3720: the compose helper containers (elk, init, payload-analysis) "
-        "moved from python 3.12-alpine to 3.15-alpine. Measured 4 fixable "
-        "HIGH on 2026-10-24, "
-        "all pip packages baked into the official image: msgpack 1.1.2, "
-        "setuptools 70.3.0 and urllib3 2.7.0. The alpine base itself is "
-        "clean; only an upstream "
         "rebuild clears them. Retires itself when the digest moves."
     ),
     "ollama/ollama:0.34.4": (

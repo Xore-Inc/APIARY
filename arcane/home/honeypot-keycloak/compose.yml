@@ -55,7 +55,7 @@ services:
     # scripts/list-docker-base-images.py retires itself when it moves.
     #
     # 26.8.2 = 26.8 = latest on quay.io as of 2026-11-05.
-    image: quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
     # With a digest pin there is nothing newer to fetch; `missing` keeps a
     # redeploy working while quay.io is unreachable.
     pull_policy: missing
