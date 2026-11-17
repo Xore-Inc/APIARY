@@ -9,7 +9,7 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 
 - `honeypot-keycloak` is an Arcane-managed stack on the homeserver.
 - No local image is built. Both upstream images are pinned by version tag
-  *and* digest: `postgres:18.6-bookworm@sha256:…` and
+  *and* digest: `postgres:18.7-bookworm@sha256:…` (18.7 since the 2026-11-17 maintenance window) and
   `quay.io/keycloak/keycloak:26.8.2@sha256:…` (#3824). Keycloak used to name
   `:latest` (with a digest underneath it since #3501), on the theory that the
   identity provider should always be current -- it was on 26.7.1 when

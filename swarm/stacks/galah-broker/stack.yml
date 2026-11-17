@@ -2,7 +2,7 @@
 # remain in Compose; each joins only its side of this encrypted bridge.
 services:
   broker:
-    image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:e7f48b58804f3c19766190eba95c33aa96df5a83cb7e5e17d091a107cc032886
+    image: ghcr.io/xore-inc/honeypot-galah-llm-broker@sha256:895ab2a72a45a168ebf677e97af6b0e4abdcded74df66f4b4ceb837b1410d9ec
     labels:
       apiary.swarm.migration: galah-broker
     environment:

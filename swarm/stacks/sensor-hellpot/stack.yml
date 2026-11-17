@@ -23,7 +23,7 @@
 # Traefik-only listener behind socat-hp-hellpot (#1908).
 services:
   hellpot:
-    image: ghcr.io/xore-inc/honeypot-hellpot@sha256:8689997bdfc61339dd04ad809e598f2cddc1b3d2242a8bc59a28e45894746e48
+    image: ghcr.io/xore-inc/honeypot-hellpot@sha256:42781d85f76e60e3959a9c160a2104c7c1a33c87294680f62458506b1876a53f
     ports:
       - target: 8080
         published: 8080

@@ -19,7 +19,7 @@
 # 9201 -> container 9200, exactly as under Compose.
 services:
   elasticpot:
-    image: ghcr.io/xore-inc/honeypot-elasticpot@sha256:0b9b22a76a4bfeeafaecf7d7b5364cf995c786931944ca71edd81f53905a51ec
+    image: ghcr.io/xore-inc/honeypot-elasticpot@sha256:f01ee7f206544bed9648f0e332fb19f15b0f09b58a6f7336a2d157f6bc012dcc
     ports:
       - target: 9200
         published: 9201

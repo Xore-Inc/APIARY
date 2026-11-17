@@ -16,7 +16,7 @@
 #   healthcheck replace it (an unhealthy task is replaced by swarm).
 services:
   dnp3:
-    image: ghcr.io/xore-inc/honeypot-dnp3-honeypot@sha256:c8780d53c11eedf18dcfb964cfba9eb8cd298806982f9529522d0d65adac1a68
+    image: ghcr.io/xore-inc/honeypot-dnp3-honeypot@sha256:53f189c7ca13e29387d33fd87a79d0e9080162bbe8cac728c9fb3edada1dc43d
     ports:
       - target: 20000
         published: 20000
