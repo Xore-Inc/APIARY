@@ -7,10 +7,12 @@ Design for [#3594](https://github.com/Xore-Inc/APIARY/issues/3594) (epic
 with generic resources, NVIDIA on the homeserver, GPU services pinned by
 constraint and reservation").
 
-**Status (2026-10-31): design and lint only. Nothing is applied.** The model
-benchmark ([#3706](https://github.com/Xore-Inc/APIARY/issues/3706)) owns the
-GPU until it finishes. Every live step below waits for it, and step 1 needs a
-dockerd restart on the homeserver, which restarts every container there.
+**Status (2026-11-17): steps 1-3 are live on the homeserver; step 4 is
+open.** Step 1 went in with maintenance window W1 (2026-11-16), steps 2 and 3
+in W4. The `llm` stack ([`swarm/stacks/llm`](../swarm/stacks/llm/README.md))
+is **paused at 0 replicas** while the model benchmark
+([#3706](https://github.com/Xore-Inc/APIARY/issues/3706)) owns the GPU, and
+resumes when the benchmark ends.
 
 ## What is on the host today
 
@@ -60,6 +62,7 @@ generic resource** instead.
    ```toml
    swarm-resource = "DOCKER_RESOURCE_NVIDIA-GPU"
    accept-nvidia-visible-devices-envvar-when-unprivileged = false
+   accept-nvidia-visible-devices-as-volume-mounts = true
    ```
    The second line matters because `default-runtime: nvidia` applies to
    **every** container on the host. Images such as `ollama/ollama` and
@@ -67,11 +70,27 @@ generic resource** instead.
    With the default `true`, any of them, started anywhere on the host, would
    take the GPU without a reservation. With `false`, only a device request (the
    Compose services above) or a swarm reservation hands out the card.
-   Confirm both variable names inside the proof task (rollout step 2),
-   because the toolkit's handling of `swarm-resource` under that setting is
-   not documented.
-3. **Reserve it in a stack** (enforced by `scripts/check-swarm-stacks.py`):
+   **Proved in step 2 (2026-11-17, toolkit 1.20.2):** swarm does set
+   `DOCKER_RESOURCE_NVIDIA-GPU=GPU-18a00c7e-…` in the task, but the toolkit
+   treats it like any other environment request
+   (`internal/config/image/cuda_image.go`, `VisibleDevices`), so with
+   `accept-…-envvar-when-unprivileged = false` it is ignored for every
+   unprivileged container, and a swarm task cannot be privileged. The third
+   line fixes that without weakening the guard: the runtime then also takes
+   a device request as a bind mount of the host's `/dev/null` at
+   `/var/run/nvidia-container-devices/<uuid>`. Only a mount whose source is
+   `/dev/null` counts, so an image `VOLUME` cannot trigger it; writing that
+   bind takes the same authority as a Compose device request. The runtime
+   reads `config.toml` per container create, so this line needs no dockerd
+   restart.
+3. **Reserve it in a stack** (enforced by `scripts/check-swarm-stacks.py`),
+   and request the device with the mount:
    ```yaml
+   volumes:
+     - type: bind
+       source: /dev/null
+       target: /var/run/nvidia-container-devices/GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3
+       read_only: true
    deploy:
      placement:
        constraints:
@@ -123,7 +142,7 @@ proves nothing.
 
 | Workload | Proposal | Why |
 |---|---|---|
-| `ollama` | stack `llm`, one replica, `NVIDIA-GPU: 1`, pinned to `gpu == true`; model volume stays the existing named volume on the homeserver | the only always-on GPU holder and the dependency of Galah, the backend and the workers |
+| `ollama` | stack `llm`, one replica, `NVIDIA-GPU: 1`, pinned to `gpu == true`; its own volume `llm_ollama_models`, seeded from `ghidra_ollama_models` (Ollama 0.40 migrates the store, and that volume is the 0.34.4 benchmark's) | the only always-on GPU holder and the dependency of Galah, the backend and the workers |
 | `ml-worker` GPU overlay | stays Compose; drop the device reservation until ml-worker really uses the GPU | it reserves the card for nothing (its own header says so) |
 | `unsloth-studio`, `train`, `rex86-eval` | stay Compose, documented exceptions | `security_opt` / `ipc: host` / operator-run jobs |
 | `arcane` GPU panel | stays Compose | the control plane is never a stack |
@@ -152,18 +171,29 @@ restarts dockerd on the homeserver.
    `docker run --rm ollama/ollama:<pin> nvidia-smi` without `--gpus` must
    **fail** to see it (the `accept-...=false` guard).
    *Rollback:* restore both backups and restart dockerd.
-2. **Proof stack** `gpu-canary` (not merged under `swarm/stacks/` until it
-   passes locally): `nvidia/cuda` base digest, `nvidia-smi -L` as the
-   healthcheck, one replica, `NVIDIA-GPU: 1`. Expect the task on the
-   homeserver with `DOCKER_RESOURCE_NVIDIA-GPU=GPU-18a00c7e-…` in its
-   environment, the UUID in `nvidia-smi -L`, and a second replica `pending`
-   with "insufficient resources". Then remove it.
+2. **Proof stack** `gpu-canary` ([`ops/swarm/gpu-canary.stack.yml`](../ops/swarm/gpu-canary.stack.yml),
+   deployed by hand with `docker stack deploy`, never a GitOps stack):
+   `nvidia/cuda` base digest, `nvidia-smi -L` as the healthcheck, one
+   replica, `NVIDIA-GPU: 1`. Expect the task on the homeserver with
+   `DOCKER_RESOURCE_NVIDIA-GPU=GPU-18a00c7e-…` in its environment, the UUID
+   in `nvidia-smi -L`, and a second replica `pending` with "insufficient
+   resources". Then remove it.
+   *Result (2026-11-17):* without the mount the task had the variable but no
+   GPU (see step 2 of the mechanism). With `as-volume-mounts = true` and the
+   mount: healthy on supermicro, the UUID in `nvidia-smi -L`, and replica 2
+   pending with "no suitable node (insufficient resources on 3 nodes)".
+   Removed.
 3. **`llm` stack** with Ollama, following the proposal above. The
    Compose Ollama stays defined behind a `legacy` profile for rollback. Cut
    over the way the Galah broker did: start the stack, move one consumer at a
    time, and verify with a real request through each consumer.
    *Rollback:* scale the stack to 0, `docker compose up -d ollama` from the
-   Ghidra project.
+   Ghidra project (full sequence in the stack README, including stopping
+   `ollama-loopback`).
+   *Result (2026-11-17):* `llm` on Ollama 0.40.16, consumers moved one at a
+   time (Galah broker, backend, host units through `ollama-loopback`), then
+   paused for the benchmark. Before a version bump is final it still needs
+   the #2062 re-qualification (`approved-models.json`).
 4. **ml-worker overlay:** drop its device reservation (code), after Xore
    agrees that nothing uses it.
 
