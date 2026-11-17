@@ -7,8 +7,7 @@ Design for [#3594](https://github.com/Xore-Inc/APIARY/issues/3594) (epic
 with generic resources, NVIDIA on the homeserver, GPU services pinned by
 constraint and reservation").
 
-**Status (2026-11-17): steps 1-3 are live on the homeserver; step 4 is
-open.** Step 1 went in with maintenance window W1 (2026-11-16), steps 2 and 3
+**Status (2026-11-17): steps 1-4 are done on the homeserver.** Step 1 went in with maintenance window W1 (2026-11-16), steps 2 and 3
 in W4. The `llm` stack ([`swarm/stacks/llm`](../swarm/stacks/llm/README.md))
 is **paused at 0 replicas** while the model benchmark
 ([#3706](https://github.com/Xore-Inc/APIARY/issues/3706)) owns the GPU, and
@@ -32,7 +31,6 @@ GPU consumers, all Compose, all reserving the card by UUID through
 | Compose file | Service | Swarm blockers besides the GPU |
 |---|---|---|
 | `analysis/ghidra/docker-compose.ghidra.gpu.yml` | `ollama` | consumers on the bridge `honeypot-llm` and the overlay `galah-broker_back` |
-| `ml-worker/docker-compose.ml-worker.gpu.yml` | `ml-worker` | overlay only reserves the device; nothing on the GPU path yet |
 | `arcane/home/unsloth/compose.yml` | `unsloth-studio` | `ipc: host`, `security_opt`, `cap_add`, `memlock` ulimit |
 | `analysis/ghidra/training/compose.yaml` | `train` | `ipc: host`, `memlock` ulimit; a run-to-completion job |
 | `arcane/home/rex86-eval/compose.yml` | `rex86-eval` | `shm_size: 16gb`; a run-to-completion job |
@@ -143,7 +141,7 @@ proves nothing.
 | Workload | Proposal | Why |
 |---|---|---|
 | `ollama` | stack `llm`, one replica, `NVIDIA-GPU: 1`, pinned to `gpu == true`; its own volume `llm_ollama_models`, seeded from `ghidra_ollama_models` (Ollama 0.40 migrates the store, and that volume is the 0.34.4 benchmark's) | the only always-on GPU holder and the dependency of Galah, the backend and the workers |
-| `ml-worker` GPU overlay | stays Compose; drop the device reservation until ml-worker really uses the GPU | it reserves the card for nothing (its own header says so) |
+| `ml-worker` GPU overlay | stays Compose; device reservation dropped (step 4, 2026-11-17) until ml-worker really uses the GPU | it reserved the card for nothing |
 | `unsloth-studio`, `train`, `rex86-eval` | stay Compose, documented exceptions | `security_opt` / `ipc: host` / operator-run jobs |
 | `arcane` GPU panel | stays Compose | the control plane is never a stack |
 
@@ -196,6 +194,11 @@ restarts dockerd on the homeserver.
    the #2062 re-qualification (`approved-models.json`).
 4. **ml-worker overlay:** drop its device reservation (code), after Xore
    agrees that nothing uses it.
+   *Result (2026-11-17):* Xore agreed. The worker installs the CPU-only torch
+   wheel and selects `torch.device("cpu")`; live it had no device request, no
+   `/dev/nvidia*` and no CUDA context. The ml-worker GPU overlay
+   is removed; the snippet to add back with Milestone H (#67) is in
+   [`gpu-ml-worker-acceleration.md`](gpu-ml-worker-acceleration.md) §4.4.
 
 ## Open questions for Xore
 

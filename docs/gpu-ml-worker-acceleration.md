@@ -200,18 +200,29 @@ Rules:
 - Training (6 h retrain) uses fp32, batch size 128, and
   `torch.cuda.empty_cache()` after each retrain.
 
-### 4.4 GPU reservation — already scaffolded; do not add it inline
+### 4.4 GPU reservation — removed until Milestone H; do not add it inline
 
-This step is already satisfied. The reservation lives in a dedicated overlay,
-`ml-worker/docker-compose.ml-worker.gpu.yml`, applied as:
+The inert ml-worker GPU overlay was removed on
+2026-11-17 (phase 7 step 4, #3594): the worker installs the CPU-only torch
+wheel (`torch==…+cpu`), selects `torch.device("cpu")`, and never held the card
+live, while the overlay reserved the whole GPU for nothing. When Milestone H
+lands, add the reservation back in an overlay of this shape (or as a swarm
+`NVIDIA-GPU` generic resource, [`SWARM-GPU.md`](SWARM-GPU.md)), together with
+a CUDA torch wheel and the device selection:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ml-worker.gpu.yml \
-  up -d ml-worker
+```yaml
+services:
+  ml-worker:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3"]
+              capabilities: [gpu]
 ```
 
-That file's own header calls it an "overlay, never used alone" and "inert
-scaffolding right now, not a feature this stack turns on": per
+Why it stayed out of the base file: per
 `ml-gpu-coordinated-roadmap.md` §1 decision 4 only LSTM and embeddings may use
 CUDA, and both are still gated behind Milestones D and H. Milestone H's own
 first step requires a measured CPU baseline from #62 before touching CUDA.
@@ -220,11 +231,11 @@ So do not add a `deploy.resources.reservations.devices` block to
 `ml-worker/docker-compose.yml`: an inline reservation makes the GPU
 unconditional on every `up`, which is the gate the overlay exists to keep shut.
 
-The overlay is now pinned. It used to say `count: all`, which on this two-card
+Pin it by UUID. The removed overlay first said `count: all`, which on this two-card
 host (§3, #1539) would have handed `ml-worker` the Quadro P2200 reserved for the
 Windows sandbox VM as well. It now sets `device_ids` to the Ada's UUID, as
 `analysis/ghidra/docker-compose.ghidra.gpu.yml` does. `ML_DEVICE: auto | cpu`
-belongs in the same overlay, not the base file.
+belongs in that overlay, not the base file.
 
 Keep the existing `memory: 2g` / `cpus: "2.0"` limits; GPU memory is governed
 by §5, not by the container memory limit.
