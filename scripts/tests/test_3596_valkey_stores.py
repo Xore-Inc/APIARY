@@ -42,7 +42,7 @@ class StoreStackMixin:
         self.assertEqual(d["endpoint_mode"], "dnsrr")
         self.assertEqual(d["update_config"]["order"], "stop-first")
         self.assertEqual(d["rollback_config"]["order"], "stop-first")
-        self.assertEqual(d["labels"]["apiary.pause"], "unit")
+        self.assertEqual(d["labels"]["apiary.pause"], self.pause)
 
     def test_no_port_and_internal_attachable_store_overlay(self) -> None:
         self.assertNotIn("ports", self.svc)
@@ -67,6 +67,7 @@ class StoreStackMixin:
 class DashboardSessionsTest(StoreStackMixin, unittest.TestCase):
     stack_name = "dashboard-sessions"
     service = "valkey"
+    pause = "never"  # apiary-dashboard is NEVER in honeypot-pause.sh
     # The relay lives in Xore-Inc/apiary-dashboard (compose.honeynet.yml).
     relay_container = "hp-apiary-dashboard-oidc-sessions-relay"
 

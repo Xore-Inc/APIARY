@@ -76,8 +76,8 @@ services:
         failure_action: pause
         order: stop-first
       labels:
-        apiary.pause: unit
-        apiary.pause.reason: "Dashboard sessions must pause with the dashboard"
+        apiary.pause: never
+        apiary.pause.reason: "the dashboard's session store; apiary-dashboard is NEVER in scripts/honeypot-pause.sh, and a paused store signs everyone out"
 networks:
   # Replaces the former non-attachable `session` overlay (10.200.4.0/24): a
   # deploy never changes an existing network, and the relay needs attachable.
