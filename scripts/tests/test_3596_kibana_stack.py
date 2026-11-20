@@ -85,11 +85,15 @@ class KibanaStackTest(unittest.TestCase):
             self.assertNotIn("http://kibana:5601", text, rel)
             self.assertIn("http://10.8.0.2:19601", text, rel)
 
-    def test_d2_connect_line_is_active(self) -> None:
+    def test_elasticsearch_answers_on_apiary_es(self) -> None:
+        # Kibana reaches ES as `elasticsearch` on apiary-es: since phase 9 leg D
+        # that is the elasticsearch stack's alias (the D2 connect line of the
+        # Compose ES is retired).
+        es = load("swarm/stacks/elasticsearch/stack.yml")
+        self.assertEqual(es["networks"]["es"]["name"], "apiary-es")
+        self.assertIn("elasticsearch", es["services"]["es"]["networks"]["es"]["aliases"])
         lines = (ROOT / "ops/swarm/hosts/homeserver-overlay-attach.txt").read_text().splitlines()
-        self.assertIn("connect hp-elasticsearch apiary-es elasticsearch", lines)
-        self.assertFalse(any(re.match(r"^\s*#\s*connect hp-elasticsearch", ln) for ln in lines))
-
+        self.assertFalse(any(re.match(r"^\s*connect hp-elasticsearch", ln) for ln in lines))
 
 if __name__ == "__main__":
     unittest.main()

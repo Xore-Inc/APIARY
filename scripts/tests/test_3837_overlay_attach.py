@@ -305,13 +305,18 @@ class RepoTest(unittest.TestCase):
             for net in t.overlays:
                 self.assertIn(net, overlays, f"{t.name}: {net} is not a swarm stack overlay")
 
-    def test_d2_line_is_the_documented_one_and_compose_stays_clean(self):
-        d2 = [l for l in CONFIG.read_text().splitlines() if "apiary-es" in l and "connect" in l]
-        # Active since phase 9 leg A created apiary-es (#3596).
-        self.assertEqual(d2, ["connect hp-elasticsearch apiary-es elasticsearch"])
-        cfg = oa.parse_config(d2[0])
-        self.assertEqual(cfg.targets["hp-elasticsearch"].connect, {"apiary-es": ["elasticsearch"]})
-        self.assertNotIn("apiary-es", (ROOT / "arcane/home/honeypot-elk/compose.yml").read_text())
+    def test_d2_is_the_es_shim_start_line(self):
+        # Phase 9 leg D (#3596): the swarm ES is on apiary-es; the Compose
+        # side reaches it through hp-elasticsearch-shim, the only Compose
+        # member of the overlay. The D2 connect line is retired.
+        lines = CONFIG.read_text().splitlines()
+        self.assertEqual([l for l in lines if "apiary-es" in l and not l.startswith("#")],
+                         ["start hp-elasticsearch-shim apiary-es"])
+        self.assertNotIn("hp-elasticsearch", self.cfg.targets)
+        compose = yaml.safe_load((ROOT / "arcane/home/honeypot-elk/compose.yml").read_text())
+        on_es = [n for n, svc in compose["services"].items() if "es" in (svc.get("networks") or {})]
+        self.assertEqual(on_es, ["elasticsearch-shim"])
+        self.assertEqual(compose["networks"]["es"], {"name": "apiary-es", "external": True})
 
     def test_anchor_image_is_pinned(self):
         for cfg in (self.cfg, self.vps):

@@ -97,7 +97,7 @@ journalctl -u apiary-overlay-attach -b   # what the last restore did
 
 After maintenance, start listed containers deliberately (no `State.Error` gate): `sudo python3 -I /usr/local/libexec/apiary-overlay-attach start /etc/apiary/overlay-attach.txt hp-tanner hp-tftp-relay`.
 
-**D2 (`apiary-es`, #3582).** Elasticsearch is not put on the overlay in `honeypot-elk/compose.yml`: that would make `hp-elasticsearch`, and with it the whole pipeline, depend on this race. Instead the list carries `connect hp-elasticsearch apiary-es elasticsearch` (commented out until the overlay exists). The service attaches ES after it runs, re-attaches after a Compose recreate, and disconnects it on stop (`ExecStop`, also when dockerd stops, via `PartOf=`), so the endpoint is never in the container's saved config when dockerd next restores it. Enabled in phase 9 leg A (#3596): `apiary-es` was created by hand once (`docker network create --driver overlay --attachable --internal --opt encrypted --opt com.docker.network.driver.mtu=1310 --subnet 10.200.101.0/24 apiary-es`), the line is active, and the unit was restarted; the running ES was attached with no restart. Swarm stacks reach ES as `elasticsearch` on it (the kibana stack). The line is retired at the Elasticsearch move.
+**D2 (`apiary-es`, #3582).** Elasticsearch is not put on the overlay in `honeypot-elk/compose.yml`: that would make `hp-elasticsearch`, and with it the whole pipeline, depend on this race. Instead the list carries `connect hp-elasticsearch apiary-es elasticsearch` (commented out until the overlay exists). The service attaches ES after it runs, re-attaches after a Compose recreate, and disconnects it on stop (`ExecStop`, also when dockerd stops, via `PartOf=`), so the endpoint is never in the container's saved config when dockerd next restores it. Enabled in phase 9 leg A (#3596): `apiary-es` was created by hand once (`docker network create --driver overlay --attachable --internal --opt encrypted --opt com.docker.network.driver.mtu=1310 --subnet 10.200.101.0/24 apiary-es`), the line is active, and the unit was restarted; the running ES was attached with no restart. Swarm stacks reach ES as `elasticsearch` on it (the kibana stack). Retired at the Elasticsearch move (phase 9 leg D): ES is now the `elasticsearch` stack on this overlay, and the list carries `start hp-elasticsearch-shim apiary-es` instead (the Compose side's shim, `swarm/stacks/elasticsearch/README.md`).
 
 ## Stacks under Arcane GitOps (#3590)
 
@@ -117,7 +117,7 @@ value files never enter git. Rotate by creating `_v(N+1)`, changing the stack
 file to reference it, merging, and deploying. Keep the old secret through the
 next version so a rollback can still start.
 
-The block `10.200.100.0/24`-`10.200.119.0/24` is reserved for the #3579 BFF split, outside the sequential subnet count: `.100` host-gateway (`host`), `.101` the D2 overlay `apiary-es` (alias `elasticsearch`; `hp-elasticsearch` joins it through `apiary-overlay-attach`, not compose, #3837), `.102` backend-api `bff` (the dashboard attaches).
+The block `10.200.100.0/24`-`10.200.119.0/24` is reserved for the #3579 BFF split, outside the sequential subnet count: `.100` host-gateway (`host`), `.101` the D2 overlay `apiary-es` (the elasticsearch stack, alias `elasticsearch`; on the Compose side only `hp-elasticsearch-shim` joins, started by `apiary-overlay-attach`, #3837, #3596), `.102` backend-api `bff` (the dashboard attaches).
 
 ```bash
 python3 scripts/check-swarm-stacks.py
@@ -170,6 +170,8 @@ Plan and decisions: the 2026-11-17 plan and decision comments on #3596. Legs, on
 - `tanner-redis` (a memory-only LRU cache; the upstream base image with the Compose build's `redis.conf` as flags; the `honeypot-tanner` project is changed only through the docker:cli bridge, never an Arcane sync, #3878): `swarm/stacks/tanner-redis/README.md`.
 - Start a relay with `docker compose up -d --no-deps <relay>` (docker:cli bridge) in any project that has `build:` services: an Arcane project sync redeploys and rebuilds those images first (#3891). Cut over 2026-11-20: sessions 22 s, canarytokens 3 min 55 s (a cancelled sync), tanner 9 s.
 - A host without the stack (a fresh install) brings these Compose projects up with `--profile legacy` and without the relay (`install-homeserver.sh`), because a relay whose overlay is missing aborts the whole `compose up`.
+
+**Leg D, Elasticsearch** (`swarm/stacks/elasticsearch`): the same digest and environment on the reused volume `honeypot-elk_es-data` (external on both sides), `ulimits.memlock -1` + `IPC_LOCK`, 120 s grace, `start_period` 300 s, `endpoint_mode: dnsrr` on `apiary-es` with alias `elasticsearch`, no published port. The Compose consumers keep `http://elasticsearch:9200`: `elasticsearch-shim` in honeypot-elk (read-only socat) answers under that name on `honeynet` and `honeypot-llm-data` and forwards to `elasticsearch_es:9200`. The Compose `elasticsearch` is the stopped rollback under `profiles: [legacy]`. Cutover and rollback: `swarm/stacks/elasticsearch/README.md`.
 
 **Rules for these stacks.**
 - Pinned with `node.hostname == supermicro`; deploy label `apiary.pause: unit`.
