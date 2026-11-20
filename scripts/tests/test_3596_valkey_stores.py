@@ -120,8 +120,9 @@ class RelayMixin:
         doc, _ = self.relay()
         store = doc["services"][self.compose_store]
         self.assertEqual(store.get("profiles"), ["legacy"])
-        self.assertEqual(store["image"].split("@")[1], self.svc["image"].split("@")[1],
-                         "same digest on both sides of the rollback")
+        if "image" in store:  # a built store compares its Dockerfile base instead
+            self.assertEqual(store["image"].split("@")[1], self.svc["image"].split("@")[1],
+                             "same digest on both sides of the rollback")
         for name, svc in doc["services"].items():
             deps = svc.get("depends_on") or {}
             if isinstance(deps, list):
@@ -156,6 +157,47 @@ class CanarytokensRedisTest(StoreStackMixin, RelayMixin, unittest.TestCase):
     def test_installer_skips_the_relay_without_the_stack(self) -> None:
         text = (ROOT / "scripts/install-homeserver.sh").read_text()
         self.assertIn("honeypot-canarytokens) store_service=canarytokens-redis_redis relay=canarytokens-redis-relay", text)
+
+
+@unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+class TannerRedisTest(StoreStackMixin, RelayMixin, unittest.TestCase):
+    stack_name = "tanner-redis"
+    service = "redis"
+    pause = "never"  # the tanner group is NEVER in honeypot-pause.sh
+    relay_container = "hp-tanner-redis-relay"
+    compose_rel = "arcane/home/honeypot-tanner/compose.yml"
+    relay_service = "tanner_redis_relay"
+    compose_store = "tanner_redis"
+    bridge = "tanner_local"
+    alias = "tanner_redis"
+
+    def test_same_base_image_and_redis_conf_as_flags(self) -> None:
+        dockerfile = (ROOT / "arcane/home/honeypot-tanner/tanner/redis/Dockerfile").read_text()
+        (base,) = [ln.split()[1] for ln in dockerfile.splitlines() if ln.startswith("FROM ")]
+        self.assertEqual(self.svc["image"], base)
+        self.assertEqual(self.svc["user"], "redis")
+        conf = {}
+        for line in (ROOT / "arcane/home/honeypot-tanner/tanner/redis/redis.conf").read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                key, _, value = line.partition(" ")
+                conf[key] = value.strip().strip('"')
+        cmd = self.svc["command"]
+        self.assertEqual(cmd[0], "redis-server")
+        flags = dict(zip([c[2:] for c in cmd[1::2]], cmd[2::2]))
+        self.assertEqual(flags, conf)
+
+    def test_ephemeral_no_volume(self) -> None:
+        self.assertNotIn("volumes", self.svc)
+        self.assertNotIn("volumes", self.stack)
+
+    def test_consumers_keep_the_name(self) -> None:
+        cfg = yaml.safe_load((ROOT / "arcane/home/honeypot-tanner/tanner/tanner/config.yaml").read_text())
+        self.assertEqual(cfg["REDIS"]["host"], self.alias)
+
+    def test_installer_skips_the_relay_without_the_stack(self) -> None:
+        text = (ROOT / "scripts/install-homeserver.sh").read_text()
+        self.assertIn("honeypot-tanner) store_service=tanner-redis_redis relay=tanner_redis_relay", text)
 
 
 if __name__ == "__main__":

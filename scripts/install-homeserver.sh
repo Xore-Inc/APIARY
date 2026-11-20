@@ -1831,6 +1831,7 @@ step_start_remaining_stacks() {
     local store_service="" relay=""
     case "$name" in
       honeypot-canarytokens) store_service=canarytokens-redis_redis relay=canarytokens-redis-relay ;;
+      honeypot-tanner) store_service=tanner-redis_redis relay=tanner_redis_relay ;;
     esac
     if [[ -n "$store_service" ]] && ! docker service inspect "$store_service" >/dev/null 2>&1; then
       profile_args=(--profile legacy)
