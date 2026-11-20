@@ -307,8 +307,9 @@ class RepoTest(unittest.TestCase):
 
     def test_d2_line_is_the_documented_one_and_compose_stays_clean(self):
         d2 = [l for l in CONFIG.read_text().splitlines() if "apiary-es" in l and "connect" in l]
-        self.assertEqual(d2, ["# connect hp-elasticsearch apiary-es elasticsearch"])
-        cfg = oa.parse_config(d2[0].lstrip("# "))
+        # Active since phase 9 leg A created apiary-es (#3596).
+        self.assertEqual(d2, ["connect hp-elasticsearch apiary-es elasticsearch"])
+        cfg = oa.parse_config(d2[0])
         self.assertEqual(cfg.targets["hp-elasticsearch"].connect, {"apiary-es": ["elasticsearch"]})
         self.assertNotIn("apiary-es", (ROOT / "arcane/home/honeypot-elk/compose.yml").read_text())
 

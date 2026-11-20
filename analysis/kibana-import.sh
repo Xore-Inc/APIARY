@@ -11,7 +11,7 @@ set -eu
 # than erroring on it -- the expected case for "restore after a reset" or
 # "reapply the baseline after an upgrade", not a one-time-only import.
 
-kibana_url="${KIBANA_URL:-http://kibana:5601}"
+kibana_url="${KIBANA_URL:-http://10.8.0.2:19601}"
 script_dir="$(cd "$(dirname -- "$0")" && pwd)"
 input="${1:-$script_dir/objects/kibana_export.ndjson}"
 

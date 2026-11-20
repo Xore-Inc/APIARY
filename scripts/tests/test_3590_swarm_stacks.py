@@ -160,6 +160,33 @@ class LintTest(unittest.TestCase):
         guard.write_text("udp 25\n")
         self.assertTrue(any("not in" in e for e in lint.check_file(path, root)))
 
+    def test_homeserver_pinned_ports_host_mode_guarded(self):
+        # #3596: phase 9 stacks pinned by hostname follow the sensor port rules.
+        body = good_stack().replace("node.labels.sensor == false", "node.hostname == supermicro")
+        self.assertFlags(body + "    ports: ['19601:5601']\n", "every node, the VPS public address included")
+        self.assertFlags(body + "    ports:\n      - {target: 5601, published: 19601, mode: ingress}\n",
+                         "every node, the VPS public address included")
+        host = body + "    ports:\n      - {target: 5601, published: 19601, mode: host, protocol: tcp}\n"
+        self.assertFlags(host, "homeserver-swarm-host-ports.txt")
+        root, path = self.write(host)
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("tcp 19601\n")
+        self.assertEqual(lint.check_file(path, root), [])
+        # Off-homeserver services keep their freedom (edge stacks publish nothing,
+        # but a precision service may use ingress).
+        self.assertEqual(self.errors(good_stack() + "    ports: ['8080:8080']\n"), [])
+
+    def test_published_port_needs_a_non_internal_network(self):
+        # #3596 gate G1: swarm publishes no host-mode port for a task whose
+        # networks are all internal.
+        nets = ("networks:\n  a: {driver: overlay, internal: true, ipam: {config: [{subnet: 10.200.97.0/24}]}}\n"
+                "  b: {driver: overlay, ipam: {config: [{subnet: 10.200.96.0/24}]}}\n")
+        port = "    ports: ['8080:8080']\n"
+        self.assertFlags(good_stack(port + "    networks: [a]\n", top=nets), "every network is internal")
+        self.assertEqual(self.errors(good_stack(port + "    networks: [a, b]\n", top=nets)), [])
+        self.assertEqual(self.errors(good_stack("    networks: [a]\n", top=nets)), [])
+
     def test_gpu_reservation_rules(self):
         # #3594: one GPU as a swarm generic resource.
         body = good_stack().replace(

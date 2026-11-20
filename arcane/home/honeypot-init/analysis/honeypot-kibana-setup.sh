@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-kibana="${KIBANA_URL:-http://kibana:5601}"
+kibana="${KIBANA_URL:-http://10.8.0.2:19601}"
 header='kbn-xsrf: honeypot-setup'
 
 until curl -fsS "$kibana/api/status" | grep -q '"level":"available"'; do sleep 5; done

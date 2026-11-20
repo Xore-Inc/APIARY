@@ -1,0 +1,112 @@
+# #3596 (swarm phase 9, epic #3587): Kibana as a stack pinned to the
+# homeserver, the first stateful-tier move. It holds no data of its own: its
+# state is the .kibana* indices in Elasticsearch.
+#
+# Elasticsearch is `elasticsearch:9200` on the D2 overlay apiary-es (#3582):
+# until phase 9's Elasticsearch move the Compose hp-elasticsearch is attached
+# there by apiary-overlay-attach (`connect hp-elasticsearch apiary-es
+# elasticsearch`), afterwards the swarm ES answers under the same name.
+#
+# The VPS reaches Kibana as before: oidc-kibana -> edge-kibana_socat ->
+# 10.8.0.2:19601 over wg0. A host-mode port binds every address of the node,
+# so tcp 19601 is in ops/firewall/hosts/homeserver-swarm-host-ports.txt and
+# home-swarm-host-guard drops every flow that is not the VPS on wg0 (or a
+# local container to 10.8.0.2, e.g. honeypot-init's kibana-setup).
+#
+# The Compose `kibana` in arcane/home/honeypot-elk stays behind the `legacy`
+# profile as the rollback (README.md). The two never run together: they
+# would contend for the port, and this file landed with replicas: 0.
+services:
+  kibana:
+    # Same digest as the Compose Kibana: a move is not a version change, so
+    # no saved-object migration runs in either direction.
+    image: docker.elastic.co/kibana/kibana:9.5.6@sha256:c7ed45da5c3cfea020fc6c99ce027f4d21d19dab330379c5115d5eb95f6ecebc
+    labels:
+      apiary.swarm.migration: kibana
+    # The saved-objects encryption key comes from the swarm secret, not the
+    # environment (no .env interpolation in stacks, #3790). Kibana has no
+    # _FILE form for it, so the wrapper exports it and execs the image's own
+    # entrypoint (tini -> kibana-docker).
+    entrypoint:
+      - /bin/bash
+      - -ec
+      - 'export XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY="$$(< /run/secrets/kibana_encryption_key)"; exec /bin/tini -- /usr/local/bin/kibana-docker'
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+      XPACK_FLEET_ENABLED: "false"
+      TELEMETRY_ENABLED: "false"
+    secrets:
+      - {source: kibana_encryption_key, target: kibana_encryption_key, uid: "1000", gid: "0", mode: 0400}
+    networks:
+      - es
+      # Not internal: a task whose only networks are internal overlays does
+      # not get its host-mode port published at all (phase 9 gate G1).
+      - front
+    ports:
+      - target: 5601
+        published: 19601
+        protocol: tcp
+        mode: host
+    cap_drop: [ALL]
+    healthcheck:
+      # 200 only when Kibana reports itself available (503 while it waits
+      # for Elasticsearch or migrates).
+      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "http://127.0.0.1:5601/api/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    deploy:
+      mode: replicated
+      # Landed at 0 and scaled to 1 by hand after the Compose Kibana stopped
+      # (#3596 cutover); this commit records the result.
+      replicas: 0
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        # longer than start_period + interval x retries (120 + 150 s)
+        monitor: 300s
+        failure_action: rollback
+        order: stop-first      # host-mode port: two tasks cannot both bind it
+      rollback_config:
+        parallelism: 1
+        monitor: 300s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "operator UI only; the VPS oidc-kibana gateway shows an upstream error while it is paused, nothing else depends on it"
+        apiary.probe: http:19601/api/status
+networks:
+  es:
+    # The D2 overlay (#3582, 10.200.101.0/24 in the reserved BFF block):
+    # created by hand once (ops/swarm/README.md), not by any stack.
+    external: true
+    name: apiary-es
+  front:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.31.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+secrets:
+  # Created out of band on a manager (ops/swarm/stackctl.py secret create),
+  # never in git. A fresh random value, not the Compose placeholder (#3887).
+  kibana_encryption_key:
+    external: true
+    name: kibana_encryption_key_v1

@@ -330,12 +330,14 @@ fi
 # (task_container, prepended to this remote script from scripts/lib). A dump
 # that is missing, fails, or lacks pg_dump's completion footer leaves no
 # keycloak.sql.gz, and the required-item check below turns the run red.
+# pg_dump 18 writes `\unrestrict <key>` and blank lines after the footer
+# (it is the 5th line from the end today), hence the 20-line window.
 if pg_ctr=$(task_container keycloak_postgres hp-keycloak-postgres); then
   mkdir -p "$stage/keycloak"
   if docker exec "$pg_ctr" \
        pg_dump -U keycloak -d keycloak --clean --if-exists > "$stage/keycloak/keycloak.sql" &&
      [ -s "$stage/keycloak/keycloak.sql" ] &&
-     tail -n 5 "$stage/keycloak/keycloak.sql" | grep -q "PostgreSQL database dump complete" &&
+     tail -n 20 "$stage/keycloak/keycloak.sql" | grep -q "PostgreSQL database dump complete" &&
      gzip -9 < "$stage/keycloak/keycloak.sql" > "$stage/keycloak/keycloak.sql.gz"; then
     rm -f "$stage/keycloak/keycloak.sql"
     echo "  keycloak: pg_dump from $pg_ctr $(du -h "$stage/keycloak/keycloak.sql.gz" | cut -f1)"
