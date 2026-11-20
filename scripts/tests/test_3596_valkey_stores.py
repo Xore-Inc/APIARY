@@ -1,0 +1,88 @@
+"""Swarm phase 9 leg C (#3596): the valkey/redis stores as homeserver stacks.
+
+Pins what each cutover and rollback relies on: the homeserver pin, dnsrr, a
+single stop-first replica, an internal attachable overlay and no published
+port (6379 is a decoy port portbridge forwards to 10.8.0.2), and, for each
+Compose app that stays behind, the relay that keeps the store's old name on
+the app's bridge plus the apiary-overlay-attach `start` line that brings the
+relay up after a dockerd restart.
+"""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+ATTACH = ROOT / "ops/swarm/hosts/homeserver-overlay-attach.txt"
+
+try:
+    import yaml
+    HAVE_YAML = True
+except ImportError:  # pragma: no cover - CI installs PyYAML
+    HAVE_YAML = False
+
+
+def load(rel: str) -> dict:
+    return yaml.safe_load((ROOT / rel).read_text(encoding="utf-8"))
+
+
+class StoreStackMixin:
+    stack_name: str
+    service: str
+
+    def setUp(self) -> None:  # noqa: D401 - unittest hook
+        self.stack = load(f"swarm/stacks/{self.stack_name}/stack.yml")
+        self.svc = self.stack["services"][self.service]
+        self.deploy = self.svc["deploy"]
+
+    def test_pinned_single_stop_first_replica(self) -> None:
+        d = self.deploy
+        self.assertEqual(d["placement"]["constraints"], ["node.hostname == supermicro"])
+        self.assertIn(d["replicas"], (0, 1))
+        self.assertEqual(d["endpoint_mode"], "dnsrr")
+        self.assertEqual(d["update_config"]["order"], "stop-first")
+        self.assertEqual(d["rollback_config"]["order"], "stop-first")
+        self.assertEqual(d["labels"]["apiary.pause"], "unit")
+
+    def test_no_port_and_internal_attachable_store_overlay(self) -> None:
+        self.assertNotIn("ports", self.svc)
+        self.assertEqual(self.svc["networks"], ["store"])
+        net = self.stack["networks"]["store"]
+        self.assertTrue(net["internal"])
+        self.assertTrue(net["attachable"], "the Compose relay attaches to it")
+        self.assertEqual(net["driver_opts"]["com.docker.network.driver.overlay.encrypt"], "true")
+
+    def test_hardened(self) -> None:
+        self.assertTrue(self.svc["read_only"])
+        self.assertEqual(self.svc["cap_drop"], ["ALL"])
+        self.assertIn("no-new-privileges:true", self.svc["security_opt"])
+        self.assertNotIn("tmpfs", self.svc, "short-syntax tmpfs is dropped by Arcane (#3888)")
+
+    def test_relay_start_line(self) -> None:
+        lines = ATTACH.read_text().splitlines()
+        self.assertIn(f"start {self.relay_container} {self.stack_name}_store", lines)
+
+
+@unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+class DashboardSessionsTest(StoreStackMixin, unittest.TestCase):
+    stack_name = "dashboard-sessions"
+    service = "valkey"
+    # The relay lives in Xore-Inc/apiary-dashboard (compose.honeynet.yml).
+    relay_container = "hp-apiary-dashboard-oidc-sessions-relay"
+
+    def test_memory_only_on_a_long_syntax_tmpfs(self) -> None:
+        cmd = self.svc["command"]
+        self.assertEqual(cmd[cmd.index("--save") + 1], "")
+        self.assertEqual(cmd[cmd.index("--appendonly") + 1], "no")
+        (tmpfs,) = [v for v in self.svc["volumes"] if v["type"] == "tmpfs"]
+        self.assertEqual(tmpfs["target"], "/data")
+        self.assertEqual(tmpfs["tmpfs"]["mode"], 0o700)
+
+    def test_old_session_overlay_is_gone(self) -> None:
+        self.assertNotIn("session", self.stack["networks"])
+        subnet = self.stack["networks"]["store"]["ipam"]["config"][0]["subnet"]
+        self.assertEqual(subnet, "10.200.34.0/24")
+
+
+if __name__ == "__main__":
+    unittest.main()

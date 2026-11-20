@@ -27,6 +27,11 @@ start ghidra-ollama-loopback-1 llm_ollama
 # analysis/ghidra: Rev-Deck (profile revdeck) reaches ollama on llm_ollama
 start ghidra-revdeck-1 llm_ollama
 
+# Xore-Inc/apiary-dashboard compose.honeynet.yml: the relay that answers as
+# `oidc-sessions` and forwards to the dashboard-sessions stack (#3596 leg C);
+# the dashboard itself stays off the overlay
+start hp-apiary-dashboard-oidc-sessions-relay dashboard-sessions_store
+
 # arcane/home/honeypot-dashboard-backend: LLM search / vault RAG reach the llm
 # stack's Ollama as `ollama` (#3594). connect, not compose: the backend must
 # start even when the swarm is not up yet.

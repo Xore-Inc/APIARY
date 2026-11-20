@@ -1,13 +1,37 @@
-# Phase 5 (#3592): session store for the future dashboard Swarm stack.
-# No published port or persistent data; the current Compose session store
-# remains in service until the dashboard cutover.
+# The dashboard's session store (#3592), live since swarm phase 9 leg C
+# (#3596): pinned to the homeserver, where the dashboard runs.
+#
+# Memory-only by design (no RDB, no AOF): a new task starts empty and signs
+# every user out once. That is also why there is one replica and stop-first.
+#
+# The dashboard (Xore-Inc/apiary-dashboard, Compose) does not join this
+# overlay. Its project's homeserver override (compose.honeynet.yml) runs
+# `oidc-sessions-relay`, a socat that answers as `oidc-sessions` on the
+# dashboard's private bridge and forwards to `dashboard-sessions_valkey:6379`
+# here, so the dashboard never depends on the swarm at boot (#3837). The
+# relay is the only member besides the task (apiary-overlay-attach starts it
+# after a dockerd restart). 6379 is never published: portbridge forwards that
+# public port to 10.8.0.2 for the decoys.
+#
+# The Compose Valkey in that project stays as the rollback (profile legacy,
+# container hp-apiary-dashboard-oidc-sessions kept stopped). README.md has
+# the cutover and the rollback.
 services:
   valkey:
     image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
+    labels:
+      apiary.swarm.migration: dashboard-sessions
     command: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
-    networks: [session]
+    networks: [store]
     read_only: true
-    tmpfs: ["/data:size=16m,mode=0700"]
+    volumes:
+      # Long syntax: Arcane's stack deploy drops a short `tmpfs:` (#3888).
+      # Nothing is written here (no RDB, no AOF); the entrypoint only chowns it.
+      - type: tmpfs
+        target: /data
+        tmpfs:
+          size: 16777216
+          mode: 0700
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     # The image entrypoint chowns /data and then drops privileges.
@@ -20,11 +44,15 @@ services:
       start_period: 5s
     deploy:
       mode: replicated
-      replicas: 1
+      # Lands at 0 and is scaled to 1 by hand once the Compose Valkey has
+      # stopped (#3596 leg C); a follow-up commit records 1.
+      replicas: 0
+      # No VIP: IPVS drops idle TCP after 900 s, and the dashboard keeps one
+      # long-lived connection through the relay.
+      endpoint_mode: dnsrr
       placement:
         constraints:
-          - node.labels.role == manager
-          - node.labels.sensor == false
+          - node.hostname == supermicro
       resources:
         limits:
           cpus: "0.5"
@@ -39,24 +67,28 @@ services:
         monitor: 65s
         failure_action: rollback
         max_failure_ratio: 0
-        order: start-first
+        # Never two stores: the relay would split sessions between them.
+        order: stop-first
       rollback_config:
         parallelism: 1
         delay: 0s
         monitor: 65s
         failure_action: pause
-        order: start-first
+        order: stop-first
       labels:
         apiary.pause: unit
         apiary.pause.reason: "Dashboard sessions must pause with the dashboard"
 networks:
-  session:
+  # Replaces the former non-attachable `session` overlay (10.200.4.0/24): a
+  # deploy never changes an existing network, and the relay needs attachable.
+  store:
     driver: overlay
+    attachable: true
+    internal: true
     # Pinned inside the fleet pool (#3763); unique across stacks.
     ipam:
       config:
-        - subnet: 10.200.4.0/24
-    internal: true
+        - subnet: 10.200.34.0/24
     driver_opts:
       com.docker.network.driver.overlay.encrypt: "true"
       com.docker.network.driver.mtu: "1310"
