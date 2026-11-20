@@ -59,6 +59,12 @@ header for Bearer API calls.
 `backup.sh` streams a PostgreSQL custom dump into the encrypted Restic
 repository on `/mnt-2`, retaining seven daily and four weekly snapshots.
 `RESTIC_REPOSITORY` remains configurable in Dockge's `.env`.
+Both scripts find the Postgres container with `scripts/lib/task-container.sh`
+(#3596): the swarm task of `keycloak_postgres` first, the Compose
+`hp-keycloak-postgres` second. `restore.sh` stops whichever Keycloak runs
+(`docker service scale keycloak_keycloak=0`, or `compose stop keycloak`) and
+starts the same one again afterwards. From the deployed stack copy the helper
+is read from `/opt/stacks/apiary/scripts/lib/`; `TASK_CONTAINER_LIB` overrides.
 
 ```bash
 ./keycloak/backup.sh

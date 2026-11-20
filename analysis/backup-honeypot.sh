@@ -44,6 +44,10 @@ umask 077
 stack_dir=${STACK_DIR:-/opt/stacks/apiary}
 backup_root=${BACKUP_ROOT:-/opt/backups/honeypot}
 retention_days=${RETENTION_DAYS:-14}
+# The container resolver (#3596), from the same tree as this script
+# (/opt/stacks/apiary/analysis -> /opt/stacks/apiary/scripts/lib).
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+task_container_lib=${TASK_CONTAINER_LIB:-$script_dir/../scripts/lib/task-container.sh}
 
 # Retention runs FIRST, before anything else this script does (#2025). The
 # most plausible persistent failure mode for a backup job is a full disk,
@@ -138,7 +142,24 @@ tar -czf "$destination/stack-config-state.tar.gz" \
 # every user account. A pg_dump rather than a tar of the live 88 MB PGDATA --
 # that directory is only consistent with the server stopped, and a dump
 # restores into any later Postgres rather than pinning a rebuild to 18.6.
-if docker inspect hp-keycloak-postgres >/dev/null 2>&1; then
+#
+# The container is resolved, not named (#3596): the swarm task of
+# keycloak_postgres first, the Compose hp-keycloak-postgres second. When
+# neither runs, or the dump fails, the rest of the backup is still written and
+# the run then exits 1 (keycloak_failed below): before this, a missing
+# container skipped the dump without a word and the unit stayed green.
+keycloak_failed=0
+pg_ctr=""
+if [ ! -r "$task_container_lib" ]; then
+  echo "backup-honeypot: ERROR: $task_container_lib missing -- cannot find the Keycloak Postgres container, NO identity dump" >&2
+  keycloak_failed=1
+# shellcheck disable=SC1090
+elif ! pg_ctr=$(. "$task_container_lib" && task_container keycloak_postgres hp-keycloak-postgres); then
+  echo "backup-honeypot: ERROR: no running Keycloak Postgres (swarm keycloak_postgres or Compose hp-keycloak-postgres) -- NO identity dump in this backup" >&2
+  keycloak_failed=1
+  pg_ctr=""
+fi
+if [ -n "$pg_ctr" ]; then
   # Two steps, not a pipe. This script is #!/bin/sh -> dash on this fleet
   # (same constraint the retention comment documents below), so a pipeline's
   # exit status could only ever reflect gzip's half: a pg_dump dying midway
@@ -154,7 +175,7 @@ if docker inspect hp-keycloak-postgres >/dev/null 2>&1; then
   # humans checking a failed run. umask 077 keeps the temporary plaintext
   # keyed at 0600 for its short life; the final chmod below tightens the
   # rest of the archive set.
-  if (umask 077 && exec docker exec hp-keycloak-postgres \
+  if (umask 077 && exec docker exec "$pg_ctr" \
          pg_dump -U keycloak -d keycloak --clean --if-exists \
          > "$destination/keycloak.sql") &&
      [ -s "$destination/keycloak.sql" ] &&
@@ -163,7 +184,8 @@ if docker inspect hp-keycloak-postgres >/dev/null 2>&1; then
     rm -f "$destination/keycloak.sql"
   else
     rm -f "$destination/keycloak.sql" "$destination/keycloak.sql.gz"
-    echo "backup-honeypot: keycloak backup failed (pg_dump, truncation/footer check, or gzip)" >&2
+    echo "backup-honeypot: ERROR: keycloak backup from $pg_ctr failed (pg_dump, truncation/footer check, or gzip)" >&2
+    keycloak_failed=1
   fi
 fi
 
@@ -182,7 +204,7 @@ fi
 # (scripts/es-operator-state-backup.py --list) rather than here, so the two
 # copies of this script cannot disagree about the scope.
 #
-# Best effort, the same posture as the Keycloak dump above: an unreachable
+# Best effort (unlike the Keycloak dump above, which fails the run): an unreachable
 # Elasticsearch must not take the rest of the backup down with it. The tool
 # exits non-zero when it captured nothing at all, and this script then says
 # so on stderr, but the volume archives below are unaffected either way.
@@ -241,3 +263,7 @@ done
 )
 chmod -R go-rwx "$destination"
 echo "$destination"
+if [ "$keycloak_failed" -ne 0 ]; then
+  echo "backup-honeypot: ERROR: $destination has NO Keycloak identity dump (see above)" >&2
+  exit 1
+fi
