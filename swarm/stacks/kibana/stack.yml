@@ -3,9 +3,8 @@
 # state is the .kibana* indices in Elasticsearch.
 #
 # Elasticsearch is `elasticsearch:9200` on the D2 overlay apiary-es (#3582):
-# until phase 9's Elasticsearch move the Compose hp-elasticsearch is attached
-# there by apiary-overlay-attach (`connect hp-elasticsearch apiary-es
-# elasticsearch`), afterwards the swarm ES answers under the same name.
+# the elasticsearch stack's alias since phase 9 leg D (before that, the
+# Compose hp-elasticsearch attached there by apiary-overlay-attach).
 #
 # The VPS reaches Kibana as before: oidc-kibana -> edge-kibana_socat ->
 # 10.8.0.2:19601 over wg0. A host-mode port binds every address of the node,

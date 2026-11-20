@@ -45,8 +45,9 @@ start hp-tanner-redis-relay tanner-redis_store
 # start even when the swarm is not up yet.
 connect hp-apiary-backend llm_ollama
 
-# D2 (#3582): Elasticsearch on the dedicated overlay, alias elasticsearch.
-# apiary-es (10.200.101.0/24) exists since phase 9 leg A (#3596); swarm
-# consumers (the kibana stack) reach the Compose ES here. No honeypot-elk
-# compose change. Retired at the Elasticsearch move (phase 9 leg D).
-connect hp-elasticsearch apiary-es elasticsearch
+# arcane/home/honeypot-elk: the shim that answers as `elasticsearch` on
+# honeynet and honeypot-llm-data and forwards to the elasticsearch stack on the
+# D2 overlay apiary-es (#3582, #3596 leg D). It replaced the D2 line
+# `connect hp-elasticsearch apiary-es elasticsearch` (the Compose ES is the
+# stopped rollback now; re-add that line only together with a rollback).
+start hp-elasticsearch-shim apiary-es

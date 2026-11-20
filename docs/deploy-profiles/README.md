@@ -72,9 +72,9 @@ scripts/deploy-profile-sizing.py
 
 | profile | stacks | declared cpus | declared memory |
 |---|---|---|---|
-| `full` | 27 | 118.8 | 69.3 GiB |
-| `minimal-web` | 8 | 80 | 52.1 GiB |
-| `ics-focused` | 8 | 70.5 | 46.2 GiB |
+| `full` | 27 | 119.8 | 69.5 GiB |
+| `minimal-web` | 8 | 81 | 52.2 GiB |
+| `ics-focused` | 8 | 71.5 | 46.4 GiB |
 
 **These are ceilings, not measurements.** A `mem_limit` is the most a container
 may claim, so the column is an upper bound on what the profile could ask the

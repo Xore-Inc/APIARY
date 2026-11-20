@@ -47,6 +47,12 @@ services:
     <<: *runtime-defaults
     image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6@sha256:79b4f1de4c15e6eca824723086a51e5934406d614d410cc11be77748cafac537
     container_name: hp-elasticsearch
+    # #3596 (swarm phase 9 leg D): Elasticsearch runs as
+    # swarm/stacks/elasticsearch on the same volume. This container is the
+    # rollback only: kept stopped, never started by a deploy. Never next to
+    # the stack's task (one node per data path): scale elasticsearch_es to 0
+    # and wait until the task is gone before `docker start hp-elasticsearch`.
+    profiles: [legacy]
     restart: unless-stopped
     environment:
       - discovery.type=single-node
@@ -130,6 +136,46 @@ services:
         limits:
           cpus: "8.0"
           memory: 12G
+  # #3596 (swarm phase 9 leg D): every Compose consumer keeps
+  # http://elasticsearch:9200. This socat answers under that name on honeynet
+  # and honeypot-llm-data and forwards to the stack's task over the D2 overlay
+  # apiary-es. It targets the swarm service name, never `elasticsearch`, so it
+  # cannot resolve its own alias. Only the shim joins the overlay: no consumer
+  # depends on the swarm at boot (#3837), and apiary-overlay-attach starts the
+  # shim after a dockerd restart (ops/swarm/hosts/homeserver-overlay-attach.txt).
+  # Never a published port (portbridge forwards the public 9200 to 10.8.0.2).
+  elasticsearch-shim:
+    <<: *runtime-defaults
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+    container_name: hp-elasticsearch-shim
+    restart: unless-stopped
+    command: ['TCP4-LISTEN:9200,fork,reuseaddr', 'TCP4:elasticsearch_es:9200,connect-timeout=5']
+    networks:
+      honeynet:
+        aliases: [elasticsearch]
+      llm-data:
+        aliases: [elasticsearch]
+      es: {}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # busybox nc in this image has no -z; socat probes its own listener.
+      test: ['CMD', 'socat', '-u', '/dev/null', 'TCP4:127.0.0.1:9200,connect-timeout=2']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - autoheal=true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          # one forked socat per client connection (about 25 open at a time)
+          memory: 128M
   kibana:
     <<: *runtime-defaults
     image: docker.elastic.co/kibana/kibana:9.5.6@sha256:c7ed45da5c3cfea020fc6c99ce027f4d21d19dab330379c5115d5eb95f6ecebc
@@ -286,8 +332,11 @@ services:
       # is gone: events are read from Elasticsearch.
       - evebox-config:/var/lib/evebox
     depends_on:
+      # #3596: the Compose elasticsearch is the legacy rollback; EveBox reaches
+      # the swarm ES through elasticsearch-shim under the same name.
       elasticsearch:
         condition: service_healthy
+        required: false
     networks:
       - honeynet
     # #118: measured (2026-08-02). Publishes only the unprivileged 5636 and
@@ -923,11 +972,20 @@ networks:
     name: honeypot-llm-data
     driver: bridge
     internal: true
+  # #3596: the D2 overlay (10.200.101.0/24) the swarm Elasticsearch is on;
+  # only elasticsearch-shim joins it.
+  es:
+    name: apiary-es
+    external: true
 
 volumes:
   # Private to this stack -- see this file's header for why es-data does
   # NOT need the explicit shared-name treatment despite honeypot-init also
   # depending on Elasticsearch being up.
-  es-data: null
+  # #3596: shared with the swarm stack elasticsearch, so external here: a
+  # `compose down -v` of this project can never delete the 138 GB.
+  es-data:
+    name: honeypot-elk_es-data
+    external: true
   evebox-config: null
   arkime-pcap: null # Arkime-processed PCAP index files

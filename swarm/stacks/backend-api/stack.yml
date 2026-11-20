@@ -219,8 +219,8 @@ networks:
     external: true
     name: host-gateway_host
   es:
-    # D2: the encrypted overlay hp-elasticsearch joins with alias
-    # `elasticsearch` (10.200.101.0/24). Created in the post-benchmark window
-    # with phase 9 (#3587); this stack cannot deploy before it exists.
+    # D2: the encrypted overlay (10.200.101.0/24) the elasticsearch stack is
+    # on, alias `elasticsearch` (#3596 leg D). Created by hand in phase 9 leg A;
+    # this stack cannot deploy before it exists.
     external: true
     name: apiary-es

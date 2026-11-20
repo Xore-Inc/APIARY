@@ -1447,6 +1447,16 @@ step_create_shared_resources() {
   docker volume inspect dionaea-lib >/dev/null 2>&1 || docker volume create dionaea-lib
   docker volume inspect yara-results >/dev/null 2>&1 || docker volume create yara-results
 
+  # #3596 (swarm phase 9): data volumes shared by a Compose project (legacy
+  # rollback) and a swarm stack are external on both sides, so neither side
+  # creates them. Created here with their old project-scoped names, so a
+  # fresh host and a migrated host look the same.
+  local v
+  for v in honeypot-elk_es-data honeypot-keycloak_keycloak-postgres \
+           honeypot-canarytokens_canarytokens-redis-data; do
+    docker volume inspect "$v" >/dev/null 2>&1 || docker volume create "$v"
+  done
+
   # arcane/home/honeypot-init/compose.yml's own header comment: "state/init-markers/ must
   # be mode 777 on the host before this stack's [containers run]" --
   # log-init/elasticsearch-setup/arkime-init/snare-clone each touch a
@@ -1625,10 +1635,26 @@ step_build_zeek_image() {
 # on its own once sshfs-mounts runs -- it has restart: unless-stopped and
 # autoheal watches it, and this was confirmed live: the moment the mounts
 # appeared it went healthy without intervention.
+#
+# #3596 (swarm phase 9 leg D): with the elasticsearch stack, ES is the swarm
+# task and the Compose `elasticsearch` is the legacy rollback; the gate is the
+# shim. Never name `elasticsearch` then: an explicitly named service runs even
+# behind a disabled profile, and two nodes on one data path must not start.
+# Without the stack (a fresh install), the legacy ES comes up and the shim stays
+# out (its overlay may not exist, and one failed container aborts the whole
+# `compose up`); the legacy Kibana stays out too, as before (the kibana stack).
 step_start_elasticsearch_first() {
   cd /var/dockge/stacks/honeypot-elk || return 1
-  with_retry 3 15 docker compose -f compose.yml up -d
-  with_retry 3 15 docker compose -f compose.yml up -d --wait --no-recreate elasticsearch
+  if docker service inspect elasticsearch_es >/dev/null 2>&1; then
+    with_retry 3 15 docker compose -f compose.yml up -d
+    with_retry 3 15 docker compose -f compose.yml up -d --wait --no-recreate elasticsearch-shim
+    return
+  fi
+  local services=()
+  mapfile -t services < <(docker compose -f compose.yml --profile legacy config --services \
+                            | grep -vx -e elasticsearch-shim -e kibana)
+  with_retry 3 15 docker compose -f compose.yml --profile legacy up -d "${services[@]}"
+  with_retry 3 15 docker compose -f compose.yml --profile legacy up -d --wait --no-recreate elasticsearch
 }
 
 # #1609 follow-up: make Elasticsearch actually load the GeoIP databases.
@@ -1675,12 +1701,18 @@ step_geoip_reload_elasticsearch() {
 
   echo "geoip pipeline reports _geoip_database_unavailable despite the databases"
   echo "being present -- restarting Elasticsearch to reinstantiate its processors"
-  docker restart hp-elasticsearch >/dev/null
   local waited=0
-  while (( waited < 180 )); do
-    [[ "$(docker inspect hp-elasticsearch --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break
-    sleep 5; waited=$(( waited + 5 ))
-  done
+  if docker service inspect elasticsearch_es >/dev/null 2>&1; then
+    # #3596: the swarm task. --force replaces it (stop-first, 120 s grace);
+    # the command returns once the new task is running and healthy.
+    docker service update --force --detach=false --quiet elasticsearch_es >/dev/null
+  else
+    docker restart hp-elasticsearch >/dev/null
+    while (( waited < 180 )); do
+      [[ "$(docker inspect hp-elasticsearch --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break
+      sleep 5; waited=$(( waited + 5 ))
+    done
+  fi
   out=$(docker run --rm --network honeynet curlimages/curl:latest -sS -m 20 \
         -X POST "http://elasticsearch:9200/_ingest/pipeline/geoip-honeypot/_simulate" \
         -H 'Content-Type: application/json' -d "$probe" 2>/dev/null) || true
