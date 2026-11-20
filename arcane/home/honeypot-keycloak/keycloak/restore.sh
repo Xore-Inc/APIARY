@@ -25,9 +25,32 @@ command -v docker >/dev/null || { printf 'docker is required\n' >&2; exit 1; }
 command -v restic >/dev/null || { printf 'restic is required\n' >&2; exit 1; }
 
 export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
-docker compose --env-file "${env_file}" -f "${compose_file}" stop keycloak
+
+# Keycloak may be the swarm service keycloak_keycloak or the Compose
+# container (#3596). Stop whichever one runs, restore into whichever
+# Postgres runs (task_container), then start the same Keycloak again.
+# The helper lives in the repo's scripts/lib: found from a checkout, or from
+# the homeserver's repo tree when this runs from the deployed stack copy.
+task_container_lib="${TASK_CONTAINER_LIB:-}"
+for candidate in "${script_dir}/../../../../scripts/lib/task-container.sh" /opt/stacks/apiary/scripts/lib/task-container.sh; do
+  [[ -n "${task_container_lib}" ]] && break
+  [[ -r "${candidate}" ]] && task_container_lib="${candidate}"
+done
+[[ -r "${task_container_lib}" ]] || { printf 'scripts/lib/task-container.sh not found; set TASK_CONTAINER_LIB\n' >&2; exit 1; }
+# shellcheck disable=SC1090
+source "${task_container_lib}"
+pg_ctr="$(task_container keycloak_postgres hp-keycloak-postgres)"
+
+if docker service inspect keycloak_keycloak >/dev/null 2>&1; then
+  kc_replicas="$(docker service inspect keycloak_keycloak --format '{{.Spec.Mode.Replicated.Replicas}}')"
+  docker service scale --detach=false keycloak_keycloak=0
+  start_keycloak() { docker service scale --detach=false "keycloak_keycloak=${kc_replicas:-1}"; }
+else
+  docker compose --env-file "${env_file}" -f "${compose_file}" stop keycloak
+  start_keycloak() { docker compose --env-file "${env_file}" -f "${compose_file}" start keycloak; }
+fi
 restic dump "${snapshot}" keycloak.dump \
-  | docker compose --env-file "${env_file}" -f "${compose_file}" exec -T postgres \
+  | docker exec -i "${pg_ctr}" \
       pg_restore --username=keycloak --dbname=keycloak --clean --if-exists \
         --no-owner --single-transaction
-docker compose --env-file "${env_file}" -f "${compose_file}" start keycloak
+start_keycloak

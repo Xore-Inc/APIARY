@@ -203,7 +203,14 @@ and what was missing.
 
 The checks run on the collected tree, not on the remote side's own messages, so
 a collector that logs and carries on cannot produce a "successful" archive
-without them. A destination that is unplugged, not mounted, not writable or
+without them. The Keycloak dump is taken from whichever Postgres runs: the
+swarm task of `keycloak_postgres` (swarm phase 9, #3596) or the Compose
+`hp-keycloak-postgres`, resolved by `scripts/lib/task-container.sh` (the
+installer copies it to `/usr/local/libexec/apiary-task-container.sh`; the
+collector prepends it to its homeserver script). Neither running, both
+running, a failed `pg_dump` or a dump without its completion footer leaves no
+`keycloak.sql.gz`. The on-host `analysis/backup-honeypot.sh` uses the same
+helper and exits 1 in those cases, after writing the rest of its backup. A destination that is unplugged, not mounted, not writable or
 fails its checksum counts as a failed destination in the exit status; the
 `mountpoint -q` guard stays, and `/run`, `/run/media`, `/media` and `/mnt`
 themselves never count as a USB mount (the first is a tmpfs on every systemd
