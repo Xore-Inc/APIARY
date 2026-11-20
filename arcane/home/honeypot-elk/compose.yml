@@ -134,6 +134,10 @@ services:
     <<: *runtime-defaults
     image: docker.elastic.co/kibana/kibana:9.5.6@sha256:c7ed45da5c3cfea020fc6c99ce027f4d21d19dab330379c5115d5eb95f6ecebc
     container_name: hp-kibana
+    # #3596 (swarm phase 9): Kibana runs as swarm/stacks/kibana. This
+    # container is the rollback only: kept stopped, never started by a
+    # deploy (`docker start hp-kibana` after scaling kibana_kibana to 0).
+    profiles: [legacy]
     restart: unless-stopped
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200

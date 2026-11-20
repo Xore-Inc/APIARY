@@ -33,6 +33,7 @@ start ghidra-revdeck-1 llm_ollama
 connect hp-apiary-backend llm_ollama
 
 # D2 (#3582): Elasticsearch on the dedicated overlay, alias elasticsearch.
-# Uncomment once apiary-es (10.200.101.0/24) exists, then
-# `systemctl restart apiary-overlay-attach`. No honeypot-elk compose change.
-# connect hp-elasticsearch apiary-es elasticsearch
+# apiary-es (10.200.101.0/24) exists since phase 9 leg A (#3596); swarm
+# consumers (the kibana stack) reach the Compose ES here. No honeypot-elk
+# compose change. Retired at the Elasticsearch move (phase 9 leg D).
+connect hp-elasticsearch apiary-es elasticsearch

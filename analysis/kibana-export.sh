@@ -13,7 +13,7 @@ set -eu
 # resolve "kibana", or set KIBANA_URL to an externally reachable address
 # (e.g. http://<HP_BIND>:19601).
 
-kibana_url="${KIBANA_URL:-http://kibana:5601}"
+kibana_url="${KIBANA_URL:-http://10.8.0.2:19601}"
 script_dir="$(cd "$(dirname -- "$0")" && pwd)"
 output="${1:-$script_dir/objects/kibana_export.ndjson}"
 

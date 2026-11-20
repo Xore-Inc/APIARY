@@ -271,7 +271,11 @@ services:
     restart: no
     entrypoint: ["sh", "/usr/local/bin/honeypot-kibana-setup.sh"]
     environment:
-      - KIBANA_URL=http://kibana:5601
+      # #3596: Kibana is a swarm stack with a host-mode port; the local
+      # container reaches it on the hub address (home-swarm-host-guard lets
+      # local bridges reach 10.8.0.2). Works for the Compose rollback too,
+      # which publishes the same 10.8.0.2:19601.
+      - KIBANA_URL=http://10.8.0.2:19601
     volumes:
       - ./analysis/honeypot-kibana-setup.sh:/usr/local/bin/honeypot-kibana-setup.sh:ro
     networks: [honeynet]
