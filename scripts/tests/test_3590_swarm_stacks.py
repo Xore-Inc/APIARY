@@ -206,8 +206,9 @@ class LintTest(unittest.TestCase):
         self.assertFlags(good_stack("    tmpfs: ['/tmp:size=8m']\n"), "short-syntax `tmpfs:`")
         self.assertEqual(self.errors(good_stack(
             "    volumes:\n      - {type: tmpfs, target: /tmp, tmpfs: {size: 8388608}}\n")), [])
-        # the two stacks #3888 converts are the only exceptions
-        self.assertEqual(self.errors(good_stack("    tmpfs: ['/tmp:size=8m']\n"), name="backend-api"), [])
+        # #3888 converted the last two (backend-api, dashboard-sessions): no exceptions
+        for name in ("backend-api", "dashboard-sessions"):
+            self.assertFlags(good_stack("    tmpfs: ['/tmp:size=8m']\n"), "short-syntax `tmpfs:`", name=name)
 
     def test_gpu_reservation_rules(self):
         # #3594: one GPU as a swarm generic resource.

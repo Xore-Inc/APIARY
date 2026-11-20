@@ -20,7 +20,8 @@ x-backend-common: &backend-common
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
-  tmpfs: ["/tmp:size=64m,mode=1777"]
+  # /tmp is a long-syntax tmpfs in each service's `volumes:` (#3888): Arcane
+  # drops a short `tmpfs:`, and YAML merge does not merge the lists.
 
 x-deploy-common: &deploy-common
   mode: replicated
@@ -90,6 +91,7 @@ services:
       - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
     volumes:
       - {type: volume, source: backend-state, target: /backend-state}
+      - {type: tmpfs, target: /tmp, tmpfs: {size: 67108864, mode: 01777}}
     networks:
       bff:
         aliases: [backend-api]
@@ -153,6 +155,7 @@ services:
       - {source: honeypot_self_ips, target: honeypot_self_ips, uid: "65534", gid: "65534", mode: 0400}
     volumes:
       - {type: volume, source: backend-state, target: /backend-state}
+      - {type: tmpfs, target: /tmp, tmpfs: {size: 67108864, mode: 01777}}
     networks:
       bff:
         aliases: [backend-api-mounted]
