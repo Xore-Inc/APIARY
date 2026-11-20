@@ -45,3 +45,5 @@ udp 1900
 tcp 19082
 # phase 9 (#3596): Kibana (swarm/stacks/kibana), reached by the VPS edge-kibana socat
 tcp 19601
+# phase 9 (#3596): Keycloak (swarm/stacks/keycloak), reached by the VPS socat-hp-keycloak
+tcp 18080
