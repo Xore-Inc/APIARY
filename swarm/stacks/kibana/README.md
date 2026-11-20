@@ -40,7 +40,7 @@ rules), so the new key made nothing unreadable. Rotation: create `_v2`, set
 `xpack.encryptedSavedObjects.keyRotation.decryptionOnlyKeys` to the old value,
 deploy, `POST /api/encrypted_saved_objects/_rotate_key`.
 
-## Cutover (2026-11-20)
+## Cutover (done 2026-11-20, 48 s without Kibana)
 
 1. `stackctl ensure kibana` with `replicas: 0` (needs `apiary-es` and the secret).
 2. `docker stop hp-kibana` (kept).

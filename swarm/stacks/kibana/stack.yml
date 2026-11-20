@@ -15,7 +15,7 @@
 #
 # The Compose `kibana` in arcane/home/honeypot-elk stays behind the `legacy`
 # profile as the rollback (README.md). The two never run together: they
-# would contend for the port, and this file landed with replicas: 0.
+# would contend for the port, so this file first landed with replicas: 0.
 services:
   kibana:
     # Same digest as the Compose Kibana: a move is not a version change, so
@@ -60,8 +60,8 @@ services:
     deploy:
       mode: replicated
       # Landed at 0 and scaled to 1 by hand after the Compose Kibana stopped
-      # (#3596 cutover); this commit records the result.
-      replicas: 0
+      # (#3596 cutover 2026-11-20, 48 s gap); this records the result.
+      replicas: 1
       placement:
         constraints:
           - node.hostname == supermicro
