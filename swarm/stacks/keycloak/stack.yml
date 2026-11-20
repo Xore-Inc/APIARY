@@ -17,7 +17,7 @@
 # `legacy` profile as the rollback (README.md). They use the same PGDATA
 # volume, so the two must never run together: a second postmaster on the same
 # data directory is not caught across PID namespaces. This file therefore
-# first landed with replicas: 0 for both services.
+# first landed with replicas: 0 for both services (cut over 2026-11-20).
 #
 # The public domain is never in git (and stacks get no .env interpolation,
 # #3790): the entrypoint reads it from the read-only secrets bind and refuses
@@ -57,9 +57,10 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     deploy:
       mode: replicated
-      # Landed at 0: scaled to 1 by hand only after the Compose
-      # hp-keycloak-postgres stopped (README.md, cutover).
-      replicas: 0
+      # Landed at 0 and scaled to 1 by hand after the Compose
+      # hp-keycloak-postgres stopped (#3596 cutover 2026-11-20, 30 s without
+      # Keycloak); this records the result.
+      replicas: 1
       # No VIP: IPVS drops idle TCP after 900 s, which breaks Keycloak's
       # pooled DB connections.
       endpoint_mode: dnsrr
@@ -190,8 +191,9 @@ services:
     cap_drop: [ALL]
     deploy:
       mode: replicated
-      # Landed at 0: scaled to 1 by hand after postgres is healthy (README.md).
-      replicas: 0
+      # Landed at 0 and scaled to 1 by hand after postgres was healthy
+      # (#3596 cutover 2026-11-20); this records the result.
+      replicas: 1
       placement:
         constraints:
           - node.hostname == supermicro
