@@ -36,6 +36,10 @@ start hp-apiary-dashboard-oidc-sessions-relay dashboard-sessions_store
 # `canarytokens-redis` and forwards to the canarytokens-redis stack (#3596)
 start hp-canarytokens-redis-relay canarytokens-redis_store
 
+# arcane/home/honeypot-tanner: the relay that answers as `tanner_redis` and
+# forwards to the tanner-redis stack (#3596)
+start hp-tanner-redis-relay tanner-redis_store
+
 # arcane/home/honeypot-dashboard-backend: LLM search / vault RAG reach the llm
 # stack's Ollama as `ollama` (#3594). connect, not compose: the backend must
 # start even when the swarm is not up yet.
