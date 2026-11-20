@@ -53,6 +53,10 @@ If `hp-snare` starts anyway, stop it at once and check `sensor-snare`.
 5. Check: a request through `sensor-snare` lands in tanner's report, and the
    new Redis takes writes.
 
+Measured on 2026-11-20: the cache path was down 9 s. No tanner container was
+recreated, `hp-snare` stayed stopped, and a marker request appeared in
+`tanner_report.json` within 6 s while the empty Redis gained its first keys.
+
 ## Rollback
 
 ```bash

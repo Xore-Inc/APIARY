@@ -36,7 +36,9 @@ The stack first landed with `replicas: 0`. The cutover stopped the Compose
 `hp-apiary-dashboard-oidc-sessions` (kept, profile `legacy` in the dashboard
 project), ran `docker service scale dashboard-sessions_valkey=1`, then synced
 the `apiary-dashboard` project, which created the relay. The dashboard
-container was not recreated (its Compose config hash does not change).
+container was not recreated (its Compose config hash does not change). The
+store path was down 22 s. The project has no `build:` service, so its sync
+only reapplies files (compare canarytokens-redis, #3891).
 
 Rollback, in this order (never both stores at once, both answer as
 `oidc-sessions`):

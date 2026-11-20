@@ -66,10 +66,10 @@ services:
       start_period: 5s
     deploy:
       mode: replicated
-      # Lands at 0 and is scaled to 1 by hand once the Compose
-      # hp-tanner-redis has stopped (#3596 leg C); a follow-up commit
-      # records 1.
-      replicas: 0
+      # Landed at 0 and was scaled to 1 by hand after the Compose
+      # hp-tanner-redis stopped (#3596 leg C cutover 2026-11-20, 9 s without
+      # a cache); this records the result.
+      replicas: 1
       # No VIP: IPVS drops idle TCP after 900 s, which breaks tanner's
       # pooled connections.
       endpoint_mode: dnsrr

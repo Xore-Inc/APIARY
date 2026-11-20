@@ -44,9 +44,10 @@ services:
       start_period: 5s
     deploy:
       mode: replicated
-      # Lands at 0 and is scaled to 1 by hand once the Compose Valkey has
-      # stopped (#3596 leg C); a follow-up commit records 1.
-      replicas: 0
+      # Landed at 0 and was scaled to 1 by hand after the Compose Valkey
+      # stopped (#3596 leg C cutover 2026-11-20, 22 s without a session
+      # store); this records the result.
+      replicas: 1
       # No VIP: IPVS drops idle TCP after 900 s, and the dashboard keeps one
       # long-lived connection through the relay.
       endpoint_mode: dnsrr
