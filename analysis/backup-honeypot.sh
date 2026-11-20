@@ -153,11 +153,13 @@ pg_ctr=""
 if [ ! -r "$task_container_lib" ]; then
   echo "backup-honeypot: ERROR: $task_container_lib missing -- cannot find the Keycloak Postgres container, NO identity dump" >&2
   keycloak_failed=1
-# shellcheck disable=SC1090
-elif ! pg_ctr=$(. "$task_container_lib" && task_container keycloak_postgres hp-keycloak-postgres); then
-  echo "backup-honeypot: ERROR: no running Keycloak Postgres (swarm keycloak_postgres or Compose hp-keycloak-postgres) -- NO identity dump in this backup" >&2
-  keycloak_failed=1
-  pg_ctr=""
+else
+  # shellcheck disable=SC1090
+  if ! pg_ctr=$(. "$task_container_lib" && task_container keycloak_postgres hp-keycloak-postgres); then
+    echo "backup-honeypot: ERROR: no running Keycloak Postgres (swarm keycloak_postgres or Compose hp-keycloak-postgres) -- NO identity dump in this backup" >&2
+    keycloak_failed=1
+    pg_ctr=""
+  fi
 fi
 if [ -n "$pg_ctr" ]; then
   # Two steps, not a pipe. This script is #!/bin/sh -> dash on this fleet
@@ -184,7 +186,7 @@ if [ -n "$pg_ctr" ]; then
     rm -f "$destination/keycloak.sql"
   else
     rm -f "$destination/keycloak.sql" "$destination/keycloak.sql.gz"
-    echo "backup-honeypot: ERROR: keycloak backup from $pg_ctr failed (pg_dump, truncation/footer check, or gzip)" >&2
+    echo "backup-honeypot: ERROR: keycloak backup failed (pg_dump from $pg_ctr, truncation/footer check, or gzip)" >&2
     keycloak_failed=1
   fi
 fi

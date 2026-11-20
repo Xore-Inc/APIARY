@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # task-container.sh: find the running container of a service that may be a
 # swarm task or a Compose container (#3596, swarm phase 9).
 #
