@@ -72,7 +72,7 @@ scripts/deploy-profile-sizing.py
 
 | profile | stacks | declared cpus | declared memory |
 |---|---|---|---|
-| `full` | 27 | 118 | 69.2 GiB |
+| `full` | 27 | 118.2 | 69.3 GiB |
 | `minimal-web` | 8 | 79.5 | 52.0 GiB |
 | `ics-focused` | 8 | 70.5 | 46.2 GiB |
 

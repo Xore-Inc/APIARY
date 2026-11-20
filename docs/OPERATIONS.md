@@ -497,7 +497,7 @@ partial set — it takes the named stacks whole, in dependency order.
 | `honeypot-cowrie` | `hp-cowrie`, `hp-honeyfs-implant` | `hp-honeyfs-implant` is the FUSE server serving cowrie's fake filesystem. Freezing the implant alone hangs every filesystem operation inside a live session. Resume implant first, cowrie second. |
 | `honeypot-dionaea` | `hp-dionaea`, `hp-tftp-relay` | The largest single decoy (~369 MiB, ~14% CPU) and the one most worth pausing. `hp-tftp-relay` is stack-internal, and dionaea holds an internal MySQL plus live sessions. Never dionaea alone. |
 | `honeypot-galah` | `hp-galah`, `hp-galah-llm-broker` | `hp-galah` proxies its LLM calls through the broker. Freezing the broker alone makes galah's own decoy paths fail in a way that looks like a *broken* decoy rather than a stand-down. |
-| `honeypot-canarytokens` | `hp-canarytokens-http-router`, `-frontend`, `-adapter`, `-switchboard`, `-redis` | Internal chain router → adapter → switchboard → redis. A partial pause leaves the switchboard blocked on a frozen redis. |
+| `honeypot-canarytokens` | `hp-canarytokens-http-router`, `-frontend`, `-adapter`, `-switchboard`, `-redis-relay` (the Redis is the swarm stack `canarytokens-redis`, `apiary.pause: unit`, #3596) | Internal chain router → adapter → switchboard → redis. A partial pause leaves the switchboard blocked on a frozen redis. |
 
 #### Never pause
 

@@ -32,6 +32,10 @@ start ghidra-revdeck-1 llm_ollama
 # the dashboard itself stays off the overlay
 start hp-apiary-dashboard-oidc-sessions-relay dashboard-sessions_store
 
+# arcane/home/honeypot-canarytokens: the relay that answers as
+# `canarytokens-redis` and forwards to the canarytokens-redis stack (#3596)
+start hp-canarytokens-redis-relay canarytokens-redis_store
+
 # arcane/home/honeypot-dashboard-backend: LLM search / vault RAG reach the llm
 # stack's Ollama as `ollama` (#3594). connect, not compose: the backend must
 # start even when the swarm is not up yet.

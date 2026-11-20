@@ -85,5 +85,78 @@ class DashboardSessionsTest(StoreStackMixin, unittest.TestCase):
         self.assertEqual(subnet, "10.200.34.0/24")
 
 
+class RelayMixin:
+    """A Compose relay that keeps the store's old name on the app's bridge."""
+    compose_rel: str
+    relay_service: str
+    bridge: str
+    alias: str
+
+    def relay(self) -> tuple[dict, dict]:
+        doc = load(self.compose_rel)
+        return doc, doc["services"][self.relay_service]
+
+    def test_relay_keeps_the_store_name_and_forwards_over_the_overlay(self) -> None:
+        doc, relay = self.relay()
+        self.assertEqual(relay["container_name"], self.relay_container)
+        self.assertEqual(relay["networks"][self.bridge]["aliases"], [self.alias])
+        (overlay_key,) = [k for k in relay["networks"] if k != self.bridge]
+        self.assertEqual(doc["networks"][overlay_key], {"name": f"{self.stack_name}_store", "external": True})
+        self.assertIn(f"TCP4:{self.stack_name}_{self.service}:6379", " ".join(relay["command"]))
+        self.assertTrue(relay["read_only"])
+        self.assertEqual(relay["cap_drop"], ["ALL"])
+        self.assertNotIn("ports", relay)
+
+    def test_only_the_relay_joins_the_overlay(self) -> None:
+        doc, _ = self.relay()
+        overlay_keys = {k for k, v in doc["networks"].items()
+                        if isinstance(v, dict) and v.get("name") == f"{self.stack_name}_store"}
+        for name, svc in doc["services"].items():
+            nets = svc.get("networks") or []
+            if name != self.relay_service:
+                self.assertFalse(overlay_keys & set(nets), f"{name} must not join the store overlay (#3837)")
+
+    def test_compose_store_is_legacy_and_nothing_hard_depends_on_it(self) -> None:
+        doc, _ = self.relay()
+        store = doc["services"][self.compose_store]
+        self.assertEqual(store.get("profiles"), ["legacy"])
+        self.assertEqual(store["image"].split("@")[1], self.svc["image"].split("@")[1],
+                         "same digest on both sides of the rollback")
+        for name, svc in doc["services"].items():
+            deps = svc.get("depends_on") or {}
+            if isinstance(deps, list):
+                self.assertNotIn(self.compose_store, deps, name)
+            elif self.compose_store in deps:
+                self.assertIs(deps[self.compose_store].get("required"), False, name)
+
+
+@unittest.skipUnless(HAVE_YAML, "PyYAML not installed")
+class CanarytokensRedisTest(StoreStackMixin, RelayMixin, unittest.TestCase):
+    stack_name = "canarytokens-redis"
+    service = "redis"
+    pause = "unit"  # honeypot-canarytokens pauses as a unit
+    relay_container = "hp-canarytokens-redis-relay"
+    compose_rel = "arcane/home/honeypot-canarytokens/compose.yml"
+    relay_service = "canarytokens-redis-relay"
+    compose_store = "canarytokens-redis"
+    bridge = "canarytokens_net"
+    alias = "canarytokens-redis"
+
+    def test_reuses_the_compose_volume_with_the_same_persistence(self) -> None:
+        self.assertEqual(self.stack["volumes"]["data"],
+                         {"external": True, "name": "honeypot-canarytokens_canarytokens-redis-data"})
+        self.assertEqual(self.svc["volumes"], [{"type": "volume", "source": "data", "target": "/data"}])
+        doc, _ = self.relay()
+        self.assertEqual(doc["volumes"]["canarytokens-redis-data"],
+                         {"name": "honeypot-canarytokens_canarytokens-redis-data", "external": True})
+        compose_cmd = doc["services"]["canarytokens-redis"]["command"].split()
+        self.assertEqual(self.svc["command"], compose_cmd)
+        self.assertEqual(self.svc["stop_grace_period"], "30s")
+
+    def test_installer_skips_the_relay_without_the_stack(self) -> None:
+        text = (ROOT / "scripts/install-homeserver.sh").read_text()
+        self.assertIn("honeypot-canarytokens) store_service=canarytokens-redis_redis relay=canarytokens-redis-relay", text)
+
+
 if __name__ == "__main__":
     unittest.main()
