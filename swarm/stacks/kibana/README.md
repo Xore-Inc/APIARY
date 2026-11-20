@@ -17,7 +17,7 @@ container `hp-kibana` is kept, stopped.
 `19601` is a host-mode port, so it binds every homeserver address. It is in
 `ops/firewall/hosts/homeserver-swarm-host-ports.txt`; `home-swarm-host-guard`
 drops every flow to it except the VPS on `wg0` and local containers to
-`10.8.0.2`. A LAN `curl 192.168.42.250:19601` must time out.
+`10.8.0.2`. A `curl` from the LAN to the homeserver LAN address on 19601 must time out.
 
 Networks: `apiary-es` (external, internal) and `front` (`10.200.31.0/24`,
 **not** internal). A task whose only networks are internal gets no host-mode
