@@ -52,6 +52,10 @@ Per service:
     follow the same port rules: `mode: host` only (an ingress port would be
     published on every node, the VPS public address included) and every
     published port in the guard list.
+  - homeserver-pinned services never publish tcp 5432, 6379 or 9200:
+    portbridge forwards those public ports to 10.8.0.2 for the decoys (#3596).
+  - no short-syntax `tmpfs:` (Arcane's stack deploy drops it, #3888; the two
+    stacks that still have one are listed in SHORT_TMPFS_KNOWN).
   - a service that publishes a port has at least one non-internal network:
     swarm silently leaves a host-mode port unpublished when all of a task's
     networks are internal (#3596 gate G1).
@@ -113,6 +117,14 @@ HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.(sensor{_WS}=={_WS}false|edge{
 HOMESERVER_PIN = re.compile(
     rf"^(node\.labels\.sensor{_WS}=={_WS}true|node\.labels\.gpu{_WS}=={_WS}true|node\.hostname{_WS}=={_WS}supermicro)$"
 )
+
+
+# #3596: public ports portbridge forwards to 10.8.0.2 for the decoys (Redis,
+# Elasticsearch, PostgreSQL). A homeserver stack never publishes them.
+DECOY_FORWARDED_PORTS = {("tcp", 5432), ("tcp", 6379), ("tcp", 9200)}
+# #3888: stacks that still declare short-syntax tmpfs (which Arcane drops);
+# they are converted there. No other stack may add one.
+SHORT_TMPFS_KNOWN = {"backend-api", "dashboard-sessions"}
 
 
 def stack_files(root: Path) -> list[Path]:
@@ -337,6 +349,16 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
             if names and all((defs.get(n) or {}).get("internal") for n in names):
                 err(f"{where}: publishes a port but every network is internal; swarm does not publish a "
                     "task's host-mode port then (#3596 gate G1). Add a non-internal overlay")
+
+        if any(HOMESERVER_PIN.match(c) for c in constraints):
+            for proto, pub, _mode in published:
+                if (proto, pub) in DECOY_FORWARDED_PORTS:
+                    err(f"{where}: must not publish {proto} {pub}: portbridge forwards that public port to "
+                        "10.8.0.2 for a decoy, so a data store published there would face the internet (#3596)")
+
+        if "tmpfs" in svc and path.parent.name not in SHORT_TMPFS_KNOWN:
+            err(f"{where}: short-syntax `tmpfs:` is dropped by Arcane's stack deploy (#3888); use "
+                "`volumes: - {type: tmpfs, target: ..., tmpfs: {size: ...}}`")
 
         reservations = ((deploy.get("resources") or {}).get("reservations") or {})
         if reservations.get("devices"):

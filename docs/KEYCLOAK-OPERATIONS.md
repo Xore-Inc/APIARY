@@ -7,7 +7,13 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 
 ## Resulting topology
 
-- `honeypot-keycloak` is an Arcane-managed stack on the homeserver.
+- Since swarm phase 9 (#3596) Keycloak and PostgreSQL run as the swarm stack
+  `swarm/stacks/keycloak` (Arcane `swarm_stack` sync, pinned to the
+  homeserver). The `honeypot-keycloak` Compose project keeps both services
+  under `profiles: [legacy]` as the rollback and as a fresh install's
+  bootstrap, and its directory stays the source of the secrets, realm and
+  theme the stack binds read-only. Cutover and rollback:
+  `swarm/stacks/keycloak/README.md`.
 - No local image is built. Both upstream images are pinned by version tag
   *and* digest: `postgres:18.7-bookworm@sha256:…` (18.7 since the 2026-11-17 maintenance window) and
   `quay.io/keycloak/keycloak:26.8.2@sha256:…` (#3824). Keycloak used to name
@@ -18,8 +24,11 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
   which release was running. A Keycloak security release is applied by moving
   the tag and digest together (§7); the base-image CVE gate's
   `ACCEPTED_CVES` entry for the old digest retires itself when it moves.
-- PostgreSQL is reachable only on the internal `keycloak-data` network.
-- Keycloak publishes HTTP only on the homeserver WireGuard address.
+- PostgreSQL is reachable only on the internal `keycloak-data` network (the
+  stack's internal `data` overlay).
+- Keycloak publishes HTTP only on the homeserver WireGuard address. As a swarm
+  host-mode port it binds every address; `home-swarm-host-guard` drops every
+  flow except the VPS on `wg0` and local containers to that address.
 - VPS Traefik terminates TLS and forwards the issuer and administrator hosts
   through `socat-hp-keycloak` over WireGuard.
 - The administrator host uses Keycloak realm-admin login and mandatory TOTP.
@@ -43,7 +52,8 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 | Arcane environment | `arcane/home/honeypot-keycloak/.env.example` | `/var/dockge/stacks/honeypot-keycloak/.env` |
 | Realm template | `arcane/home/honeypot-keycloak/keycloak/realm/apiary-realm.json` | `/var/dockge/stacks/honeypot-keycloak/keycloak/realm/` |
 | Theme | `Xore/auth-backend:themes/apiary` | `/var/dockge/stacks/honeypot-keycloak/theme/apiary` |
-| Keycloak secrets | none | `/var/dockge/stacks/honeypot-keycloak/secrets` |
+| Keycloak secrets | none | `/var/dockge/stacks/honeypot-keycloak/secrets` (the stack also reads `public-domain` there) |
+| Swarm stack | `swarm/stacks/keycloak/stack.yml` | Arcane sync `swarm-keycloak` |
 | VPS Compose | `vps/docker-compose.yml` | existing VPS stack directory |
 | VPS OIDC secrets | none | `vps/secrets/oidc/<client>/` on the VPS |
 

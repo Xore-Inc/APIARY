@@ -8,6 +8,11 @@ services:
   postgres:
     image: postgres:18.7-bookworm@sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f
     container_name: hp-keycloak-postgres
+    # #3596 (swarm phase 9 leg B): Postgres runs as keycloak_postgres in
+    # swarm/stacks/keycloak on the same volume. This container is the rollback
+    # only: kept stopped, never started by a deploy. Never run both: two
+    # postmasters on one PGDATA (README there, rollback).
+    profiles: [legacy]
     restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
@@ -60,6 +65,12 @@ services:
     # redeploy working while quay.io is unreachable.
     pull_policy: missing
     container_name: hp-keycloak
+    # #3596: Keycloak runs as keycloak_keycloak in swarm/stacks/keycloak.
+    # Rollback only (`docker start hp-keycloak-postgres hp-keycloak` after
+    # scaling both swarm services to 0). A fresh install still bootstraps on
+    # these two (scripts/install-homeserver.sh starts this project with
+    # --profile legacy while no keycloak stack exists).
+    profiles: [legacy]
     restart: unless-stopped
     depends_on:
       postgres:
@@ -159,4 +170,8 @@ networks:
   keycloak-egress:
 
 volumes:
+  # #3596: external, shared with swarm/stacks/keycloak (pgdata). A stray
+  # `compose down -v` on this project can no longer delete the identity DB.
   keycloak-postgres:
+    external: true
+    name: honeypot-keycloak_keycloak-postgres

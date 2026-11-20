@@ -187,6 +187,28 @@ class LintTest(unittest.TestCase):
         self.assertEqual(self.errors(good_stack(port + "    networks: [a, b]\n", top=nets)), [])
         self.assertEqual(self.errors(good_stack("    networks: [a]\n", top=nets)), [])
 
+    def test_homeserver_stack_never_publishes_decoy_forwarded_ports(self):
+        # #3596: portbridge forwards public 5432/6379/9200 to 10.8.0.2 for decoys.
+        body = good_stack().replace("node.labels.sensor == false", "node.hostname == supermicro")
+        root, path = self.write(body + "    ports:\n      - {target: 5432, published: 5432, mode: host, protocol: tcp}\n")
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("tcp 5432\n")
+        errs = lint.check_file(path, root)
+        self.assertTrue(any("must not publish tcp 5432" in e for e in errs), errs)
+        root2, path2 = self.write(body + "    ports:\n      - {target: 5432, published: 15432, mode: host, protocol: tcp}\n")
+        (root2 / "ops/firewall/hosts").mkdir(parents=True)
+        (root2 / "ops/firewall/hosts/homeserver-swarm-host-ports.txt").write_text("tcp 15432\n")
+        self.assertEqual(lint.check_file(path2, root2), [])
+
+    def test_short_syntax_tmpfs_refused(self):
+        # #3888: Arcane drops short-syntax tmpfs; long syntax is fine.
+        self.assertFlags(good_stack("    tmpfs: ['/tmp:size=8m']\n"), "short-syntax `tmpfs:`")
+        self.assertEqual(self.errors(good_stack(
+            "    volumes:\n      - {type: tmpfs, target: /tmp, tmpfs: {size: 8388608}}\n")), [])
+        # the two stacks #3888 converts are the only exceptions
+        self.assertEqual(self.errors(good_stack("    tmpfs: ['/tmp:size=8m']\n"), name="backend-api"), [])
+
     def test_gpu_reservation_rules(self):
         # #3594: one GPU as a swarm generic resource.
         body = good_stack().replace(

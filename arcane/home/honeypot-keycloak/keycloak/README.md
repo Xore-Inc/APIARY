@@ -4,6 +4,12 @@ For the complete installation and operations procedure, use
 [`docs/KEYCLOAK-OPERATIONS.md`](../../../../docs/KEYCLOAK-OPERATIONS.md). This file is a
 short component summary.
 
+Since swarm phase 9 (#3596) Keycloak and PostgreSQL run as the swarm stack
+[`swarm/stacks/keycloak`](../../../../swarm/stacks/keycloak/README.md); both
+services of [`compose.yml`](../compose.yml) sit behind `profiles: [legacy]` as
+the rollback and as the bootstrap of a fresh install. This directory stays the
+source of the secrets, realm and theme files the stack binds read-only.
+
 The `honeypot-keycloak` Arcane stack is defined by
 [`compose.yml`](../compose.yml). Keycloak and
 PostgreSQL run on the homeserver; VPS Traefik forwards `auth.example.invalid` over

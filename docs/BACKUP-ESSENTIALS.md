@@ -352,7 +352,10 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    root. Reusing the original private key means the derived public key still
    matches the peer record on the far side, so **the VPS needs no WireGuard
    change at all** for the tunnel to come back.
-4. **Keycloak.** Bring up `hp-keycloak-postgres` alone, then
+4. **Keycloak.** (A rebuilt host bootstraps on Compose, `--profile legacy`;
+   where the swarm stack runs, scale `keycloak_keycloak` to 0 and use the task
+   of `keycloak_postgres` instead, see `swarm/stacks/keycloak/README.md`.)
+   Bring up `hp-keycloak-postgres` alone, then
    `gunzip -c keycloak/keycloak.sql.gz | docker exec -i hp-keycloak-postgres psql -U keycloak -d keycloak`.
    The dump is `--clean --if-exists`, so it drops and recreates. Start
    `hp-keycloak` only once the restore has finished. This is what saves the

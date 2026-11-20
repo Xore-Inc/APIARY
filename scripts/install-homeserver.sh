@@ -1813,9 +1813,19 @@ step_start_remaining_stacks() {
     # failures put four spurious FAILEDs in the summary of every clean install,
     # which is exactly the expected-noise problem that trains an operator to
     # skim past a real one.
-    echo "-- $name: docker compose -f $compose_file up -d --wait"
+    # #3596 (swarm phase 9): both honeypot-keycloak services sit behind the
+    # `legacy` profile because Keycloak + Postgres run as swarm/stacks/keycloak.
+    # The provisioning steps below need a running Keycloak, and this script
+    # deploys no swarm stack, so a host without a keycloak stack bootstraps the
+    # identity tier on Compose. Moving it to the stack afterwards is the
+    # cutover in swarm/stacks/keycloak/README.md. Never both: one PGDATA.
+    local profile_args=()
+    if [[ "$name" == "honeypot-keycloak" ]] && ! docker service inspect keycloak_postgres >/dev/null 2>&1; then
+      profile_args=(--profile legacy)
+    fi
+    echo "-- $name: docker compose -f $compose_file ${profile_args[*]} up -d --wait"
     local out rc
-    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" up -d --wait) 2>&1 ); rc=$?
+    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" "${profile_args[@]}" up -d --wait) 2>&1 ); rc=$?
     printf '%s\n' "$out"
     if (( rc != 0 )); then
       if printf '%s' "$out" | grep -qi 'no service selected'; then
