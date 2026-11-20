@@ -1819,13 +1819,26 @@ step_start_remaining_stacks() {
     # deploys no swarm stack, so a host without a keycloak stack bootstraps the
     # identity tier on Compose. Moving it to the stack afterwards is the
     # cutover in swarm/stacks/keycloak/README.md. Never both: one PGDATA.
-    local profile_args=()
+    local profile_args=() service_args=()
     if [[ "$name" == "honeypot-keycloak" ]] && ! docker service inspect keycloak_postgres >/dev/null 2>&1; then
       profile_args=(--profile legacy)
     fi
-    echo "-- $name: docker compose -f $compose_file ${profile_args[*]} up -d --wait"
+    # #3596 leg C: the same for the stores that run as swarm stacks. Without
+    # the stack, the Compose store (profile legacy) comes up and the relay
+    # stays down: its external overlay does not exist yet, and one failed
+    # container aborts the whole `compose up`. Naming the other services
+    # leaves the relay out.
+    local store_service="" relay=""
+    case "$name" in
+      honeypot-canarytokens) store_service=canarytokens-redis_redis relay=canarytokens-redis-relay ;;
+    esac
+    if [[ -n "$store_service" ]] && ! docker service inspect "$store_service" >/dev/null 2>&1; then
+      profile_args=(--profile legacy)
+      mapfile -t service_args < <(cd "$dir" && docker compose -f "$compose_file" --profile legacy config --services | grep -vx "$relay")
+    fi
+    echo "-- $name: docker compose -f $compose_file ${profile_args[*]} up -d --wait ${service_args[*]}"
     local out rc
-    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" "${profile_args[@]}" up -d --wait) 2>&1 ); rc=$?
+    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" "${profile_args[@]}" up -d --wait "${service_args[@]}") 2>&1 ); rc=$?
     printf '%s\n' "$out"
     if (( rc != 0 )); then
       if printf '%s' "$out" | grep -qi 'no service selected'; then
