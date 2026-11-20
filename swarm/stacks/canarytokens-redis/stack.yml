@@ -46,10 +46,10 @@ services:
     stop_grace_period: 30s
     deploy:
       mode: replicated
-      # Lands at 0 and is scaled to 1 by hand after the Compose
-      # hp-canarytokens-redis has saved and stopped (#3596 leg C); a
-      # follow-up commit records 1.
-      replicas: 0
+      # Landed at 0 and was scaled to 1 by hand after the Compose
+      # hp-canarytokens-redis saved and stopped (#3596 leg C cutover
+      # 2026-11-20, same 20 keys); this records the result.
+      replicas: 1
       # No VIP: IPVS drops idle TCP after 900 s, which breaks the pooled
       # connections frontend and switchboard keep.
       endpoint_mode: dnsrr

@@ -168,6 +168,7 @@ Plan and decisions: the 2026-11-17 plan and decision comments on #3596. Legs, on
 - `dashboard-sessions` (memory-only Valkey; the relay is in Xore-Inc/apiary-dashboard's `compose.honeynet.yml`): `swarm/stacks/dashboard-sessions/README.md`.
 - `canarytokens-redis` (AOF + RDB on the reused volume `honeypot-canarytokens_canarytokens-redis-data`; one writer, so stop-first, and the cutover saves and stops the Compose Redis before the scale-up): `swarm/stacks/canarytokens-redis/README.md`.
 - `tanner-redis` (a memory-only LRU cache; the upstream base image with the Compose build's `redis.conf` as flags; the `honeypot-tanner` project is changed only through the docker:cli bridge, never an Arcane sync, #3878): `swarm/stacks/tanner-redis/README.md`.
+- Start a relay with `docker compose up -d --no-deps <relay>` (docker:cli bridge) in any project that has `build:` services: an Arcane project sync redeploys and rebuilds those images first (#3891). Cut over 2026-11-20: sessions 22 s, canarytokens 3 min 55 s (a cancelled sync), tanner 9 s.
 - A host without the stack (a fresh install) brings these Compose projects up with `--profile legacy` and without the relay (`install-homeserver.sh`), because a relay whose overlay is missing aborts the whole `compose up`.
 
 **Rules for these stacks.**

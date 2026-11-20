@@ -38,10 +38,17 @@ without the relay. Moving it to the stack is the cutover below.
    hp-canarytokens-redis` (kept). SIGTERM fsyncs the AOF and writes a final RDB.
 4. `docker service scale canarytokens-redis_redis=1`, wait for healthy, check
    that `DBSIZE` equals the count before the stop.
-5. Sync the `honeypot-canarytokens` project (only now, #3891): its compose up
-   creates the relay and leaves the other services alone (their Compose
-   config hashes are unchanged).
+5. Start only the relay: `docker compose up -d --no-deps
+   canarytokens-redis-relay` through the docker:cli bridge, in the project
+   dir with main's `compose.yml`. **Not an Arcane sync:** on 2026-11-20 the
+   sync redeployed the project and rebuilt its `build:` images first, which
+   would have recreated every canarytokens service on never-deployed builds.
+   It was cancelled, and nothing was recreated (#3891).
 6. Check: a throwaway token, triggered, raises its alert, then is deleted.
+
+Measured on 2026-11-20: 20 keys with the same key set before and after. The
+store path was down 3 min 55 s, because of the cancelled sync; with the
+bridge it is the ~10 s between the stop and the relay start.
 
 ## Rollback
 
