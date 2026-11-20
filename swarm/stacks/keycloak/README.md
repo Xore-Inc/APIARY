@@ -46,7 +46,7 @@ The volume is the Compose one, `honeypot-keycloak_keycloak-postgres`, declared
 `external: true` on both sides (reused in place, never copied; a
 `compose down -v` cannot delete it).
 
-## Cutover (Compose → stack)
+## Cutover (Compose → stack, done 2026-11-20, 30 s without Keycloak)
 
 Never two postmasters on one PGDATA: the stack landed with `replicas: 0`.
 
