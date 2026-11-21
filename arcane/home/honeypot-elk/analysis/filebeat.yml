@@ -647,6 +647,30 @@ output.elasticsearch:
     # backend-service's flow_family() date-tail regex): zeek-v1-conn-2026.10.01
     # holds all of October. Retention for it is zeek-60d (see
     # elasticsearch-setup.sh), so each month is kept 30-60 days.
+    #
+    # #3912: except conn, which gets one index a DAY again. It is the
+    # largest log by far (zeek-v1-conn-2026.11.01 held 30 M documents / 20 GB
+    # three weeks in, more than every other non-Modbus zeek index together)
+    # and what the dashboard's zeek aggregations read. A shard that is
+    # written to is invalidated in Elasticsearch's request cache at every
+    # 5 s refresh, so with a monthly index the whole month-to-date was
+    # recomputed on every request; with a daily one only today is, and
+    # every earlier day is answered from cache. One shard a day x
+    # zeek-60d's delete age is the whole shard cost, which
+    # tests/docs/test_3283_shard_budget.py counts. zeek-proxy-v1-conn (a
+    # quarter of the size, and not read by the conn-only charts) stays
+    # monthly: daily for both families projects 776 primary shards at the
+    # shipped 30-day retention, over that test's 750 budget. The name keeps the
+    # yyyy.MM.dd shape, so zeek-v1-conn-* and every consumer pattern still
+    # match; the monthly conn indices written before stay as they are and
+    # age out under the same policy. This rule must stay above the
+    # monthly one: Filebeat uses the first rule that matches.
+    - index: "zeek-v1-conn-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            logset: "zeek"
+        - equals:
+            zeek_log: "conn"
     - index: "zeek-v1-%{[zeek_log]}-%{+yyyy.MM}.01"
       when.equals:
         logset: "zeek"

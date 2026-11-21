@@ -186,6 +186,14 @@ The three ILM names are policy *names*, not durations: `suricata-7d`,
 retention for all of them
 ([STORAGE.md](STORAGE.md#retention-and-lifecycle) has the full set).
 
+Zeek indexes one index per log type per month (#3283), except
+`zeek-v1-conn-*`, which is daily (#3912) so the part of it that a 5 s
+refresh keeps invalidating in Elasticsearch's request cache is one day, not
+the month to date. backend-service sends every search with its relative
+`now-…` bounds pinned to minute-floored timestamps and, for `size: 0`
+aggregations, `request_cache=true` (`es::absolute_time`), so unchanged
+shards answer repeated aggregations from that cache.
+
 ### Worker loops — consumes → emits
 
 | Loop | Where it runs | Consumes | Emits |
