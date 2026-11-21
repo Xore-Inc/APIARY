@@ -918,8 +918,22 @@ pub async fn ioc_catalog(State(state): State<AppState>, Query(query): Query<IocC
     if q.is_some_and(|q| q.len() > 256) {
         return Err((StatusCode::BAD_REQUEST, "q too long".into()));
     }
-    let result = state.es.search(catalog_body(&range, &defs, q, size)).await.map_err(bad_gateway)?;
+    let body = catalog_body(&range, &defs, q, size);
+    // #3910: the dashboard's catalog request (every kind, `range=30d`,
+    // `size=100`, no `q`) is the worker's snapshot (`page_rollup`) while
+    // recent; every other combination is read live.
+    let result = match crate::page_rollup::read_matching(&state, crate::page_rollup::IOC_CATALOG, crate::es::EVENT_INDICES, &body).await {
+        Some(snapshot) => snapshot,
+        None => state.es.search(body).await.map_err(bad_gateway)?,
+    };
     Ok((StatusCode::OK, Json(catalog_response(&result, &defs, &range, size))))
+}
+
+/// The catalog request the IOC hub sends (every kind over 30 days, the 100
+/// busiest values each, no filter), which the worker snapshots.
+pub(crate) fn catalog_default_body() -> Value {
+    let defs: Vec<&'static IocKindDef> = IOC_KINDS.iter().collect();
+    catalog_body("now-30d", &defs, None, CATALOG_MAX_SIZE)
 }
 
 #[utoipa::path(get, path = "/api/v1/ioc/{kind}/{value}", summary = "One indicator: counts, sensors, top sources, sessions, payloads and recent events.",

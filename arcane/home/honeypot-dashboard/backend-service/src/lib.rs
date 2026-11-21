@@ -93,6 +93,8 @@ pub mod reports_data;
 pub mod reports_store;
 pub mod reporter_stats;
 pub mod page_rollup;
+#[cfg(test)]
+mod page_rollup_tests;
 pub mod rollups;
 pub mod sandbox_submit;
 pub mod sensors;

@@ -111,6 +111,22 @@ pub fn provider_body(filters: Vec<Value>) -> Value {
     })
 }
 
+/// The unfiltered explorer's query: no filter parameter, so only its
+/// default window (`events::build_filters`).
+fn default_query() -> EventsQuery {
+    serde_json::from_value(json!({})).expect("every EventsQuery field is optional")
+}
+
+/// [`facet_body`] of the unfiltered explorer, which the worker snapshots.
+pub(crate) fn default_facet_body() -> Value {
+    facet_body(build_filters(&default_query()))
+}
+
+/// [`provider_body`] of the unfiltered explorer, which the worker snapshots.
+pub(crate) fn default_provider_body() -> Value {
+    provider_body(build_filters(&default_query()))
+}
+
 fn bucket_value(bucket: &Value) -> String {
     let key = &bucket["key"];
     match key {
@@ -207,9 +223,28 @@ pub async fn get(
     }
     let filters = build_filters(&q);
     let indices = facet_indices(&q);
+    let body = facet_body(filters.clone());
+    let providers_body = provider_body(filters);
+    // #3910: the unfiltered explorer (its default window, no filter) is the
+    // worker's snapshot of exactly these two requests (`page_rollup`) while
+    // recent; any filtered request differs from them and stays live.
+    let (snapshot, providers_snapshot) = tokio::join!(
+        crate::page_rollup::read_matching(&state, crate::page_rollup::FACETS_EVENTS, indices, &body),
+        crate::page_rollup::read_matching(&state, crate::page_rollup::FACETS_EVENTS_PROVIDERS, indices, &providers_body),
+    );
     let (result, providers) = tokio::join!(
-        state.es.search_index(indices, facet_body(filters.clone())),
-        state.es.search_index(indices, provider_body(filters)),
+        async {
+            match snapshot {
+                Some(snapshot) => Ok(snapshot),
+                None => state.es.search_index(indices, body).await,
+            }
+        },
+        async {
+            match providers_snapshot {
+                Some(snapshot) => Ok(snapshot),
+                None => state.es.search_index(indices, providers_body).await,
+            }
+        },
     );
     let result = result.map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
     // A failed providers query degrades to an empty list, not a failed page.

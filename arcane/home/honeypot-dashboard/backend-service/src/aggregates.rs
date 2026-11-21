@@ -255,8 +255,22 @@ pub struct FilterValues {
 /// /api/v1/filter-values — the filter bar's autocomplete vocabularies,
 /// mirroring the Go tier's /api/filter-values (live terms over the event
 /// window).
+///
+/// #3910: served from the worker's snapshot of this request (`page_rollup`)
+/// while a recent one exists, so a vocabulary can trail by one cycle.
 pub async fn filter_values(State(state): State<AppState>) -> Result<Json<FilterValues>, (StatusCode, String)> {
-    let body = json!({
+    // #3908: a vocabulary, not a count: the Modbus PDUs add no sensor,
+    // port or kind the other zeek logs lack, only seconds of scanning.
+    let result = match crate::page_rollup::read(&state, crate::page_rollup::FILTER_VALUES).await {
+        Some(snapshot) => snapshot,
+        None => state.es.search_agg(filter_values_body()).await.map_err(bad_gateway)?,
+    };
+    Ok(Json(filter_values_from(&result)))
+}
+
+/// The request behind `/api/v1/filter-values`, shared with its snapshot.
+pub(crate) fn filter_values_body() -> Value {
+    json!({
         "size": 0,
         // #2145: probe docs DO carry sensors/kinds/ports/protos values, so
         // without this clause the fleet's healthchecks leak into the
@@ -276,10 +290,10 @@ pub async fn filter_values(State(state): State<AppState>) -> Result<Json<FilterV
             "ports": {"terms": {"field": "destination.port", "size": 60}},
             "kinds": {"terms": {"field": "honeypot.event", "size": 40}}
         }
-    });
-    // #3908: a vocabulary, not a count: the Modbus PDUs add no sensor,
-    // port or kind the other zeek logs lack, only seconds of scanning.
-    let result = state.es.search_agg(body).await.map_err(bad_gateway)?;
+    })
+}
+
+fn filter_values_from(result: &Value) -> FilterValues {
     let keys = |agg: &str| -> Vec<String> {
         result["aggregations"][agg]["buckets"]
             .as_array()
@@ -301,7 +315,7 @@ pub async fn filter_values(State(state): State<AppState>) -> Result<Json<FilterV
     };
     values.countries.sort();
     values.cities.sort();
-    Ok(Json(values))
+    values
 }
 
 #[cfg(test)]
