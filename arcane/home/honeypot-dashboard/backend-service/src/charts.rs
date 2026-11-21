@@ -545,7 +545,6 @@ pub(crate) fn tcp_stack_body() -> Value {
             "ja4t",
             TCP_STACK_SIZE,
             Some(json!({"ips": {"cardinality": {"field": "source.ip"}}})),
-            LegacyHint::Map,
         )
     })
 }
@@ -553,19 +552,6 @@ pub(crate) fn tcp_stack_body() -> Value {
 /// The document marker the ingest pipeline writes next to the keyword
 /// copies (#3911); see [`keyword_terms`].
 const ZEEK_KW_MARK: &str = "zeek_kw.schema";
-
-/// How the flattened leg of [`keyword_terms`] collects.
-#[derive(Clone, Copy)]
-pub(crate) enum LegacyHint {
-    /// Elasticsearch's default (global ordinals). Right for an index that
-    /// is no longer written to, whose ordinals are built once and kept:
-    /// Modbus `zeek.func` took 5.3-5.7 s this way and 9.1-9.5 s with `map`.
-    Default,
-    /// `execution_hint: map`: no global ordinals, so a refresh of the hot
-    /// conn index does not trigger a rebuild of every key of `zeek._keyed`
-    /// (tcp-stack 12.8-14.9 s -> 5.6-6.0 s on 2026-11-21).
-    Map,
-}
 
 /// A terms aggregation named `name` over the zeek sub-field `field`, read
 /// from its keyword copy where the index has one (#3911).
@@ -585,12 +571,17 @@ pub(crate) enum LegacyHint {
 /// free there). [`merge_keyword_legs`] folds them back into `name`. Once the
 /// last index without the copies has aged out, the legacy leg matches
 /// nothing.
-pub(crate) fn keyword_terms(name: &str, field: &str, size: usize, sub: Option<Value>, hint: LegacyHint) -> Value {
+///
+/// The legacy leg keeps Elasticsearch's default execution (global
+/// ordinals), not `execution_hint: map`. Map was the stop-gap while the
+/// monthly conn index was still written (tcp-stack 12.8-14.9 s -> 5.6-6.0 s),
+/// but since conn is daily (#3912) the indices without the copies are no
+/// longer written, so their ordinals are built once and kept, and the
+/// default is the faster one: tcp-stack 3.4-4.3 s against 6.0-6.9 s with
+/// map, ja4l 6.4-6.8 s against 12.5-12.9 s (2026-11-21, 22:55Z).
+pub(crate) fn keyword_terms(name: &str, field: &str, size: usize, sub: Option<Value>) -> Value {
     let mut keyword = json!({"terms": {"field": format!("zeek_kw.{field}"), "size": size}});
     let mut legacy = json!({"terms": {"field": format!("zeek.{field}"), "size": size}});
-    if let LegacyHint::Map = hint {
-        legacy["terms"]["execution_hint"] = json!("map");
-    }
     if let Some(sub) = sub {
         keyword["aggs"] = sub.clone();
         legacy["aggs"] = sub;
@@ -766,7 +757,7 @@ pub(crate) fn ics_function_body(field: &str) -> Value {
     json!({
         "size": 0,
         "query": attacker_window(WEEK),
-        "aggs": keyword_terms("fn", field, ICS_FUNCTION_SIZE, None, LegacyHint::Default)
+        "aggs": keyword_terms("fn", field, ICS_FUNCTION_SIZE, None)
     })
 }
 
@@ -960,7 +951,7 @@ pub(crate) fn ja4l_body() -> Value {
     json!({
         "size": 0,
         "query": attacker_window(WEEK),
-        "aggs": keyword_terms("ja4l", "ja4l", JA4L_SIZE, None, LegacyHint::Map)
+        "aggs": keyword_terms("ja4l", "ja4l", JA4L_SIZE, None)
     })
 }
 
@@ -1218,15 +1209,14 @@ mod keyword_field_tests {
 
     #[test]
     fn keyword_terms_reads_the_copy_and_sends_the_rest_to_the_flattened_field() {
-        let aggs = keyword_terms("stacks", "ja4t", 20, Some(json!({"ips": {"cardinality": {"field": "source.ip"}}})), LegacyHint::Map);
+        let aggs = keyword_terms("stacks", "ja4t", 20, Some(json!({"ips": {"cardinality": {"field": "source.ip"}}})));
         assert_eq!(aggs["stacks"]["terms"], json!({"field": "zeek_kw.ja4t", "size": 20}));
         assert_eq!(aggs["stacks"]["aggs"]["ips"]["cardinality"]["field"], "source.ip");
         let legacy = &aggs["stacks_legacy"];
         assert_eq!(legacy["filter"], json!({"bool": {"must_not": [{"exists": {"field": "zeek_kw.schema"}}]}}));
-        assert_eq!(legacy["aggs"]["stacks"]["terms"], json!({"field": "zeek.ja4t", "size": 20, "execution_hint": "map"}));
+        assert_eq!(legacy["aggs"]["stacks"]["terms"], json!({"field": "zeek.ja4t", "size": 20}));
         assert_eq!(legacy["aggs"]["stacks"]["aggs"], aggs["stacks"]["aggs"]);
-        let ics = keyword_terms("fn", "func", 8, None, LegacyHint::Default);
-        assert!(ics["fn_legacy"]["aggs"]["fn"]["terms"].get("execution_hint").is_none());
+        let ics = keyword_terms("fn", "func", 8, None);
         assert!(ics["fn"].get("aggs").is_none());
         assert_eq!(tcp_stack_body()["aggs"]["stacks_legacy"]["aggs"]["stacks"]["terms"]["field"], "zeek.ja4t");
         assert_eq!(ja4l_body()["aggs"]["ja4l"]["terms"]["field"], "zeek_kw.ja4l");
