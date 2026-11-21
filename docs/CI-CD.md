@@ -116,12 +116,46 @@ compromised contributor account, not just fork-origin PRs.
 
 `.github/workflows/image-security-scan.yml` is a **blocking** gate: it runs
 `trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed` over
-every base image `scripts/list-docker-base-images.py` emits, and **fails the
+the base images `scripts/list-docker-base-images.py` emits, and **fails the
 build** if any image with fixable CRITICAL/HIGH findings has no written
-exemption.
+exemption. Which images it scans depends on the event (#3923, next section).
 
 It was report-only from introduction until #3501, which is the decision this
 section records.
+
+### Two scopes: pull requests vs main (#3923)
+
+| event | scanned | fails on |
+|---|---|---|
+| `push` to `main` (Dockerfile/Containerfile change), weekly `schedule` | every image the repo pulls | any unexempted fixable finding, drift on unchanged pins included |
+| `pull_request` (Dockerfile, Containerfile or compose change) | only refs the PR **adds or changes**: `list-docker-base-images.py --new-since <merge-base>`, i.e. what the PR head's tree pulls that the merge-base tree did not | findings on those refs only |
+
+Why: CVE feeds move daily, so unchanged pins go red without any commit. With
+a repo-wide gate on every PR, each upstream advisory blocked every unrelated
+PR until someone re-pinned the whole tree. That happened three times
+(#3622, #3667, #3923), and the last time no fixed image existed upstream for
+16 of the 17 flagged refs. A PR is now answerable only for the images it
+introduces. Drift stays visible: the push and scheduled runs still scan
+everything and still fail, and #3923 tracks it until fixed images ship.
+
+Consequences worth knowing:
+
+- A PR that touches no image ref scans nothing and passes, with a
+  `::notice` saying so.
+- Re-pinning to a new digest is a changed ref and is scanned. Re-pin PRs
+  therefore still prove the new digest clean, and one that moves to a worse
+  digest fails.
+- Moving an existing ref to another file, or deleting one, is not new and is
+  not scanned.
+- Both trees go through the same parser (the head's copy of the script, the
+  base tree read with `git show`), so a change to the lister's own rules
+  cannot fake an "added" image.
+- The PR check runs on the PR head commit, not on GitHub's synthetic merge
+  commit, whose tree would also count everything `main` gained since the
+  branch point as "added".
+- The merge to `main` runs the full scan. While drift is open (#3923), that
+  push run is red even though the PR was green. That is the intended signal,
+  not a regression from the PR.
 
 ### Three outcomes, deliberately not two
 

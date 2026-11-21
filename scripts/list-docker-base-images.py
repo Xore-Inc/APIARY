@@ -56,10 +56,16 @@ when the reference is the key or the key plus an `@sha256:` digest. That is
 the whole matching rule, and the reason it is that narrow is in the comment
 on the dict itself.
 
-Usage: python3 scripts/list-docker-base-images.py
+Usage: python3 scripts/list-docker-base-images.py [--new-since REV]
 Prints one deduplicated, scannable image reference per line, sorted, on
-stdout; notes any withheld unscannable reference on stderr.
+stdout; notes any withheld unscannable reference on stderr. With
+--new-since REV (#3923) it prints only the refs the working tree pulls that
+REV's tree did not: the refs a pull request adds or changes. Both trees go
+through the same parser, so the set difference is exact.
 """
+from __future__ import annotations
+
+import argparse
 import re
 import subprocess
 import sys
@@ -629,12 +635,30 @@ def allow_cve_findings(ref: str) -> bool:
     return ref in {accepted_ref(tag) for tag in ACCEPTED_CVES}
 
 
-def tracked_files() -> list[str]:
+def tracked_files(rev: str = "HEAD") -> list[str]:
     out = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+        ["git", "ls-tree", "-r", "--name-only", rev],
         cwd=REPO_ROOT, capture_output=True, text=True, check=True,
     ).stdout
     return out.splitlines()
+
+
+def read_tracked(rel: str, rev: str | None) -> str | None:
+    """A tracked file's text: the working tree when rev is None, else rev's blob.
+
+    #3923: --new-since lists a second tree (the PR's merge-base) with the
+    same parser, so both sides of the diff are read the same way and a
+    re-spelling inside this script cannot show up as an "added" image.
+    """
+    try:
+        if rev is None:
+            return (REPO_ROOT / rel).read_text()
+        return subprocess.run(
+            ["git", "show", f"{rev}:{rel}"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, UnicodeDecodeError, subprocess.CalledProcessError):
+        return None
 
 
 def tracked_dockerfiles(paths: list[str]) -> list[str]:
@@ -653,10 +677,10 @@ def tracked_compose_files(paths: list[str]) -> list[str]:
     ]
 
 
-def images_in(path: Path) -> set[str]:
+def images_in(text: str) -> set[str]:
     stage_names: set[str] = set()
     images: set[str] = set()
-    for raw_line in path.read_text().splitlines():
+    for raw_line in text.splitlines():
         m = FROM_RE.match(raw_line)
         if not m:
             continue
@@ -668,7 +692,7 @@ def images_in(path: Path) -> set[str]:
     return images
 
 
-def compose_pulled_images(path: Path) -> set[str]:
+def compose_pulled_images(text: str) -> set[str]:
     """Images a compose file *pulls*, i.e. excluding services it builds.
 
     Malformed or non-compose-shaped YAML is skipped rather than crashing the
@@ -676,8 +700,8 @@ def compose_pulled_images(path: Path) -> set[str]:
     the compose pattern without being compose documents.
     """
     try:
-        doc = yaml.safe_load(path.read_text())
-    except (yaml.YAMLError, UnicodeDecodeError, OSError):
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
         return set()
     if not isinstance(doc, dict):
         return set()
@@ -699,18 +723,45 @@ def compose_pulled_images(path: Path) -> set[str]:
     return images
 
 
-def main() -> int:
-    paths = tracked_files()
+def collect_images(rev: str | None = None) -> set[str]:
+    """Every base image the tree pulls: the working tree (rev None) or rev's."""
+    paths = tracked_files("HEAD" if rev is None else rev)
     all_images: set[str] = set()
     for rel in tracked_dockerfiles(paths):
-        all_images |= images_in(REPO_ROOT / rel)
+        text = read_tracked(rel, rev)
+        if text is not None:
+            all_images |= images_in(text)
     for rel in tracked_compose_files(paths):
-        all_images |= compose_pulled_images(REPO_ROOT / rel)
+        text = read_tracked(rel, rev)
+        if text is not None:
+            all_images |= compose_pulled_images(text)
+    return all_images
 
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--new-since", metavar="REV",
+        help="#3923: print only refs the working tree pulls that REV did not "
+             "(the PR-scoped gate passes the PR's merge-base here)",
+    )
+    args = parser.parse_args(argv)
+
+    all_images = collect_images()
     for image in sorted(all_images & UNSCANNABLE.keys()):
         print(f"not scannable: {image} -- {UNSCANNABLE[image]}", file=sys.stderr)
 
-    for image in sorted(all_images - UNSCANNABLE.keys()):
+    selected = all_images - UNSCANNABLE.keys()
+    if args.new_since:
+        before = collect_images(args.new_since)
+        print(
+            f"--new-since {args.new_since}: {len(selected & before)} unchanged "
+            f"ref(s) skipped, {len(selected - before)} added or changed",
+            file=sys.stderr,
+        )
+        selected -= before
+
+    for image in sorted(selected):
         print(image)
     return 0
 

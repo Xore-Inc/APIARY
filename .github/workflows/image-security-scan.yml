@@ -26,10 +26,16 @@ on:
       - "**/Containerfile*"
       - "scripts/list-docker-base-images.py"
       - ".github/workflows/image-security-scan.yml"
+  # #3923: on a pull request the gate is PR-scoped (see the listing step),
+  # so it also runs when a compose file changes: a compose `image:` the PR
+  # adds is a base image the PR adds. Push to main and the schedule keep the
+  # Dockerfile-only trigger plus the full scan.
   pull_request:
     paths:
       - "**/Dockerfile*"
       - "**/Containerfile*"
+      - "**/*compose*.yml"
+      - "**/*compose*.yaml"
       - "scripts/list-docker-base-images.py"
       - ".github/workflows/image-security-scan.yml"
   schedule:
@@ -63,9 +69,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      # #3923: a pull request is scanned against its merge-base, so the
+      # checkout is the PR head (not the synthetic merge commit, whose tree
+      # also carries whatever main gained since the branch point) with the
+      # history merge-base needs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       # #2763: compose_pulled_images() needs PyYAML to parse compose files
       # correctly (anchors, multi-line values) rather than a regex that would
@@ -87,8 +99,32 @@ jobs:
             pip install --quiet pyyaml
           fi
 
-      - name: List every base image this repo's Dockerfiles/Containerfiles/compose files pull
-        run: python3 scripts/list-docker-base-images.py | tee images.txt
+      # #3923: two scopes, one gate.
+      # - push to main / schedule / manual: every base image the repo pulls.
+      #   Upstream CVE drift on unchanged pins shows up here and fails here,
+      #   so it stays visible (tracked on #3923 while no fixed image exists).
+      # - pull_request: only the refs the PR adds or changes, i.e. what the
+      #   head tree pulls that the PR's merge-base did not. A PR that touches
+      #   no image ref scans nothing and passes; a PR that adds or re-pins an
+      #   image to one with fixable CRITICAL/HIGH findings still fails. Drift
+      #   on pins the PR did not touch no longer blocks unrelated PRs (#3622,
+      #   #3667, #3923).
+      - name: List the base images to scan (all of them, or the PR's additions)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            merge_base=$(git merge-base "$PR_BASE_SHA" HEAD)
+            echo "PR-scoped scan: refs added or changed since merge-base $merge_base"
+            python3 scripts/list-docker-base-images.py --new-since "$merge_base" | tee images.txt
+            if [ ! -s images.txt ]; then
+              echo "::notice title=PR-scoped base-image scan::This PR adds or changes no base image reference; nothing to scan. The full scan runs on push to main and weekly."
+            fi
+          else
+            python3 scripts/list-docker-base-images.py | tee images.txt
+          fi
 
       # #3321: the pin lives in scripts/install-trivy.sh, shared with the
       # digest-bound SBOM scan in containers.yml. This job used to carry the
