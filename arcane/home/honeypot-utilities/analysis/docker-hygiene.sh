@@ -9,13 +9,22 @@ set -eu
 # ever reclaiming them -- is real, and had no equivalent here at all.
 #
 # Deliberately narrower than T-Pot's version:
-#   - container prune only ever removes already-STOPPED containers, never
-#     anything running, and never a compose-managed one (#3658). A stopped
+#   - container removal only ever touches already-STOPPED containers, never
+#     anything running, never a compose-managed one (#3658), and never one
+#     that opts out with the label apiary.hygiene=keep (#3841). A stopped
 #     compose service is still part of its stack: it may be paused for a
 #     benchmark (#3135), crashed, or kept stopped as a rollback path.
 #     Deleting it means `docker start` can no longer bring it back, and
 #     nothing recreates it. On 2026-09-29 one pass deleted five stopped
-#     sensors this way, and they stayed gone for 17 days.
+#     sensors this way, and they stayed gone for 17 days. A container that
+#     is not compose-managed (for example the benchmark Ollama of #3706,
+#     made with `docker create`) has no such label to hide behind: put
+#     `--label apiary.hygiene=keep` on it when it is created. Labels cannot
+#     be added to an existing container, so it has to be recreated.
+#     This is a list-then-remove pass, not POST /containers/prune, because
+#     prune cannot express "skip A or B": repeated label! values are ANDed,
+#     so label!=[compose, keep] only spares a container carrying BOTH
+#     labels (tested against the daemon, #3841).
 #   - image prune is age-bounded (--filter until=<hours>h), not blanket --
 #     an image built minutes ago for a redeploy in progress is never a
 #     target, only ones old enough that nothing still building/deploying
@@ -34,6 +43,12 @@ set -eu
 interval="${HYGIENE_INTERVAL:-604800}"   # weekly by default
 start_delay="${HYGIENE_START_DELAY:-300}"
 image_max_age_hours="${HYGIENE_IMAGE_MAX_AGE_HOURS:-168}"  # 1 week
+keep_label="apiary.hygiene=keep"
+compose_label="com.docker.compose.project"
+# Optional extra label (key=value) every removal candidate must carry. Unset
+# in the stack; it exists so the real code path can be exercised against
+# throwaway containers without touching anything else (#3841).
+scope_label="${HYGIENE_SCOPE_LABEL:-}"
 docker_host="${DOCKER_PROXY_URL:-http://docker-socket-proxy:2375}"
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -42,22 +57,47 @@ log() { echo "docker-hygiene: $*" >&2; }
 
 # Docker's prune filters are a JSON map of string arrays, URL-encoded.
 encode_filters() {
-  printf '%s' "$1" | sed "s/{/%7B/g; s/}/%7D/g; s/\[/%5B/g; s/\]/%5D/g; s/\"/%22/g; s/:/%3A/g; s/,/%2C/g"
+  printf '%s' "$1" | sed "s/{/%7B/g; s/}/%7D/g; s/\[/%5B/g; s/\]/%5D/g; s/\"/%22/g; s/:/%3A/g; s/,/%2C/g; s/=/%3D/g"
+}
+
+# Print the full ids of the containers (any state) matching a /containers/json
+# filter, one per line. Non-zero if the request fails.
+list_ids() {
+  encoded="$(encode_filters "$1")"
+  body="$(curl -fsS "$docker_host/containers/json?all=1&filters=$encoded" 2>/dev/null)" || return 1
+  printf '%s' "$body" | grep -o '"Id":"[a-f0-9]\{64\}"' | sed 's/^"Id":"\(.*\)"$/\1/' || true
 }
 
 prune_containers() {
-  # Skip every container that carries a compose project label (#3658).
-  # Keep it to this one key: the daemon only skips a container under
-  # "label!" when it matches *all* the listed labels, so adding a second
-  # key would narrow the exclusion instead of widening it.
-  encoded="$(encode_filters '{"label!":["com.docker.compose.project"]}')"
-  resp="$(curl -fsS -X POST "$docker_host/containers/prune?filters=$encoded" 2>/dev/null)" || {
-    log "container prune request failed"
-    return 0
-  }
-  reclaimed="$(printf '%s' "$resp" | sed -n 's/.*"SpaceReclaimed":\([0-9]*\).*/\1/p')"
-  removed="$(printf '%s' "$resp" | grep -o '"ContainersDeleted":\[[^]]*\]' | grep -o '"[a-f0-9]\{12,64\}"' | wc -l | tr -d ' ')"
-  log "containers pruned (stopped, not compose-managed): ${removed:-0} removed, ${reclaimed:-0} bytes reclaimed"
+  # Candidates first, protected sets second. Labels never change, so a
+  # container that is a candidate and protected is in the protected list no
+  # matter when that second request runs (it lists every state, not just
+  # stopped). Any failed request skips the pass: removing on a partial view
+  # could delete something protected.
+  stopped='{"status":["created","exited","dead"]'
+  [ -z "$scope_label" ] || stopped="$stopped,\"label\":[\"$scope_label\"]"
+  stopped="$stopped}"
+  candidates="$(list_ids "$stopped")" || { log "container list request failed, skipping container pass"; return 0; }
+  keep="$(list_ids "{\"label\":[\"$keep_label\"]}")" || { log "keep-label list request failed, skipping container pass"; return 0; }
+  compose="$(list_ids "{\"label\":[\"$compose_label\"]}")" || { log "compose-label list request failed, skipping container pass"; return 0; }
+  keep=" $(printf '%s ' $keep) "
+  compose=" $(printf '%s ' $compose) "
+
+  removed=0 kept=0 managed=0 failed=0
+  for id in $candidates; do
+    case "$keep" in *" $id "*) kept=$((kept + 1)); continue ;; esac
+    case "$compose" in *" $id "*) managed=$((managed + 1)); continue ;; esac
+    # Plain DELETE: no force (a container that started since the list is
+    # refused with 409) and no volume removal, like prune.
+    if curl -fsS -X DELETE "$docker_host/containers/$id" >/dev/null 2>&1; then
+      removed=$((removed + 1))
+      log "removed stopped container $(printf '%.12s' "$id")"
+    else
+      failed=$((failed + 1))
+      log "could not remove $(printf '%.12s' "$id")"
+    fi
+  done
+  log "containers: $removed removed, $kept kept ($keep_label), $managed kept (compose-managed), $failed failed"
 }
 
 prune_images() {
