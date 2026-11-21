@@ -527,8 +527,10 @@ pub async fn tcp_stack_clusters(
         Some(snapshot) => snapshot,
         None => state.es.search_index(TCP_STACK_INDICES, tcp_stack_body()).await.map_err(bad_gateway)?,
     };
-    Ok(Json(tcp_stack_points(&result)))
+    Ok(Json(tcp_stack_points(&merge_keyword_legs(result, "stacks", TCP_STACK_SIZE))))
 }
+
+const TCP_STACK_SIZE: usize = 20;
 
 pub(crate) const TCP_STACK_INDICES: &[&str] = &["zeek-v1-conn-*"];
 
@@ -538,11 +540,121 @@ pub(crate) fn tcp_stack_body() -> Value {
     json!({
         "size": 0,
         "query": attacker_window(OVERVIEW_WINDOW),
-        "aggs": {"stacks": {
-            "terms": {"field": "zeek.ja4t", "size": 20},
-            "aggs": {"ips": {"cardinality": {"field": "source.ip"}}}
-        }}
+        "aggs": keyword_terms(
+            "stacks",
+            "ja4t",
+            TCP_STACK_SIZE,
+            Some(json!({"ips": {"cardinality": {"field": "source.ip"}}})),
+            LegacyHint::Map,
+        )
     })
+}
+
+/// The document marker the ingest pipeline writes next to the keyword
+/// copies (#3911); see [`keyword_terms`].
+const ZEEK_KW_MARK: &str = "zeek_kw.schema";
+
+/// How the flattened leg of [`keyword_terms`] collects.
+#[derive(Clone, Copy)]
+pub(crate) enum LegacyHint {
+    /// Elasticsearch's default (global ordinals). Right for an index that
+    /// is no longer written to, whose ordinals are built once and kept:
+    /// Modbus `zeek.func` took 5.3-5.7 s this way and 9.1-9.5 s with `map`.
+    Default,
+    /// `execution_hint: map`: no global ordinals, so a refresh of the hot
+    /// conn index does not trigger a rebuild of every key of `zeek._keyed`
+    /// (tcp-stack 12.8-14.9 s -> 5.6-6.0 s on 2026-11-21).
+    Map,
+}
+
+/// A terms aggregation named `name` over the zeek sub-field `field`, read
+/// from its keyword copy where the index has one (#3911).
+///
+/// `zeek` is `flattened`, and a terms aggregation on one of its keys has
+/// to build the global ordinals of every key of every document, again
+/// after each refresh of a hot index: 8.1 s of a 9.6 s tcp-stack request.
+/// The ingest pipeline (elasticsearch-setup.sh, geoip-honeypot) copies the
+/// fields charted here into `zeek_kw.*`, mapped `keyword`, and marks each
+/// such document with `zeek_kw.schema`. It does so only in indices created
+/// after that mapping existed, so an index has the copies on all of its
+/// documents or on none.
+///
+/// So the body carries two legs: `name` on `zeek_kw.<field>` (unmapped, so
+/// empty and free, on older indices) and `<name>_legacy`, the flattened
+/// field over the documents without the marker (none in newer indices, so
+/// free there). [`merge_keyword_legs`] folds them back into `name`. Once the
+/// last index without the copies has aged out, the legacy leg matches
+/// nothing.
+pub(crate) fn keyword_terms(name: &str, field: &str, size: usize, sub: Option<Value>, hint: LegacyHint) -> Value {
+    let mut keyword = json!({"terms": {"field": format!("zeek_kw.{field}"), "size": size}});
+    let mut legacy = json!({"terms": {"field": format!("zeek.{field}"), "size": size}});
+    if let LegacyHint::Map = hint {
+        legacy["terms"]["execution_hint"] = json!("map");
+    }
+    if let Some(sub) = sub {
+        keyword["aggs"] = sub.clone();
+        legacy["aggs"] = sub;
+    }
+    let mut aggs = serde_json::Map::new();
+    aggs.insert(name.to_string(), keyword);
+    aggs.insert(
+        format!("{name}_legacy"),
+        json!({
+            "filter": {"bool": {"must_not": [{"exists": {"field": ZEEK_KW_MARK}}]}},
+            "aggs": {name: legacy}
+        }),
+    );
+    Value::Object(aggs)
+}
+
+/// Folds the legacy leg of a [`keyword_terms`] answer back into
+/// `aggregations.<name>.buckets`, so every reader (and every snapshot taken
+/// of the two-leg body) sees one terms aggregation, as before.
+///
+/// Buckets of the same key add up: their `doc_count`, and every numeric
+/// sub-aggregation `value` (the distinct-IP count of tcp-stack). Each
+/// document is in exactly one leg, so counts are exact. A distinct count is
+/// exact too unless the same key appears on both sides of the cut-over,
+/// which only happens while a window spans both an old and a new index; then
+/// the sum counts an address seen on both sides twice. Ordered by
+/// `doc_count` like a terms aggregation, and cut to `size`.
+pub(crate) fn merge_keyword_legs(mut result: Value, name: &str, size: usize) -> Value {
+    let legacy_name = format!("{name}_legacy");
+    let Some(aggs) = result.get_mut("aggregations").and_then(Value::as_object_mut) else {
+        return result;
+    };
+    let Some(legacy) = aggs.remove(&legacy_name) else {
+        return result;
+    };
+    let mut merged: Vec<Value> = aggs
+        .get(name)
+        .and_then(|agg| agg["buckets"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    for bucket in legacy[name]["buckets"].as_array().into_iter().flatten() {
+        match merged.iter_mut().find(|known| known["key"] == bucket["key"]) {
+            Some(known) => add_bucket(known, bucket),
+            None => merged.push(bucket.clone()),
+        }
+    }
+    merged.sort_by(|a, b| {
+        let count = |bucket: &Value| bucket["doc_count"].as_u64().unwrap_or(0);
+        count(b).cmp(&count(a)).then_with(|| a["key"].to_string().cmp(&b["key"].to_string()))
+    });
+    merged.truncate(size);
+    aggs.insert(name.to_string(), json!({"buckets": merged}));
+    result
+}
+
+fn add_bucket(into: &mut Value, other: &Value) {
+    let Some(fields) = into.as_object_mut() else { return };
+    for (key, value) in fields.iter_mut() {
+        if key == "doc_count" {
+            *value = json!(value.as_u64().unwrap_or(0) + other["doc_count"].as_u64().unwrap_or(0));
+        } else if let (Some(mine), Some(theirs)) = (value["value"].as_u64(), other[key.as_str()]["value"].as_u64()) {
+            value["value"] = json!(mine + theirs);
+        }
+    }
 }
 
 fn tcp_stack_points(result: &Value) -> Vec<PiePoint> {
@@ -613,30 +725,39 @@ fn bar_from(result: &Value, agg: &str) -> Bar {
 /// #3910: each of the four searches is a snapshot of its own
 /// (`page_rollup`, `ics-functions-<protocol>`); a protocol whose snapshot is
 /// missing or old is read live, the others are not.
+///
+/// #3911: the four legs run concurrently, so a live answer takes as long as
+/// its slowest leg rather than the sum of all four. Bars keep the order of
+/// `ICS_FUNCTION_SOURCES`.
 pub async fn ics_functions(State(state): State<AppState>) -> Result<Json<Bar>, (StatusCode, String)> {
+    let legs = ICS_FUNCTION_SOURCES.iter().map(|(page, proto, index, field)| {
+        let state = &state;
+        async move {
+            let result = match crate::page_rollup::read(state, page).await {
+                Some(snapshot) => snapshot,
+                // One dead index must not blank the whole chart: a protocol
+                // nobody has probed this week is a normal state, not an error.
+                None => state.es.search_index(&[*index], ics_function_body(field)).await.ok()?,
+            };
+            Some((*proto, merge_keyword_legs(result, "fn", ICS_FUNCTION_SIZE)))
+        }
+    });
     let mut bar = Bar { categories: Vec::new(), values: Vec::new() };
-    for (page, proto, index, field) in ICS_FUNCTION_SOURCES {
-        let result = match crate::page_rollup::read(&state, page).await {
-            Some(snapshot) => snapshot,
-            // One dead index must not blank the whole chart: a protocol
-            // nobody has probed this week is a normal state, not an error.
-            None => match state.es.search_index(&[*index], ics_function_body(field)).await {
-                Ok(result) => result,
-                Err(_) => continue,
-            },
-        };
+    for (proto, result) in futures::future::join_all(legs).await.into_iter().flatten() {
         push_ics_functions(&mut bar, proto, &result);
     }
     Ok(Json(bar))
 }
 
+const ICS_FUNCTION_SIZE: usize = 8;
+
 /// The four ICS function-code searches: snapshot page id, label, index and
-/// function field.
+/// function field (the key under `zeek`, and under `zeek_kw` once copied).
 pub(crate) const ICS_FUNCTION_SOURCES: &[(&str, &str, &str, &str)] = &[
-    ("ics-functions-modbus", "modbus", "zeek-v1-modbus_detailed-*", "zeek.func"),
-    ("ics-functions-s7comm", "s7comm", "zeek-v1-s7comm-*", "zeek.function_name"),
-    ("ics-functions-dnp3", "dnp3", "zeek-v1-dnp3-*", "zeek.fc_request"),
-    ("ics-functions-iec104", "iec104", "zeek-v1-iec104_asdu-*", "zeek.type_id"),
+    ("ics-functions-modbus", "modbus", "zeek-v1-modbus_detailed-*", "func"),
+    ("ics-functions-s7comm", "s7comm", "zeek-v1-s7comm-*", "function_name"),
+    ("ics-functions-dnp3", "dnp3", "zeek-v1-dnp3-*", "fc_request"),
+    ("ics-functions-iec104", "iec104", "zeek-v1-iec104_asdu-*", "type_id"),
 ];
 
 /// One protocol's request behind `/api/v1/charts/ics-functions`, shared
@@ -645,7 +766,7 @@ pub(crate) fn ics_function_body(field: &str) -> Value {
     json!({
         "size": 0,
         "query": attacker_window(WEEK),
-        "aggs": {"fn": {"terms": {"field": field, "size": 8}}}
+        "aggs": keyword_terms("fn", field, ICS_FUNCTION_SIZE, None, LegacyHint::Default)
     })
 }
 
@@ -823,10 +944,13 @@ pub async fn ja4x_fingerprints(State(state): State<AppState>) -> Result<Json<Bar
 /// a snapshot of exactly this request (`page_rollup`), served while recent.
 pub async fn ja4l_fingerprints(State(state): State<AppState>) -> Result<Json<Bar>, (StatusCode, String)> {
     if let Some(snapshot) = crate::page_rollup::read(&state, crate::page_rollup::JA4L_FINGERPRINTS).await {
-        return Ok(Json(bar_from(&snapshot, "ja4l")));
+        return Ok(Json(bar_from(&merge_keyword_legs(snapshot, "ja4l", JA4L_SIZE), "ja4l")));
     }
-    fingerprint_bar(&state, JA4L_INDICES, ja4l_body(), "ja4l").await.map(Json).map_err(bad_gateway)
+    let result = state.es.search_index(JA4L_INDICES, ja4l_body()).await.map_err(bad_gateway)?;
+    Ok(Json(bar_from(&merge_keyword_legs(result, "ja4l", JA4L_SIZE), "ja4l")))
 }
+
+const JA4L_SIZE: usize = 15;
 
 pub(crate) const JA4L_INDICES: &[&str] = &["zeek-v1-conn-*"];
 
@@ -836,7 +960,7 @@ pub(crate) fn ja4l_body() -> Value {
     json!({
         "size": 0,
         "query": attacker_window(WEEK),
-        "aggs": {"ja4l": {"terms": {"field": "zeek.ja4l", "size": 15}}}
+        "aggs": keyword_terms("ja4l", "ja4l", JA4L_SIZE, None, LegacyHint::Map)
     })
 }
 
@@ -1085,5 +1209,64 @@ mod fleet_filter_tests {
             excluded.iter().any(|value| value == "10.8.0.1"),
             "tunnel peer must be excluded on the fallback too, got {excluded:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod keyword_field_tests {
+    use super::*;
+
+    #[test]
+    fn keyword_terms_reads_the_copy_and_sends_the_rest_to_the_flattened_field() {
+        let aggs = keyword_terms("stacks", "ja4t", 20, Some(json!({"ips": {"cardinality": {"field": "source.ip"}}})), LegacyHint::Map);
+        assert_eq!(aggs["stacks"]["terms"], json!({"field": "zeek_kw.ja4t", "size": 20}));
+        assert_eq!(aggs["stacks"]["aggs"]["ips"]["cardinality"]["field"], "source.ip");
+        let legacy = &aggs["stacks_legacy"];
+        assert_eq!(legacy["filter"], json!({"bool": {"must_not": [{"exists": {"field": "zeek_kw.schema"}}]}}));
+        assert_eq!(legacy["aggs"]["stacks"]["terms"], json!({"field": "zeek.ja4t", "size": 20, "execution_hint": "map"}));
+        assert_eq!(legacy["aggs"]["stacks"]["aggs"], aggs["stacks"]["aggs"]);
+        let ics = keyword_terms("fn", "func", 8, None, LegacyHint::Default);
+        assert!(ics["fn_legacy"]["aggs"]["fn"]["terms"].get("execution_hint").is_none());
+        assert!(ics["fn"].get("aggs").is_none());
+        assert_eq!(tcp_stack_body()["aggs"]["stacks_legacy"]["aggs"]["stacks"]["terms"]["field"], "zeek.ja4t");
+        assert_eq!(ja4l_body()["aggs"]["ja4l"]["terms"]["field"], "zeek_kw.ja4l");
+        assert_eq!(ics_function_body("type_id")["aggs"]["fn"]["terms"]["field"], "zeek_kw.type_id");
+    }
+
+    #[test]
+    fn merge_keyword_legs_adds_up_same_keys_orders_and_cuts() {
+        let result = json!({"aggregations": {
+            "stacks": {"buckets": [
+                {"key": "a", "doc_count": 5, "ips": {"value": 2}},
+                {"key": "b", "doc_count": 1, "ips": {"value": 1}}
+            ]},
+            "stacks_legacy": {"doc_count": 99, "stacks": {"buckets": [
+                {"key": "b", "doc_count": 9, "ips": {"value": 4}},
+                {"key": "c", "doc_count": 3, "ips": {"value": 3}},
+                {"key": "d", "doc_count": 1, "ips": {"value": 1}}
+            ]}}
+        }});
+        let merged = merge_keyword_legs(result, "stacks", 3);
+        assert!(merged["aggregations"].get("stacks_legacy").is_none());
+        assert_eq!(merged["aggregations"]["stacks"]["buckets"], json!([
+            {"key": "b", "doc_count": 10, "ips": {"value": 5}},
+            {"key": "a", "doc_count": 5, "ips": {"value": 2}},
+            {"key": "c", "doc_count": 3, "ips": {"value": 3}}
+        ]));
+        let points = tcp_stack_points(&merged);
+        assert_eq!((points[0].name.as_str(), points[0].value), ("b", 5));
+    }
+
+    #[test]
+    fn merge_keyword_legs_leaves_a_one_leg_answer_alone() {
+        // A snapshot or answer written before #3911 has no legacy leg.
+        let old = json!({"aggregations": {"fn": {"buckets": [{"key": "READ_COILS", "doc_count": 4}]}}});
+        assert_eq!(merge_keyword_legs(old.clone(), "fn", 8), old);
+        // An index set without any keyword copy: everything is in the legacy leg.
+        let legacy_only = json!({"aggregations": {
+            "fn": {"buckets": []},
+            "fn_legacy": {"doc_count": 4, "fn": {"buckets": [{"key": "READ_COILS", "doc_count": 4}]}}
+        }});
+        assert_eq!(merge_keyword_legs(legacy_only, "fn", 8), old);
     }
 }
