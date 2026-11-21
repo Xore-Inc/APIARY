@@ -72,14 +72,14 @@ scripts/deploy-profile-sizing.py
 
 | profile | stacks | declared cpus | declared memory |
 |---|---|---|---|
-| `full` | 27 | 119.8 | 69.5 GiB |
-| `minimal-web` | 8 | 81 | 52.2 GiB |
-| `ics-focused` | 8 | 71.5 | 46.4 GiB |
+| `full` | 27 | 127.8 | 77.5 GiB |
+| `minimal-web` | 8 | 89 | 60.2 GiB |
+| `ics-focused` | 8 | 79.5 | 54.4 GiB |
 
 **These are ceilings, not measurements.** A `mem_limit` is the most a container
 may claim, so the column is an upper bound on what the profile could ask the
 host for if every stack peaked at once. It is not steady-state use: a
-`minimal-web` host does not sit at 52.1 GiB with two sensors running. Nothing
+`minimal-web` host does not sit at 60.2 GiB with two sensors running. Nothing
 here was measured under load, and the numbers are only as current as the last
 `cpus:` edit. `tests/docs/test_3328_profile_sizing_matches_compose.py`
 recomputes the table on every CI run and fails if it drifts.
