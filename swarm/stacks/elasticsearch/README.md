@@ -43,7 +43,7 @@ On a host without this stack (a fresh install), `install-homeserver.sh`
 brings honeypot-elk up with `--profile legacy`, without the shim, so the
 Compose ES runs. Moving it to the stack is the cutover below.
 
-## Cutover (done 2026-11-20/21)
+## Cutover (done 2026-11-21)
 
 1. Backup: an incremental snapshot `p9-pre-es-<ts>` of all non-dot indices,
    the global state and the `kibana` feature, at the default throttle. Record
@@ -65,6 +65,13 @@ Compose ES runs. Moving it to the stack is the cutover below.
 7. Add `start hp-elasticsearch-shim apiary-es` to the live overlay-attach
    list, commit `replicas: 1`, then `stackctl deploy elasticsearch`, so the
    sync points at that commit.
+
+Measured on 2026-11-21 (00:15Z): the flush and the stop took 4 s (exit
+143, the JVM's SIGTERM path), the task was GREEN with the same 534 shards
+24 s after the scale-up, and the shim came from the sync. Consumers on
+`honeynet` were without ES for 26 s (1 s probe). Filebeat rode the gap on its
+queue (924 failed publish attempts, all retried, 0 dropped). The doc counts of
+all 532 indices were at least the pre-stop record.
 
 ## Rollback
 

@@ -71,9 +71,10 @@ services:
     cap_add: [IPC_LOCK]    # bootstrap.memory_lock
     deploy:
       mode: replicated
-      # Lands at 0: the cutover scales it to 1 by hand after the Compose
-      # hp-elasticsearch has stopped (README.md).
-      replicas: 0
+      # Landed at 0 and scaled to 1 by hand after the Compose
+      # hp-elasticsearch had flushed and stopped (#3596 leg D cutover); this
+      # records the result.
+      replicas: 1
       # No VIP: IPVS drops idle TCP after 900 s, which breaks the pooled
       # client connections (backend, Filebeat, Kibana).
       endpoint_mode: dnsrr
