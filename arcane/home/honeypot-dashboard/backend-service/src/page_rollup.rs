@@ -61,6 +61,7 @@ pub const SOURCE_HEALTH_MODBUS: &str = "source-health-modbus";
 pub const OVERVIEW_MAIN: &str = "overview-dashboard-main";
 pub const OVERVIEW_BEHAVIOR: &str = "overview-dashboard-behavior";
 pub const OVERVIEW_KPIS_WINDOW: &str = "overview-kpis-window";
+pub const OVERVIEW_KPIS: &str = "overview-kpis";
 pub const FACETS_EVENTS: &str = "facets-events";
 pub const FACETS_EVENTS_PROVIDERS: &str = "facets-events-providers";
 pub const FILTER_VALUES: &str = "filter-values";
@@ -107,9 +108,10 @@ fn pages() -> Vec<Page> {
         page(JA4L_FINGERPRINTS, crate::charts::JA4L_INDICES, crate::charts::ja4l_body()),
         page(SOURCE_HEALTH, crate::es::EVENT_INDICES_AGG, crate::health::all_time_body()),
         page(SOURCE_HEALTH_MODBUS, crate::es::MODBUS_DETAIL_INDICES, crate::health::modbus_pdu_body()),
-        page(OVERVIEW_MAIN, crate::es::EVENT_INDICES_AGG, crate::dashboard::main_snapshot_body()),
+        page(OVERVIEW_MAIN, crate::es::EVENT_INDICES_AGG, crate::dashboard::main_body()),
         page(OVERVIEW_BEHAVIOR, crate::es::EVENT_INDICES_AGG, crate::dashboard::behavior_body()),
         page(OVERVIEW_KPIS_WINDOW, crate::es::EVENT_INDICES_AGG, crate::overview::live_window_body()),
+        page(OVERVIEW_KPIS, crate::es::EVENT_INDICES_AGG, crate::overview::fallback_body()),
         page(FACETS_EVENTS, crate::es::EVENT_INDICES_AGG, crate::facets::default_facet_body()),
         page(FACETS_EVENTS_PROVIDERS, crate::es::EVENT_INDICES_AGG, crate::facets::default_provider_body()),
         page(FILTER_VALUES, crate::es::EVENT_INDICES_AGG, crate::aggregates::filter_values_body()),
@@ -377,6 +379,7 @@ mod tests {
                 OVERVIEW_MAIN,
                 OVERVIEW_BEHAVIOR,
                 OVERVIEW_KPIS_WINDOW,
+                OVERVIEW_KPIS,
                 FACETS_EVENTS,
                 FACETS_EVENTS_PROVIDERS,
                 FILTER_VALUES,
@@ -400,7 +403,7 @@ mod tests {
         assert_eq!(by_id("ics-functions-modbus").indices, &["zeek-v1-modbus_detailed-*"][..]);
         assert_eq!(by_id(SOURCE_HEALTH_MODBUS).indices, crate::es::MODBUS_DETAIL_INDICES);
         // The fleet-wide reads skip the per-PDU Modbus log (#3908).
-        for id in [SOURCE_HEALTH, OVERVIEW_MAIN, OVERVIEW_BEHAVIOR, OVERVIEW_KPIS_WINDOW, FACETS_EVENTS, FILTER_VALUES, KILL_CHAIN_SANKEY] {
+        for id in [SOURCE_HEALTH, OVERVIEW_MAIN, OVERVIEW_BEHAVIOR, OVERVIEW_KPIS_WINDOW, OVERVIEW_KPIS, FACETS_EVENTS, FILTER_VALUES, KILL_CHAIN_SANKEY] {
             assert_eq!(by_id(id).indices, crate::es::EVENT_INDICES_AGG, "{id}");
         }
         // Every page is one parameter-free request: rebuilding it gives the
