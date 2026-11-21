@@ -83,8 +83,9 @@ services:
           - node.hostname == supermicro
       resources:
         limits:
-          cpus: "8.0"
-          memory: 12G
+          # #3913: 16 CPUs / 20G (heap stays 6g; the rest is page cache).
+          cpus: "16.0"
+          memory: 20G
       restart_policy:
         condition: any
         delay: 10s
