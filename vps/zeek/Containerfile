@@ -75,9 +75,16 @@ RUN python3 /tmp/hassh_optional_patch.py
 # whatever main moved to since the last rebuild. One --version applies to a
 # whole zkg invocation, so each parser gets its own call.
 #
-#   modbus          16428919  v2.0.0 tag (2025-09-03); main has since moved
-#                             to 27f22b41 (2026-08-05) -- taking it is a
-#                             deliberate docs/CONTAINER-UPDATES.md bump
+#   modbus          27f22b41  main (2026-08-05). Bumped from v2.0.0
+#                             (16428919) in #3908: v2.0.0's
+#                             connection_state_remove re-logged every
+#                             still-pending unmatched request on EVERY
+#                             connection close fleet-wide and never deleted
+#                             it (upstream issue #20, fixed in d57f3179). 13
+#                             real PDUs became ~175,000 modbus_detailed lines
+#                             an hour. 27f22b41 keys the pending tables per
+#                             connection and clears them; the log columns
+#                             are unchanged.
 #   dnp3            b31dbade  main tip at pin time
 #   enip            9ad78fbe  main tip at pin time
 #   bacnet          b34b92eb  main tip at pin time
@@ -89,7 +96,7 @@ RUN python3 /tmp/hassh_optional_patch.py
 #
 # dev/sensing-lab/Containerfile mirrors this table line for line;
 # scripts/check-zeek-pin-parity.py fails CI when the two files disagree.
-RUN zkg install --force --skiptests --version 16428919f5efb034eda625bf989c68543e2a5e76 \
+RUN zkg install --force --skiptests --version 27f22b41fd9839c0bad1b98df9c6289e578fd02a \
         https://github.com/cisagov/icsnpp-modbus && \
     zkg install --force --skiptests --version b31dbadeceb1cbcda16aef89c650559cd177dd7e \
         https://github.com/cisagov/icsnpp-dnp3 && \
