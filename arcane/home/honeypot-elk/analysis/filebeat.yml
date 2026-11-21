@@ -202,6 +202,14 @@ filebeat.inputs:
     # content-hash window can.
     id: zeek-logs
     file_identity.native: ~
+    # #3912: close a harvester as soon as it reaches EOF. With
+    # harvester_limit (#3284) and ignore_older 72h, a restart opens 64
+    # harvesters on finished hourly rotations that are already at EOF, and
+    # they never close on inactivity because they never read a line, so the
+    # live files never get a harvester: zeek ingest stopped for good after
+    # the 2026-11-21 22:41Z restart. A finished rotation is done at EOF; the
+    # live file is reopened at its offset on the next scan.
+    close.reader.on_eof: true
     # #3284: this directory accumulates ~13,700 hourly rotation files (2026-09-03
     # onward) and nothing prunes them, so every restart made filestream open a
     # harvester per file until the Go runtime hit its 10000-thread limit. The
@@ -235,6 +243,14 @@ filebeat.inputs:
     # identity is immune to it because it never hashes file content.
     id: zeek-proxy-logs
     file_identity.native: ~
+    # #3912: close a harvester as soon as it reaches EOF. With
+    # harvester_limit (#3284) and ignore_older 72h, a restart opens 64
+    # harvesters on finished hourly rotations that are already at EOF, and
+    # they never close on inactivity because they never read a line, so the
+    # live files never get a harvester: zeek ingest stopped for good after
+    # the 2026-11-21 22:41Z restart. A finished rotation is done at EOF; the
+    # live file is reopened at its offset on the next scan.
+    close.reader.on_eof: true
     # #3284: same cap as zeek-logs, same reason -- this glob matches 834
     # accumulated hourly rotations and one harvester per file is what exhausts
     # the runtime's thread limit on restart.
