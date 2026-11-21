@@ -369,6 +369,43 @@ of leaving an operator to compare N identical percentages by hand. Shape:
 stack-private volume never bind-mounted cross-stack) are unaffected --
 there is only ever one of them per check.
 
+## Stopped containers and `hp-docker-hygiene` (#3658, #3841)
+
+`hp-docker-hygiene` (`arcane/home/honeypot-utilities/analysis/docker-hygiene.sh`)
+removes stopped containers 5 minutes after it starts and weekly after that
+(plus an age-bounded dangling-image prune). A stopped container is removed
+unless it is protected by one of two labels:
+
+| Label | Set by | Effect |
+| --- | --- | --- |
+| `com.docker.compose.project` | Compose, automatically | Never removed (#3658). A stopped compose service is still part of its stack. |
+| `apiary.hygiene=keep` | You, at `docker create` / `docker run` time | Never removed (#3841). The opt-out for containers made outside Compose. |
+
+The value must be exactly `keep`; another value, or no value, does not opt
+out. Labels cannot be added to an existing container: to protect one,
+recreate it with `--label apiary.hygiene=keep`. A container made with
+`docker create` and meant to be started and stopped by hand (a benchmark
+Ollama, a rollback copy kept for a few days) needs the label, or the next
+hygiene pass deletes it together with its writable layer.
+
+```bash
+docker create --name my-benchmark --label apiary.hygiene=keep ...
+```
+
+The pass lists the stopped containers (`created`, `exited`, `dead`) and the
+two protected sets, then deletes the difference with `DELETE
+/containers/{id}` (no force, no volume removal). It does not use `POST
+/containers/prune` because prune cannot express "skip the compose label or
+the keep label": repeated `label!` values are ANDed, so
+`label!=[compose, keep]` only spares a container that carries both. If any
+of the three listing requests fails, the pass removes nothing and says so in
+the log. The log line to look for is
+`docker-hygiene: containers: N removed, K kept (apiary.hygiene=keep), M kept (compose-managed), F failed`.
+
+`HYGIENE_SCOPE_LABEL=key=value` (unset in the stack) restricts the removal
+candidates to containers that also carry that label. It exists to exercise
+the real script against throwaway containers.
+
 ## Pausing decoys to free host CPU (#3135)
 
 When a benchmark or training leg needs more headroom than the homeserver has,
