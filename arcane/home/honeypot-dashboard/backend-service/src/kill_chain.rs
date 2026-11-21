@@ -93,7 +93,7 @@ async fn technique_counts(state: &AppState) -> anyhow::Result<HashMap<String, u6
             "techs": {"terms": {"field": "honeypot.canonical_attck_techniques", "size": 40}}
         }
     });
-    let result = state.es.search(body).await?;
+    let result = state.es.search_agg(body).await?;
     let aggs = &result["aggregations"];
     let mut counts: HashMap<String, u64> = HashMap::new();
     for bucket in aggs["techs"]["buckets"].as_array().into_iter().flatten() {
@@ -275,7 +275,7 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
             }
         }
     });
-    let result = state.es.search(body).await.map_err(bad_gateway)?;
+    let result = state.es.search_agg(body).await.map_err(bad_gateway)?;
     let aggs = &result["aggregations"];
     let mut flows: HashMap<(String, String), u64> = HashMap::new();
     let mut touched: HashMap<String, bool> = HashMap::new();

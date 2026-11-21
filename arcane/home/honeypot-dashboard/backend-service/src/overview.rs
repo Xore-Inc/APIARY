@@ -287,7 +287,7 @@ fn timeline_from_buckets(buckets: &[Value]) -> Vec<HourlyByProtocol> {
 async fn live_window(state: &AppState) -> Result<LiveWindow, (StatusCode, String)> {
     let result = state
         .es
-        .search(json!({
+        .search_agg(json!({
             "size": 0,
             "track_total_hits": false,
             "query": {"range": {"@timestamp": {"gte": "now-48h"}}},
@@ -368,7 +368,7 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     });
     let result = state
         .es
-        .search(body)
+        .search_agg(body)
         .await
         .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
 

@@ -53,6 +53,42 @@ pub const EVENT_INDICES: &[&str] = &[
     "traefik-v1-*",
 ];
 
+/// Zeek's per-PDU Modbus log (`modbus_detailed.log`), from both Zeek
+/// instances. One document per Modbus request or response.
+///
+/// #3908: these indices held 197.6 M of the 333 M event documents on
+/// 2026-11-21 (59 %), growing by 14.5 M a day from 29 addresses that poll
+/// the ICS decoy without pause. Every fleet-wide aggregation paid for them:
+/// source-health spent 13 of its 14 s on these four shards alone.
+pub const MODBUS_DETAIL_INDICES: &[&str] = &["zeek-v1-modbus_detailed-*", "zeek-proxy-v1-modbus_detailed-*"];
+
+/// `EVENT_INDICES` without `MODBUS_DETAIL_INDICES`: what the fleet-wide
+/// aggregates read (#3908). Overview KPIs and panels, the hourly fleet,
+/// geo and ATT&CK rollups, source health, the explorer's facets and the
+/// filter-bar vocabularies count events *across the fleet*, and there the
+/// Modbus chatter of a handful of pollers drowned every other sensor and
+/// cost seconds per request.
+///
+/// Everything else keeps the full set: the event explorer, search, the ICS
+/// charts (which read their own indices), sensor pages and every per-IP,
+/// per-session or per-event read still list each PDU, so the data stays
+/// searchable. Source health reports the excluded documents separately
+/// (`modbus_pdus`), so its zeek totals stay explainable.
+///
+/// The `-` entries are Elasticsearch's index exclusion syntax and apply to
+/// the patterns listed before them, so they must stay last.
+pub const EVENT_INDICES_AGG: &[&str] = &[
+    "honeypot-v2-*",
+    "suricata-v2-*",
+    "portbridge-v2-*",
+    "zeek-v1-*",
+    "zeek-proxy-v1-*",
+    "huginn-v1-*",
+    "traefik-v1-*",
+    "-zeek-v1-modbus_detailed-*",
+    "-zeek-proxy-v1-modbus_detailed-*",
+];
+
 /// Every index family THIS TIER WRITES TO, as the index expressions
 /// `/readyz` asks Elasticsearch about (`Es::write_blocked`, #3317).
 ///
@@ -615,6 +651,13 @@ impl Es {
         self.search_index(EVENT_INDICES, body).await
     }
 
+    /// One `_search` against `EVENT_INDICES_AGG`: the event indices without
+    /// Zeek's per-PDU Modbus log (#3908). For fleet-wide aggregations only;
+    /// see `EVENT_INDICES_AGG` for which reads use it.
+    pub async fn search_agg(&self, body: Value) -> anyhow::Result<Value> {
+        self.search_index(EVENT_INDICES_AGG, body).await
+    }
+
     /// `_search` against arbitrary indices — the worker/store index
     /// families (campaigns-v1, attackers-v1, dashboard-*-v1, ...).
     pub async fn search_index(&self, indices: &[&str], body: Value) -> anyhow::Result<Value> {
@@ -1068,5 +1111,21 @@ mod tests {
     fn empty_keep_list_still_produces_a_valid_query() {
         let body = Es::except_query(&[]);
         assert_eq!(body["query"]["bool"]["must_not"][0]["ids"]["values"], serde_json::json!([]));
+    }
+
+    /// #3908: the aggregate list is the read list minus the per-PDU Modbus
+    /// log, nothing else. An index family added to EVENT_INDICES but not
+    /// here would vanish from every fleet-wide count silently, and an
+    /// exclusion listed before its pattern would exclude nothing.
+    #[test]
+    fn aggregate_indices_are_the_event_indices_minus_modbus_detail() {
+        let (included, excluded): (Vec<&str>, Vec<&str>) =
+            EVENT_INDICES_AGG.iter().partition(|index| !index.starts_with('-'));
+        assert_eq!(included, EVENT_INDICES.to_vec());
+        let excluded: Vec<&str> = excluded.iter().map(|index| &index[1..]).collect();
+        assert_eq!(excluded, MODBUS_DETAIL_INDICES.to_vec());
+        let first_exclusion = EVENT_INDICES_AGG.iter().position(|index| index.starts_with('-')).unwrap();
+        assert_eq!(first_exclusion, EVENT_INDICES.len(), "exclusions must follow every pattern they apply to");
+        assert!(MODBUS_DETAIL_INDICES.iter().all(|index| index.contains("modbus_detailed")));
     }
 }

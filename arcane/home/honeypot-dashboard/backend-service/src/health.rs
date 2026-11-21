@@ -24,6 +24,14 @@ pub struct SensorHealth {
     /// speaks rather than a flat hour for the whole fleet — see
     /// `sensor_state` for why (#1931).
     pub state: String,
+    /// #3908: documents in Zeek's per-PDU Modbus log from this sensor, all
+    /// time. They are NOT in `documents` (or in any total on this page):
+    /// one doc per Modbus request or response from a few dozen pollers was
+    /// 59 % of every event and made this page take 14 s. Present only on
+    /// the sensors that write that log, so the zeek rows can still say
+    /// where the rest of their data went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modbus_pdus: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +144,41 @@ pub struct SourceHealth {
     /// totals beside them; without this the discrepancy reads as a bug in
     /// the dashboard rather than a property of tunnel-delivered traffic.
     pub unattributed_24h: u64,
+    /// #3908: all documents in Zeek's per-PDU Modbus log
+    /// (`es::MODBUS_DETAIL_INDICES`), counted separately because every
+    /// other figure here leaves them out; the per-sensor split is on the
+    /// zeek rows' `modbus_pdus`. 0 when the count could not be read.
+    pub modbus_pdus: u64,
+}
+
+/// Total and per-sensor document counts of the per-PDU Modbus log (#3908).
+/// A cheap read on its own: no query, one terms aggregation on a field
+/// that is constant per index. A failure degrades to "unknown" (all zero)
+/// rather than failing the page.
+async fn modbus_pdu_counts(state: &AppState) -> (u64, std::collections::HashMap<String, u64>) {
+    let body = json!({
+        "size": 0,
+        "track_total_hits": true,
+        "aggs": {"sensors": {"terms": {"field": "event.sensor", "size": 10}}}
+    });
+    match state.es.search_index(crate::es::MODBUS_DETAIL_INDICES, body).await {
+        Ok(result) => parse_modbus_pdu_counts(&result),
+        Err(error) => {
+            tracing::warn!(%error, "source-health: modbus PDU count failed");
+            (0, Default::default())
+        }
+    }
+}
+
+fn parse_modbus_pdu_counts(result: &serde_json::Value) -> (u64, std::collections::HashMap<String, u64>) {
+    let total = result["hits"]["total"]["value"].as_u64().unwrap_or(0);
+    let per_sensor = result["aggregations"]["sensors"]["buckets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|bucket| Some((bucket["key"].as_str()?.to_string(), bucket["doc_count"].as_u64()?)))
+        .collect();
+    (total, per_sensor)
 }
 
 /// Uptime + memory from /proc/self — zeroes off Linux or on parse failure
@@ -390,11 +433,11 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
             }
         }
     });
-    let result = state
-        .es
-        .search(body)
-        .await
-        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+    // #3908: the fleet-wide aggregation skips the per-PDU Modbus log, which
+    // is counted on its own beside it.
+    let (result, (modbus_pdus, modbus_per_sensor)) =
+        tokio::join!(state.es.search_agg(body), modbus_pdu_counts(&state));
+    let result = result.map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
 
     let cluster_status = state.es.cluster_status().await;
     let total_documents = result["hits"]["total"]["value"].as_u64().unwrap_or(0);
@@ -427,8 +470,10 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
                     let last_ms = bucket["last"]["value"].as_f64().unwrap_or(0.0) as i64;
                     let age_s = ((now_ms - last_ms) / 1000).max(0);
                     let recent_7d = bucket["recent"]["doc_count"].as_u64().unwrap_or(0);
+                    let sensor = bucket["key"].as_str().unwrap_or("").to_string();
                     SensorHealth {
-                        sensor: bucket["key"].as_str().unwrap_or("").to_string(),
+                        modbus_pdus: modbus_per_sensor.get(&sensor).copied(),
+                        sensor,
                         documents: bucket["doc_count"].as_u64().unwrap_or(0),
                         last_seen: bucket["last"]["value_as_string"].as_str().unwrap_or("").to_string(),
                         state: sensor_state(age_s, recent_7d).to_string(),
@@ -452,6 +497,7 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
         // the card states its own reason.
         webhook: crate::webhook_delivery::summary(&state.es).await,
         unattributed_24h: result["aggregations"]["unattributed"]["doc_count"].as_u64().unwrap_or(0),
+        modbus_pdus,
     }))
 }
 
@@ -459,6 +505,22 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
 #[cfg(test)]
 mod tests {
     use super::sensor_state;
+
+    #[test]
+    fn modbus_pdu_counts_read_total_and_per_sensor() {
+        let result = serde_json::json!({
+            "hits": {"total": {"value": 218_332_307u64, "relation": "eq"}},
+            "aggregations": {"sensors": {"buckets": [
+                {"key": "zeek", "doc_count": 178_222_049u64},
+                {"key": "zeek-proxy", "doc_count": 40_110_258u64}
+            ]}}
+        });
+        let (total, per_sensor) = super::parse_modbus_pdu_counts(&result);
+        assert_eq!(total, 218_332_307);
+        assert_eq!(per_sensor.get("zeek"), Some(&178_222_049));
+        assert_eq!(per_sensor.get("zeek-proxy"), Some(&40_110_258));
+        assert_eq!(super::parse_modbus_pdu_counts(&serde_json::Value::Null), (0, Default::default()));
+    }
 
     // Rates measured on the live fleet, 2026-08-25.
     const COWRIE_7D: u64 = 2_000_000; // millions a day

@@ -68,6 +68,18 @@ const RETENTION_HOURS: i64 = 24 * 8;
 const BACKFILL_PER_CYCLE: usize = 24;
 
 const SENSOR_LIST_CAP: usize = 60;
+
+/// Marks an `_all` fleet doc as counted over `EVENT_INDICES_AGG`, i.e.
+/// without Zeek's per-PDU Modbus log (#3908). `missing_buckets` treats a
+/// fleet doc without it as absent, so the hours written before the change
+/// are recomputed by the ordinary backfill instead of mixing both scopes in
+/// one 48 h KPI window for a day.
+const FLEET_SCOPE_FIELD: &str = "modbus_detail_excluded";
+
+/// The `bucket` format of the coverage scan's terms keys: `bucket` is
+/// mapped as a date, so without an explicit format the keys come back as
+/// epoch millis and never equal a `bucket_key` string.
+const BUCKET_KEY_FORMAT: &str = "yyyy-MM-dd'T'HH:00'Z'";
 const GROUP_CAP: u64 = 1000;
 /// Kill-chain hourly queries cap technique/terms sizes exactly where the
 /// live endpoints do (kill_chain.rs).
@@ -317,7 +329,8 @@ fn clean_exclusions() -> Vec<Value> {
     .unwrap_or_default()
 }
 
-/// One search over `EVENT_INDICES` producing everything the `_all` slice
+/// One search over `EVENT_INDICES_AGG` (#3908: no per-PDU Modbus log)
+/// producing everything the `_all` slice
 /// needs for one bucket: the plain events count (KPI parity) plus the
 /// logins count, and the #1677-excluded events count + per-sensor counts
 /// (heatmap parity).
@@ -338,7 +351,7 @@ async fn compute_fleet_slice(
             }
         }
     });
-    let result = state.es.search(body).await?;
+    let result = state.es.search_agg(body).await?;
     Ok(json!({
         "events": result["hits"]["total"]["value"].as_u64().unwrap_or(0),
         "logins": result["aggregations"]["logins"]["doc_count"].as_u64().unwrap_or(0),
@@ -457,7 +470,7 @@ async fn write_overview_bucket(state: &AppState, hour: DateTime<Utc>) -> anyhow:
     .await?;
 
     let operations = [
-        overview_doc(FAMILY_ALL, hour, fleet),
+        overview_doc(FAMILY_ALL, hour, fleet.with_fields(json!({FLEET_SCOPE_FIELD: true}))),
         overview_doc(
             FAMILY_ZEEK,
             hour,
@@ -505,7 +518,7 @@ async fn write_attack_bucket(state: &AppState, hour: DateTime<Utc>) -> anyhow::R
         "aggs": {"techs":
             {"terms": {"field": "honeypot.canonical_attck_techniques", "size": TECH_TERMS_CAP}}}
     });
-    let techs = kv_list_from_buckets(&state.es.search(tech_body).await?["aggregations"]["techs"]);
+    let techs = kv_list_from_buckets(&state.es.search_agg(tech_body).await?["aggregations"]["techs"]);
 
     let group_body = json!({
         "size": 0,
@@ -529,7 +542,7 @@ async fn write_attack_bucket(state: &AppState, hour: DateTime<Utc>) -> anyhow::R
             }
         }
     });
-    let grouped = state.es.search(group_body).await?;
+    let grouped = state.es.search_agg(group_body).await?;
     let mut flows: HashMap<(String, String), u64> = HashMap::new();
     let mut touches: HashMap<String, u64> = HashMap::new();
     for group_agg in ["sessions", "ips"] {
@@ -633,7 +646,7 @@ async fn write_geo_cycle(state: &AppState) -> anyhow::Result<()> {
             }
         }
     });
-    let result = state.es.search(body).await?;
+    let result = state.es.search_agg(body).await?;
     let buckets = result["aggregations"]["points"]["by_place"]["buckets"]
         .as_array()
         .cloned()
@@ -711,6 +724,27 @@ async fn prune_old_buckets(state: &AppState, now: DateTime<Utc>) {
     }
 }
 
+/// The coverage scan: every hour that already has a current-scope `_all`
+/// fleet doc (the sibling netflow docs are written in the same bulk call).
+///
+/// #3908 fixed two things here. The terms keys of a date field are epoch
+/// millis unless a format is given, so `existing` used to stay empty, every
+/// hour read as missing and each cycle recomputed the newest 24 complete
+/// hours in full. And a fleet doc from before the Modbus exclusion is not
+/// current, so it is backfilled like a missing one.
+fn coverage_scan_body(since_key: &str) -> Value {
+    json!({
+        "size": 0,
+        "track_total_hits": false,
+        "query": {"bool": {"filter": [
+            {"range": {"bucket": {"gte": since_key}}},
+            {"term": {"family.keyword": FAMILY_ALL}},
+            {"term": {FLEET_SCOPE_FIELD: true}}
+        ]}},
+        "aggs": {"buckets": {"terms": {"field": "bucket", "size": 1000, "format": BUCKET_KEY_FORMAT}}}
+    })
+}
+
 /// Which hour buckets still lack a rollup doc: expected = the retention
 /// window ending at the current partial hour; existing = one cheap ids
 /// query per index. Current + previous hour are always rewritten regardless
@@ -724,16 +758,11 @@ async fn missing_buckets(state: &AppState, now: DateTime<Utc>) -> anyhow::Result
             .es
             .search_index(
                 &[index],
-                json!({
-                    "size": 0,
-                    "track_total_hits": false,
-                    "query": {"range": {"bucket": {"gte": bucket_key(earliest)}}},
-                    "aggs": {"buckets": {"terms": {"field": "bucket", "size": 1000}}}
-                }),
+                coverage_scan_body(&bucket_key(earliest)),
             )
             .await?;
         for bucket in result["aggregations"]["buckets"]["buckets"].as_array().into_iter().flatten() {
-            existing.insert(bucket["key"].as_str().unwrap_or("").to_string());
+            existing.insert(bucket["key_as_string"].as_str().unwrap_or("").to_string());
         }
     }
     let mut missing: Vec<DateTime<Utc>> = (0..RETENTION_HOURS)
@@ -900,5 +929,20 @@ mod tests {
         let (pairs, touched) = tactic_pairs(&["T1110"]);
         assert!(pairs.is_empty());
         assert!(touched.contains("Credential Access"));
+    }
+
+    #[test]
+    fn coverage_scan_keys_match_bucket_keys_and_require_the_current_scope() {
+        let body = coverage_scan_body("2026-11-20T13:00Z");
+        let terms = &body["aggs"]["buckets"]["terms"];
+        assert_eq!(terms["field"], "bucket");
+        // Joda-style pattern ES applies to the date keys: the literal parts
+        // must render exactly what bucket_key() writes.
+        assert_eq!(terms["format"], "yyyy-MM-dd'T'HH:00'Z'");
+        assert_eq!(bucket_key(hour(0)).len(), "2026-11-20T13:00Z".len());
+        assert!(bucket_key(hour(0)).ends_with(":00Z"));
+        let filters = body["query"]["bool"]["filter"].as_array().unwrap();
+        assert!(filters.contains(&json!({"term": {"family.keyword": "_all"}})));
+        assert!(filters.contains(&json!({"term": {FLEET_SCOPE_FIELD: true}})));
     }
 }
