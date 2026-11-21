@@ -284,18 +284,29 @@ fn timeline_from_buckets(buckets: &[Value]) -> Vec<HourlyByProtocol> {
 }
 
 /// One live query for everything the rollup can't carry.
+/// #3910: the worker's snapshot of [`live_window_body`] (`page_rollup`)
+/// while a recent one exists, else the live search.
 async fn live_window(state: &AppState) -> Result<LiveWindow, (StatusCode, String)> {
+    if let Some(snapshot) = crate::page_rollup::read(state, crate::page_rollup::OVERVIEW_KPIS_WINDOW).await {
+        return Ok(parse_live_window(&snapshot["aggregations"]));
+    }
     let result = state
         .es
-        .search_agg(json!({
-            "size": 0,
-            "track_total_hits": false,
-            "query": {"range": {"@timestamp": {"gte": "now-48h"}}},
-            "aggs": live_window_aggs()
-        }))
+        .search_agg(live_window_body())
         .await
         .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
     Ok(parse_live_window(&result["aggregations"]))
+}
+
+/// The live-only half of `/api/v1/overview/kpis` on its rollup path,
+/// shared with its snapshot.
+pub(crate) fn live_window_body() -> Value {
+    json!({
+        "size": 0,
+        "track_total_hits": false,
+        "query": {"range": {"@timestamp": {"gte": "now-48h"}}},
+        "aggs": live_window_aggs()
+    })
 }
 
 /// KPI counters behind the overview tiles.

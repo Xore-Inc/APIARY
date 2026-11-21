@@ -516,23 +516,37 @@ pub async fn os_distribution(State(state): State<AppState>) -> Result<Json<Vec<P
 ///
 /// Both charts coexist while p0f still runs. Retiring p0f is what removes the
 /// other one.
+///
+/// #3910: `zeek` is `flattened` here too, so this walks every key of every
+/// conn document (13 s on 2026-11-21). The worker keeps a snapshot of
+/// exactly this request (`page_rollup`), served while recent.
 pub async fn tcp_stack_clusters(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PiePoint>>, (StatusCode, String)> {
-    let body = json!({
+    let result = match crate::page_rollup::read(&state, crate::page_rollup::TCP_STACK_CLUSTERS).await {
+        Some(snapshot) => snapshot,
+        None => state.es.search_index(TCP_STACK_INDICES, tcp_stack_body()).await.map_err(bad_gateway)?,
+    };
+    Ok(Json(tcp_stack_points(&result)))
+}
+
+pub(crate) const TCP_STACK_INDICES: &[&str] = &["zeek-v1-conn-*"];
+
+/// The request behind `/api/v1/charts/tcp-stack-clusters`, shared with its
+/// snapshot.
+pub(crate) fn tcp_stack_body() -> Value {
+    json!({
         "size": 0,
         "query": attacker_window(OVERVIEW_WINDOW),
         "aggs": {"stacks": {
             "terms": {"field": "zeek.ja4t", "size": 20},
             "aggs": {"ips": {"cardinality": {"field": "source.ip"}}}
         }}
-    });
-    let result = state
-        .es
-        .search_index(&["zeek-v1-conn-*"], body)
-        .await
-        .map_err(bad_gateway)?;
-    let points = result["aggregations"]["stacks"]["buckets"]
+    })
+}
+
+fn tcp_stack_points(result: &Value) -> Vec<PiePoint> {
+    result["aggregations"]["stacks"]["buckets"]
         .as_array()
         .into_iter()
         .flatten()
@@ -543,8 +557,7 @@ pub async fn tcp_stack_clusters(
             name: bucket["key"].as_str().unwrap_or("").to_string(),
             value: bucket["ips"]["value"].as_u64().unwrap_or(0),
         })
-        .collect();
-    Ok(Json(points))
+        .collect()
 }
 
 async fn fingerprint_bar(state: &AppState, indices: &[&str], body: Value, agg: &str) -> anyhow::Result<Bar> {
@@ -596,36 +609,55 @@ fn bar_from(result: &Value, agg: &str) -> Bar {
 /// and the noise around them is not. One sample held 3 600 connections to
 /// port 20000 and exactly two DNP3 records — which is the argument for the
 /// chart, since an alert-only view loses those two entirely.
+///
+/// #3910: each of the four searches is a snapshot of its own
+/// (`page_rollup`, `ics-functions-<protocol>`); a protocol whose snapshot is
+/// missing or old is read live, the others are not.
 pub async fn ics_functions(State(state): State<AppState>) -> Result<Json<Bar>, (StatusCode, String)> {
-    const SOURCES: &[(&str, &str, &str)] = &[
-        ("modbus", "zeek-v1-modbus_detailed-*", "zeek.func"),
-        ("s7comm", "zeek-v1-s7comm-*", "zeek.function_name"),
-        ("dnp3", "zeek-v1-dnp3-*", "zeek.fc_request"),
-        ("iec104", "zeek-v1-iec104_asdu-*", "zeek.type_id"),
-    ];
-
     let mut bar = Bar { categories: Vec::new(), values: Vec::new() };
-    for (proto, index, field) in SOURCES {
-        let body = json!({
-            "size": 0,
-            "query": attacker_window(WEEK),
-            "aggs": {"fn": {"terms": {"field": *field, "size": 8}}}
-        });
-        // One dead index must not blank the whole chart: a protocol nobody has
-        // probed this week is a normal state, not an error.
-        let Ok(result) = state.es.search_index(&[*index], body).await else {
-            continue;
+    for (page, proto, index, field) in ICS_FUNCTION_SOURCES {
+        let result = match crate::page_rollup::read(&state, page).await {
+            Some(snapshot) => snapshot,
+            // One dead index must not blank the whole chart: a protocol
+            // nobody has probed this week is a normal state, not an error.
+            None => match state.es.search_index(&[*index], ics_function_body(field)).await {
+                Ok(result) => result,
+                Err(_) => continue,
+            },
         };
-        for bucket in result["aggregations"]["fn"]["buckets"].as_array().into_iter().flatten() {
-            let name = bucket["key"].as_str().unwrap_or("");
-            if name.is_empty() {
-                continue;
-            }
-            bar.categories.push(format!("{proto}: {name}"));
-            bar.values.push(bucket["doc_count"].as_u64().unwrap_or(0));
-        }
+        push_ics_functions(&mut bar, proto, &result);
     }
     Ok(Json(bar))
+}
+
+/// The four ICS function-code searches: snapshot page id, label, index and
+/// function field.
+pub(crate) const ICS_FUNCTION_SOURCES: &[(&str, &str, &str, &str)] = &[
+    ("ics-functions-modbus", "modbus", "zeek-v1-modbus_detailed-*", "zeek.func"),
+    ("ics-functions-s7comm", "s7comm", "zeek-v1-s7comm-*", "zeek.function_name"),
+    ("ics-functions-dnp3", "dnp3", "zeek-v1-dnp3-*", "zeek.fc_request"),
+    ("ics-functions-iec104", "iec104", "zeek-v1-iec104_asdu-*", "zeek.type_id"),
+];
+
+/// One protocol's request behind `/api/v1/charts/ics-functions`, shared
+/// with its snapshot.
+pub(crate) fn ics_function_body(field: &str) -> Value {
+    json!({
+        "size": 0,
+        "query": attacker_window(WEEK),
+        "aggs": {"fn": {"terms": {"field": field, "size": 8}}}
+    })
+}
+
+fn push_ics_functions(bar: &mut Bar, proto: &str, result: &Value) {
+    for bucket in result["aggregations"]["fn"]["buckets"].as_array().into_iter().flatten() {
+        let name = bucket["key"].as_str().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        bar.categories.push(format!("{proto}: {name}"));
+        bar.values.push(bucket["doc_count"].as_u64().unwrap_or(0));
+    }
 }
 
 #[utoipa::path(

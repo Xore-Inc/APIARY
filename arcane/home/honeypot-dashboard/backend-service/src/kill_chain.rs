@@ -17,7 +17,7 @@
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::AppState;
@@ -244,7 +244,13 @@ async fn sankey_from_rollup(state: &AppState) -> Option<SankeyData> {
     security(("serviceToken" = [])),
 )]
 pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (StatusCode, String)> {
-    // #2046: rolled links/touches are the primary path; the two-level
+    // #3910: the worker's snapshot of the live grouping below (`page_rollup`)
+    // answers first while recent: one document read, where the rolled
+    // hours (#2046) are two searches and the live grouping is 1-2 s.
+    if let Some(snapshot) = crate::page_rollup::read(&state, crate::page_rollup::KILL_CHAIN_SANKEY).await {
+        return Ok(Json(sankey_from_groups(&snapshot)));
+    }
+    // #2046: rolled links/touches are the next path; the two-level
     // grouping aggregation below remains the fall-through while coverage
     // is missing. Node/link assembly is identical either way.
     if crate::rollups::window_covered(&state, 48).await {
@@ -252,10 +258,16 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
             return Ok(Json(data));
         }
     }
-    // Per-session (or per-IP for sessionless sensors) technique sets, each
-    // group flowing one unit between consecutive touched tactics — same
-    // grouping fallback as buildKillChainSankey.
-    let body = json!({
+    let result = state.es.search_agg(sankey_body()).await.map_err(bad_gateway)?;
+    Ok(Json(sankey_from_groups(&result)))
+}
+
+/// The live request behind `/api/v1/charts/kill-chain-sankey`, shared with
+/// its snapshot: per-session (or per-IP for sessionless sensors) technique
+/// sets, each group flowing one unit between consecutive touched tactics --
+/// same grouping fallback as buildKillChainSankey.
+pub(crate) fn sankey_body() -> Value {
+    json!({
         "size": 0,
         // #2145: conpot healthchecks arrive tagged T0886, so unfiltered
         // the fleet's own probes would count as technique usage in both
@@ -274,8 +286,11 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
                 "aggs": {"techs": {"terms": {"field": "honeypot.canonical_attck_techniques", "size": 12}}}
             }
         }
-    });
-    let result = state.es.search_agg(body).await.map_err(bad_gateway)?;
+    })
+}
+
+/// Nodes and links from an answer to [`sankey_body`] (or its snapshot).
+fn sankey_from_groups(result: &Value) -> SankeyData {
     let aggs = &result["aggregations"];
     let mut flows: HashMap<(String, String), u64> = HashMap::new();
     let mut touched: HashMap<String, bool> = HashMap::new();
@@ -307,7 +322,7 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
         .map(|((source, target), value)| SankeyLink { source, target, value })
         .collect();
     links.sort_by_key(|link| (tactic_index(&link.source), tactic_index(&link.target)));
-    Ok(Json(SankeyData { nodes, links }))
+    SankeyData { nodes, links }
 }
 
 // --- Campaign timeline (Go: timelineRow) ---

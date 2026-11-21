@@ -108,6 +108,199 @@ fn limit_aggs(mut body: Value, allowed: &HashSet<&str>) -> Value {
 
 const WINDOW: &str = "now-48h";
 
+/// The overview's main search (every main slice), shared with its
+/// snapshot.
+fn main_body() -> Value {
+    json!({
+    "size": 0,
+    // #1677: self-generated probe traffic is excluded from every figure on
+    // this page, not just from top_ips. A Docker healthcheck connecting to
+    // its own sensor is not an attack, and it was inflating sensor
+    // rankings, event counts and -- because conpot's healthcheck events
+    // arrive tagged T0886 -- the MITRE ICS technique tallies. 312,905 such
+    // events in 24 hours, 13.5% of everything ingested.
+    "query": {"bool": {
+        "filter": [{"range": {"@timestamp": {"gte": WINDOW}}}],
+        "must_not": [
+            crate::es::internal_probe_exclusion(),
+            // #1677: and the fleet's own traffic -- see self_addresses().
+            {"terms": {"source.ip": self_addresses()}}
+        ]
+    }},
+    "aggs": {
+        "sensors": {
+            "terms": {"field": "event.sensor", "size": 50},
+            "aggs": {"last_seen": {"max": {"field": "@timestamp"}}}
+        },
+        "protocols": {"terms": {"field": "network.protocol", "size": 30}},
+        "ports": {"terms": {"field": "destination.port", "size": 15}},
+        "countries": {"terms": {"field": "source.geo.country_iso_code", "size": 12}},
+        "providers": {"terms": {"field": "source.as.type", "size": 12}},
+        "asns": {
+            "terms": {"field": "source.as.asn", "size": 12},
+            "aggs": {"org": {"terms": {"field": "source.as.organization_name", "size": 1}}}
+        },
+        // #1677: no per-agg exclusion any more. Hiding an address here
+        // only ever fixed this one list while `countries`, `asns` and
+        // `map_points` -- which aggregate the same documents -- kept
+        // counting them. Both classes of non-attacker are now filtered
+        // by the query above instead: self-generated healthchecks by
+        // their `internal_probe` mark, and the fleet's own addresses,
+        // tunnel endpoint included, by self_addresses().
+        "top_ips": {"terms": {"field": "source.ip", "size": 15}},
+        "paths": {"terms": {"field": "url.path", "size": 15}},
+        "logins": {"filter": logins_filter()},
+        "heatmap": {
+            "filter": {"range": {"@timestamp": {"gte": "now-24h"}}},
+            "aggs": {"sensors": {
+                "terms": {"field": "event.sensor", "size": 50, "order": {"_count": "desc"}},
+                "aggs": {"hourly": {"date_histogram": {
+                    "field": "@timestamp", "fixed_interval": "1h", "min_doc_count": 0,
+                    "extended_bounds": {"min": "now-23h/h", "max": "now/h"}
+                }}}
+            }}
+        },
+        "points": {
+            "filter": {"exists": {"field": "source.geo.location"}},
+            "aggs": {"by_place": {
+                "multi_terms": {
+                    "terms": [{"field": "source.geo.city_name"}, {"field": "source.geo.country_iso_code"}],
+                    "size": 500
+                },
+                "aggs": {
+                    "centroid": {"geo_centroid": {"field": "source.geo.location"}},
+                    "unique_ips": {"cardinality": {"field": "source.ip"}}
+                }
+            }}
+        }
+    }
+})
+}
+
+/// The main slices the worker snapshots: all but the heatmap and the map
+/// points, which their own rollups serve (#2046).
+const MAIN_SNAPSHOT_EXCLUDED: &[&str] = &["heatmap", "points"];
+
+/// [`main_body`] without the rolled slices, which the worker snapshots.
+pub(crate) fn main_snapshot_body() -> Value {
+    let allowed: HashSet<&str> = SLICES
+        .iter()
+        .filter(|(_, search, agg)| *search == Search::Main && !MAIN_SNAPSHOT_EXCLUDED.contains(agg))
+        .map(|(_, _, agg)| *agg)
+        .collect();
+    limit_aggs(main_body(), &allowed)
+}
+
+/// The overview's behavior search (every behavior slice), shared with its
+/// snapshot.
+pub(crate) fn behavior_body() -> Value {
+    json!({
+    "size": 0,
+    // #1677: self-generated probe traffic is excluded from every figure on
+    // this page, not just from top_ips. A Docker healthcheck connecting to
+    // its own sensor is not an attack, and it was inflating sensor
+    // rankings, event counts and -- because conpot's healthcheck events
+    // arrive tagged T0886 -- the MITRE ICS technique tallies. 312,905 such
+    // events in 24 hours, 13.5% of everything ingested.
+    "query": {"bool": {
+        "filter": [{"range": {"@timestamp": {"gte": WINDOW}}}],
+        "must_not": [
+            crate::es::internal_probe_exclusion(),
+            // #1677: and the fleet's own traffic -- see self_addresses().
+            {"terms": {"source.ip": self_addresses()}}
+        ]
+    }},
+    "aggs": {
+        // #3213: this was a `multi_terms` over (username, password), so
+        // the panel was showing the most common PASSWORDS in the fleet.
+        // An aggregation bucket key is the one value on this page that
+        // cannot be scrubbed on the way out -- it is assembled by
+        // Elasticsearch and never passes through a document -- so the
+        // field cannot be asked for at all. Accounts are the analytic
+        // value anyway: a credential spray is a spray of accounts.
+        //
+        // This changes the panel for EVERY sensor, not only the two in
+        // #3213's scope, and that is deliberate: one aggregation over
+        // one time window cannot be sensor-scoped without a second pass,
+        // and leaving cowrie's passwords here would be the same leak with
+        // a smaller blast radius. The response shape is unchanged -- a
+        // `terms` key is a string where a `multi_terms` key was an array,
+        // and the `kv()` helper already accepts both.
+        "creds": {"terms": {"field": "honeypot.username", "size": 15}},
+        "commands": {"terms": {"field": "honeypot.canonical_command", "size": 15}},
+        "clients": {"terms": {"field": "honeypot.version", "size": 15}},
+        "fingerprints": {"terms": {"field": "honeypot.canonical_fingerprint", "size": 15}},
+        "alerts": {"terms": {"field": "suricata.eve.alert.signature.keyword", "size": 15}},
+        "alert_cats": {"terms": {"field": "suricata.eve.alert.category.keyword", "size": 15}},
+        // aggregate.go's payload leaderboard keyed on ev.shasum;
+        // canonical_shasum is that same promotion (and, per
+        // ip_enrichment/canonical.rs, never set on cowrie.log.closed,
+        // so TTY recordings don't count as payload deliveries — #1266).
+        "payloads": {
+            "terms": {"field": "honeypot.canonical_shasum", "size": 50},
+            "aggs": {"latest": {"top_hits": {
+                "size": 1,
+                "sort": [{"@timestamp": {"order": "desc"}}],
+                "_source": {"includes": ["honeypot.destfile", "honeypot.url", "honeypot.filename"]}
+            }}}
+        }
+    }
+})
+}
+
+/// A snapshot answer cut down to the `allowed` aggregations, as the live
+/// search with `limit_aggs` would have answered; `None` when the snapshot
+/// lacks one of them.
+fn slices(snapshot: &Value, allowed: &HashSet<&str>) -> Option<Value> {
+    let aggregations = snapshot["aggregations"].as_object()?;
+    if !allowed.iter().all(|name| aggregations.contains_key(*name)) {
+        return None;
+    }
+    let kept: serde_json::Map<String, Value> =
+        aggregations.iter().filter(|(name, _)| allowed.contains(name.as_str())).map(|(name, agg)| (name.clone(), agg.clone())).collect();
+    Some(json!({"aggregations": kept}))
+}
+
+/// Each sensor's last event over the last hour, under the main search's own
+/// exclusions: the live part next to the main snapshot (#3910).
+fn recent_sensors_body() -> Value {
+    json!({
+        "size": 0,
+        "track_total_hits": false,
+        "query": {"bool": {
+            "filter": [{"range": {"@timestamp": {"gte": "now-1h"}}}],
+            "must_not": [
+                crate::es::internal_probe_exclusion(),
+                {"terms": {"source.ip": self_addresses()}}
+            ]
+        }},
+        "aggs": {"sensors": {
+            "terms": {"field": "event.sensor", "size": 50},
+            "aggs": {"last_seen": {"max": {"field": "@timestamp"}}}
+        }}
+    })
+}
+
+/// The snapshot's sensors with each `last_seen` moved to the later of the
+/// snapshot's and the last hour's. Counts and the sensor list stay as of the
+/// snapshot.
+fn with_recent_sensors(mut snapshot: Value, recent: &Value) -> Value {
+    let live: Vec<Value> = recent["aggregations"]["sensors"]["buckets"].as_array().cloned().unwrap_or_default();
+    if let Some(buckets) = snapshot["aggregations"]["sensors"]["buckets"].as_array_mut() {
+        for bucket in buckets {
+            let Some(newer) = live.iter().find(|live| live["key"] == bucket["key"]) else {
+                continue;
+            };
+            let old = bucket["last_seen"]["value"].as_f64();
+            let new = newer["last_seen"]["value"].as_f64();
+            if matches!((old, new), (Some(old), Some(new)) if new > old) || (old.is_none() && new.is_some()) {
+                bucket["last_seen"] = newer["last_seen"].clone();
+            }
+        }
+    }
+    snapshot
+}
+
 #[cfg(test)]
 const TUNNEL_PEER_IP: &str = crate::fleet::DEFAULT_TUNNEL_PEER_IP;
 
@@ -141,6 +334,15 @@ pub(crate) fn self_addresses() -> Vec<String> {
 }
 
 static CONFIGURED_SELF_ADDRESSES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Held by the one test that writes `HONEYPOT_SELF_IPS` and by the tests
+/// that need two builds of a request to agree (#3910: a page snapshot is
+/// only served for the request the reader builds itself).
+#[cfg(test)]
+pub(crate) fn self_ips_env() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// #3790: `HONEYPOT_SELF_IPS`, or the file `HONEYPOT_SELF_IPS_FILE` names.
 /// Swarm stacks have no `.env` interpolation and these are the fleet's real
@@ -326,149 +528,52 @@ pub async fn dashboard(
     if rolled_points.is_some() {
         main_allowed.remove("points");
     }
-    let main_body = json!({
-        "size": 0,
-        // #1677: self-generated probe traffic is excluded from every figure on
-        // this page, not just from top_ips. A Docker healthcheck connecting to
-        // its own sensor is not an attack, and it was inflating sensor
-        // rankings, event counts and -- because conpot's healthcheck events
-        // arrive tagged T0886 -- the MITRE ICS technique tallies. 312,905 such
-        // events in 24 hours, 13.5% of everything ingested.
-        "query": {"bool": {
-            "filter": [{"range": {"@timestamp": {"gte": WINDOW}}}],
-            "must_not": [
-                crate::es::internal_probe_exclusion(),
-                // #1677: and the fleet's own traffic -- see self_addresses().
-                {"terms": {"source.ip": self_addresses()}}
-            ]
-        }},
-        "aggs": {
-            "sensors": {
-                "terms": {"field": "event.sensor", "size": 50},
-                "aggs": {"last_seen": {"max": {"field": "@timestamp"}}}
-            },
-            "protocols": {"terms": {"field": "network.protocol", "size": 30}},
-            "ports": {"terms": {"field": "destination.port", "size": 15}},
-            "countries": {"terms": {"field": "source.geo.country_iso_code", "size": 12}},
-            "providers": {"terms": {"field": "source.as.type", "size": 12}},
-            "asns": {
-                "terms": {"field": "source.as.asn", "size": 12},
-                "aggs": {"org": {"terms": {"field": "source.as.organization_name", "size": 1}}}
-            },
-            // #1677: no per-agg exclusion any more. Hiding an address here
-            // only ever fixed this one list while `countries`, `asns` and
-            // `map_points` -- which aggregate the same documents -- kept
-            // counting them. Both classes of non-attacker are now filtered
-            // by the query above instead: self-generated healthchecks by
-            // their `internal_probe` mark, and the fleet's own addresses,
-            // tunnel endpoint included, by self_addresses().
-            "top_ips": {"terms": {"field": "source.ip", "size": 15}},
-            "paths": {"terms": {"field": "url.path", "size": 15}},
-            "logins": {"filter": logins_filter()},
-            "heatmap": {
-                "filter": {"range": {"@timestamp": {"gte": "now-24h"}}},
-                "aggs": {"sensors": {
-                    "terms": {"field": "event.sensor", "size": 50, "order": {"_count": "desc"}},
-                    "aggs": {"hourly": {"date_histogram": {
-                        "field": "@timestamp", "fixed_interval": "1h", "min_doc_count": 0,
-                        "extended_bounds": {"min": "now-23h/h", "max": "now/h"}
-                    }}}
-                }}
-            },
-            "points": {
-                "filter": {"exists": {"field": "source.geo.location"}},
-                "aggs": {"by_place": {
-                    "multi_terms": {
-                        "terms": [{"field": "source.geo.city_name"}, {"field": "source.geo.country_iso_code"}],
-                        "size": 500
-                    },
-                    "aggs": {
-                        "centroid": {"geo_centroid": {"field": "source.geo.location"}},
-                        "unique_ips": {"cardinality": {"field": "source.ip"}}
-                    }
-                }}
-            }
-        }
-    });
-
-    let behavior_body = json!({
-        "size": 0,
-        // #1677: self-generated probe traffic is excluded from every figure on
-        // this page, not just from top_ips. A Docker healthcheck connecting to
-        // its own sensor is not an attack, and it was inflating sensor
-        // rankings, event counts and -- because conpot's healthcheck events
-        // arrive tagged T0886 -- the MITRE ICS technique tallies. 312,905 such
-        // events in 24 hours, 13.5% of everything ingested.
-        "query": {"bool": {
-            "filter": [{"range": {"@timestamp": {"gte": WINDOW}}}],
-            "must_not": [
-                crate::es::internal_probe_exclusion(),
-                // #1677: and the fleet's own traffic -- see self_addresses().
-                {"terms": {"source.ip": self_addresses()}}
-            ]
-        }},
-        "aggs": {
-            // #3213: this was a `multi_terms` over (username, password), so
-            // the panel was showing the most common PASSWORDS in the fleet.
-            // An aggregation bucket key is the one value on this page that
-            // cannot be scrubbed on the way out -- it is assembled by
-            // Elasticsearch and never passes through a document -- so the
-            // field cannot be asked for at all. Accounts are the analytic
-            // value anyway: a credential spray is a spray of accounts.
-            //
-            // This changes the panel for EVERY sensor, not only the two in
-            // #3213's scope, and that is deliberate: one aggregation over
-            // one time window cannot be sensor-scoped without a second pass,
-            // and leaving cowrie's passwords here would be the same leak with
-            // a smaller blast radius. The response shape is unchanged -- a
-            // `terms` key is a string where a `multi_terms` key was an array,
-            // and the `kv()` helper already accepts both.
-            "creds": {"terms": {"field": "honeypot.username", "size": 15}},
-            "commands": {"terms": {"field": "honeypot.canonical_command", "size": 15}},
-            "clients": {"terms": {"field": "honeypot.version", "size": 15}},
-            "fingerprints": {"terms": {"field": "honeypot.canonical_fingerprint", "size": 15}},
-            "alerts": {"terms": {"field": "suricata.eve.alert.signature.keyword", "size": 15}},
-            "alert_cats": {"terms": {"field": "suricata.eve.alert.category.keyword", "size": 15}},
-            // aggregate.go's payload leaderboard keyed on ev.shasum;
-            // canonical_shasum is that same promotion (and, per
-            // ip_enrichment/canonical.rs, never set on cowrie.log.closed,
-            // so TTY recordings don't count as payload deliveries — #1266).
-            "payloads": {
-                "terms": {"field": "honeypot.canonical_shasum", "size": 50},
-                "aggs": {"latest": {"top_hits": {
-                    "size": 1,
-                    "sort": [{"@timestamp": {"order": "desc"}}],
-                    "_source": {"includes": ["honeypot.destfile", "honeypot.url", "honeypot.filename"]}
-                }}}
-            }
-        }
-    });
-
     // #1963: a tab asking only for its own slices skips the other search
     // entirely -- the evidence tab never needed the geo_centroid sweep,
     // and the live tab never needed the multi_terms credential pair.
     // try_join! keeps them concurrent when both do run, as before.
+    //
+    // #3910: each search is first the worker's snapshot of it
+    // (`page_rollup`), cut down to the requested slices; a slice the
+    // snapshot lacks (heatmap or map points while their rollup is not
+    // covered) sends that search live. The sensors' last-seen times are
+    // brought up to date from the last hour, so a sensor's state never
+    // trails by a cycle.
     let (main, behavior) = tokio::try_join!(
         async {
             if main_allowed.is_empty() {
-                Ok(json!({}))
-            } else {
-                state
+                return Ok(json!({}));
+            }
+            let snapshot = crate::page_rollup::read(&state, crate::page_rollup::OVERVIEW_MAIN).await;
+            match snapshot.and_then(|snapshot| slices(&snapshot, &main_allowed)) {
+                Some(snapshot) if main_allowed.contains("sensors") => {
+                    let recent = state
+                        .es
+                        .search_agg(recent_sensors_body())
+                        .await
+                        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+                    Ok(with_recent_sensors(snapshot, &recent))
+                }
+                Some(snapshot) => Ok(snapshot),
+                None => state
                     .es
-                    .search_agg(limit_aggs(main_body, &main_allowed))
+                    .search_agg(limit_aggs(main_body(), &main_allowed))
                     .await
-                    .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
+                    .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string())),
             }
         },
         async {
             if behavior_allowed.is_empty() {
-                Ok(json!({}))
-            } else {
-                state
+                return Ok(json!({}));
+            }
+            let snapshot = crate::page_rollup::read(&state, crate::page_rollup::OVERVIEW_BEHAVIOR).await;
+            match snapshot.and_then(|snapshot| slices(&snapshot, &behavior_allowed)) {
+                Some(snapshot) => Ok(snapshot),
+                None => state
                     .es
-                    .search_agg(limit_aggs(behavior_body, &behavior_allowed))
+                    .search_agg(limit_aggs(behavior_body(), &behavior_allowed))
                     .await
-                    .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
+                    .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string())),
             }
         },
     )?;
@@ -819,6 +924,7 @@ mod tests {
     /// this body, so parallel threads never observe a half-state.
     #[test]
     fn self_addresses_reads_config_and_always_keeps_the_tunnel() {
+        let _env = self_ips_env();
         // Unset: the exclusion this handler has always had, and nothing else.
         unsafe { std::env::remove_var("HONEYPOT_SELF_IPS") };
         assert_eq!(self_addresses(), vec![TUNNEL_PEER_IP.to_string()]);
@@ -897,6 +1003,49 @@ mod tests {
         // its payload for asking about it.
         let (_, behavior) = allowed_aggs(Some("payloads,retired_slice,, "));
         assert_eq!(behavior, HashSet::from(["payloads"]));
+    }
+
+    #[test]
+    fn the_main_snapshot_is_the_main_search_without_the_rolled_slices() {
+        let _env = self_ips_env();
+        let snapshot = main_snapshot_body();
+        let full = main_body();
+        let names: HashSet<&str> = snapshot["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
+        let all: HashSet<&str> = full["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert!(!names.contains("heatmap") && !names.contains("points"));
+        assert_eq!(names.len() + 2, all.len());
+        assert_eq!(snapshot["query"], full["query"]);
+        assert_eq!(behavior_body()["aggs"].as_object().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn a_snapshot_is_cut_to_the_requested_slices_or_not_used() {
+        let snapshot = json!({"aggregations": {"countries": {"buckets": []}, "sensors": {"buckets": []}}});
+        let (main, _) = allowed_aggs(Some("countries"));
+        assert_eq!(slices(&snapshot, &main), Some(json!({"aggregations": {"countries": {"buckets": []}}})));
+        // A slice the snapshot does not hold (the heatmap while its rollup
+        // is not covered) sends the search live.
+        let (main, _) = allowed_aggs(Some("countries,heatmap"));
+        assert_eq!(slices(&snapshot, &main), None);
+        assert_eq!(slices(&json!({}), &main), None);
+    }
+
+    #[test]
+    fn the_last_hour_moves_a_sensors_last_seen_forward_only() {
+        let snapshot = json!({"aggregations": {"sensors": {"buckets": [
+            {"key": "cowrie", "doc_count": 9, "last_seen": {"value": 100.0, "value_as_string": "old"}},
+            {"key": "wordpot", "doc_count": 1, "last_seen": {"value": 300.0, "value_as_string": "kept"}}
+        ]}}});
+        let recent = json!({"aggregations": {"sensors": {"buckets": [
+            {"key": "cowrie", "doc_count": 2, "last_seen": {"value": 200.0, "value_as_string": "new"}},
+            {"key": "wordpot", "doc_count": 1, "last_seen": {"value": 250.0, "value_as_string": "older"}},
+            {"key": "dionaea", "doc_count": 1, "last_seen": {"value": 900.0, "value_as_string": "unknown"}}
+        ]}}});
+        let merged = with_recent_sensors(snapshot, &recent);
+        let buckets = merged["aggregations"]["sensors"]["buckets"].as_array().unwrap();
+        assert_eq!(buckets.len(), 2, "the sensor list stays the snapshot's");
+        assert_eq!((buckets[0]["last_seen"]["value_as_string"].as_str(), buckets[0]["doc_count"].as_u64()), (Some("new"), Some(9)));
+        assert_eq!(buckets[1]["last_seen"]["value_as_string"], "kept");
     }
 
     #[test]
