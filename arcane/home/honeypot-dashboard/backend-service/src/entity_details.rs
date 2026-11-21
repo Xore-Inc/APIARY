@@ -1570,34 +1570,45 @@ fn sources_under(filter: Value) -> Value {
 }
 
 /// The stage 2 body, or `None` when the entity has nothing to pivot on.
+///
+/// Every pivot is a filter aggregation, so the query itself is bounded to the
+/// union of those filters: an aggregation only ever sees documents its own
+/// filter keeps, which makes the union a superset and the counts identical.
+/// Without it ES aggregates the whole window (#3856: 51 s, then a 502 at the
+/// 30 s client timeout); with it only the pivot documents are read.
 fn related_shared_body(entity: &Entity, range: &str, pivots: &SharedPivots) -> Option<Value> {
-    let mut aggs = serde_json::Map::new();
+    let mut pivot_filters: Vec<(&str, Value)> = Vec::new();
     if !pivots.payloads.is_empty() {
-        aggs.insert("payload".into(), sources_under(json!({"terms": {"honeypot.canonical_shasum": pivots.payloads}})));
+        pivot_filters.push(("payload", json!({"terms": {"honeypot.canonical_shasum": pivots.payloads}})));
     }
     if !pivots.fingerprints.is_empty() {
-        aggs.insert("fingerprint".into(), sources_under(json!({"terms": {"honeypot.canonical_fingerprint": pivots.fingerprints}})));
+        pivot_filters.push(("fingerprint", json!({"terms": {"honeypot.canonical_fingerprint": pivots.fingerprints}})));
     }
     if !pivots.credentials.is_empty() {
         let should: Vec<Value> = pivots.credentials.iter().map(|(user, pass)| credential_clause(user, pass)).collect();
-        aggs.insert("credential".into(), sources_under(json!({"bool": {
+        pivot_filters.push(("credential", json!({"bool": {
             "filter": [{"bool": {"should": should, "minimum_should_match": 1}}],
             "must_not": secret_exclusion()
         }})));
     }
     if let Some(subnet) = &pivots.subnet {
-        aggs.insert("subnet".into(), sources_under(json!({"term": {"source.ip": subnet}})));
+        pivot_filters.push(("subnet", json!({"term": {"source.ip": subnet}})));
     }
     if let Some(asn) = pivots.asn {
-        aggs.insert("asn".into(), sources_under(json!({"term": {"source.as.asn": asn}})));
+        pivot_filters.push(("asn", json!({"term": {"source.as.asn": asn}})));
     }
-    if aggs.is_empty() {
+    if pivot_filters.is_empty() {
         return None;
     }
+    let union = json!({"bool": {
+        "should": pivot_filters.iter().map(|(_, filter)| filter.clone()).collect::<Vec<_>>(),
+        "minimum_should_match": 1
+    }});
+    let aggs: serde_json::Map<String, Value> = pivot_filters.into_iter().map(|(name, filter)| (name.to_string(), sources_under(filter))).collect();
     Some(json!({
         "size": 0,
         "track_total_hits": false,
-        "query": ioc_scope(vec![time_range(range)], {
+        "query": ioc_scope(vec![time_range(range), union], {
             let mut excluded = entity_extra_must_not(entity);
             excluded.push(entity_clause(entity));
             excluded
@@ -2612,6 +2623,20 @@ mod tests {
         let query = rendered(&body["query"]);
         let must_not = rendered(&body["query"]["bool"]["must_not"]);
         assert!(must_not.contains("203.0.113.7"), "the entity's own events are excluded: {query}");
+        // The query is bounded to the union of every pivot filter (#3856), so ES
+        // never aggregates the whole window; each aggregation still re-applies its own.
+        let filters = body["query"]["bool"]["filter"].as_array().unwrap();
+        assert_eq!(filters.len(), 2, "time range plus the pivot union: {query}");
+        let union = &filters[1]["bool"];
+        assert_eq!(union["minimum_should_match"], 1);
+        let should = union["should"].as_array().unwrap();
+        assert_eq!(should.len(), 5, "payload, fingerprint, credential, subnet and AS");
+        for agg in ["payload", "fingerprint", "credential", "subnet", "asn"] {
+            assert!(should.contains(&aggs[agg]["filter"]), "the union holds the {agg} pivot filter verbatim");
+        }
+        let only_network = SharedPivots { payloads: vec![], fingerprints: vec![], credentials: vec![], subnet: Some("203.0.113.0/24".into()), asn: Some(13335) };
+        let narrow = related_shared_body(&entity, "now-7d", &only_network).unwrap();
+        assert_eq!(narrow["query"]["bool"]["filter"][1]["bool"]["should"], json!([{"term": {"source.ip": "203.0.113.0/24"}}, {"term": {"source.as.asn": 13335}}]));
         let nothing = SharedPivots { payloads: vec![], fingerprints: vec![], credentials: vec![], subnet: None, asn: None };
         assert!(related_shared_body(&entity, "now-7d", &nothing).is_none());
     }
