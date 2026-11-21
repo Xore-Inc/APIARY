@@ -226,3 +226,16 @@ async fn the_worker_stores_complete_answers_and_skips_partial_ones() {
     page_rollup::write_cycle(&state).await;
     assert!(stub.seen.lock().unwrap().writes.is_empty(), "a partial answer is never stored");
 }
+
+#[tokio::test]
+async fn kpis_without_rollup_coverage_read_the_fallback_snapshot() {
+    let _env = crate::dashboard::self_ips_env();
+    let mut answer = es_answer(json!({"last24h": {"doc_count": 30, "hourly": {"buckets": []}}, "previous24h": {"doc_count": 12}}));
+    answer["hits"]["total"]["value"] = json!(42);
+    let docs = HashMap::from([fresh(page_rollup::OVERVIEW_KPIS, &answer)]);
+    // The stand-in has no rollup hours, so the handler takes its fallback.
+    let (state, stub) = state_with(docs, es_answer(json!({}))).await;
+    let kpis = serde_json::to_value(crate::overview::kpis(State(state)).await.expect("200").0).unwrap();
+    assert_eq!(searches(&stub), vec!["/overview-rollup-v1/_search".to_string()], "only the rollup probe");
+    assert_eq!((kpis["total"].as_u64(), kpis["last24h"].as_u64(), kpis["previous24h"].as_u64()), (Some(42), Some(30), Some(12)));
+}

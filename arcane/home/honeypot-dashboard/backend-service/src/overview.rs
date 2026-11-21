@@ -358,6 +358,23 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
         }
     }
 
+    // #3910: the fallback is one search, and the worker's snapshot of it
+    // (`page_rollup`) answers while recent. Until #3929 the rollup path
+    // above never covers the window, so this is the path production takes.
+    let result = match crate::page_rollup::read(&state, crate::page_rollup::OVERVIEW_KPIS).await {
+        Some(snapshot) => snapshot,
+        None => state
+            .es
+            .search_agg(fallback_body())
+            .await
+            .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?,
+    };
+    Ok(Json(kpis_from_answer(&result)))
+}
+
+/// The single search `/api/v1/overview/kpis` answers with when the rollup
+/// does not cover the window, shared with its snapshot.
+pub(crate) fn fallback_body() -> Value {
     let mut aggs = live_window_aggs();
     aggs["last24h"] = json!({
         "filter": {"range": {"@timestamp": {"gte": "now-24h"}}},
@@ -371,18 +388,16 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     aggs["logins_last24h"] = json!({"filter": {"bool": {"filter": [logins_filter(), {"range": {"@timestamp": {"gte": "now-24h"}}}]}}});
     aggs["logins_previous24h"] =
         json!({"filter": {"bool": {"filter": [logins_filter(), {"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}}]}}});
-    let body = json!({
+    json!({
         "size": 0,
         "track_total_hits": true,
         "query": {"range": {"@timestamp": {"gte": "now-48h"}}},
         "aggs": aggs
-    });
-    let result = state
-        .es
-        .search_agg(body)
-        .await
-        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+    })
+}
 
+/// The KPIs from an answer to [`fallback_body`] (or its snapshot).
+fn kpis_from_answer(result: &Value) -> OverviewKpis {
     let total = result["hits"]["total"]["value"].as_u64().unwrap_or(0);
     let last24h = result["aggregations"]["last24h"]["doc_count"].as_u64().unwrap_or(0);
     let previous24h = result["aggregations"]["previous24h"]["doc_count"].as_u64().unwrap_or(0);
@@ -399,7 +414,7 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
 
     let change24h = change24h_str(previous24h, last24h);
 
-    Ok(Json(OverviewKpis {
+    OverviewKpis {
         total,
         last24h,
         previous24h,
@@ -415,7 +430,7 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
         logins_previous24h,
         hourly_by_protocol: window.hourly_by_protocol,
         ready: true,
-    }))
+    }
 }
 
 #[cfg(test)]

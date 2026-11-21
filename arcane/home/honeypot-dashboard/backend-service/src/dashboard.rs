@@ -109,8 +109,10 @@ fn limit_aggs(mut body: Value, allowed: &HashSet<&str>) -> Value {
 const WINDOW: &str = "now-48h";
 
 /// The overview's main search (every main slice), shared with its
-/// snapshot.
-fn main_body() -> Value {
+/// snapshot. The snapshot holds the heatmap and map points too: their
+/// rollups answer first when they cover the window (#2046), and while they
+/// do not (#3929) the snapshot answers instead of the live search.
+pub(crate) fn main_body() -> Value {
     json!({
     "size": 0,
     // #1677: self-generated probe traffic is excluded from every figure on
@@ -175,20 +177,6 @@ fn main_body() -> Value {
         }
     }
 })
-}
-
-/// The main slices the worker snapshots: all but the heatmap and the map
-/// points, which their own rollups serve (#2046).
-const MAIN_SNAPSHOT_EXCLUDED: &[&str] = &["heatmap", "points"];
-
-/// [`main_body`] without the rolled slices, which the worker snapshots.
-pub(crate) fn main_snapshot_body() -> Value {
-    let allowed: HashSet<&str> = SLICES
-        .iter()
-        .filter(|(_, search, agg)| *search == Search::Main && !MAIN_SNAPSHOT_EXCLUDED.contains(agg))
-        .map(|(_, _, agg)| *agg)
-        .collect();
-    limit_aggs(main_body(), &allowed)
 }
 
 /// The overview's behavior search (every behavior slice), shared with its
@@ -535,8 +523,7 @@ pub async fn dashboard(
     //
     // #3910: each search is first the worker's snapshot of it
     // (`page_rollup`), cut down to the requested slices; a slice the
-    // snapshot lacks (heatmap or map points while their rollup is not
-    // covered) sends that search live. The sensors' last-seen times are
+    // snapshot lacks sends that search live. The sensors' last-seen times are
     // brought up to date from the last hour, so a sensor's state never
     // trails by a cycle.
     let (main, behavior) = tokio::try_join!(
@@ -1006,16 +993,14 @@ mod tests {
     }
 
     #[test]
-    fn the_main_snapshot_is_the_main_search_without_the_rolled_slices() {
+    fn the_snapshots_hold_every_slice() {
         let _env = self_ips_env();
-        let snapshot = main_snapshot_body();
-        let full = main_body();
-        let names: HashSet<&str> = snapshot["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
-        let all: HashSet<&str> = full["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
-        assert!(!names.contains("heatmap") && !names.contains("points"));
-        assert_eq!(names.len() + 2, all.len());
-        assert_eq!(snapshot["query"], full["query"]);
-        assert_eq!(behavior_body()["aggs"].as_object().unwrap().len(), 7);
+        let (main_body, behavior_body) = (main_body(), behavior_body());
+        let main: HashSet<&str> = main_body["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
+        let behavior: HashSet<&str> = behavior_body["aggs"].as_object().unwrap().keys().map(String::as_str).collect();
+        let (all_main, all_behavior) = allowed_aggs(None);
+        assert_eq!(main, all_main);
+        assert_eq!(behavior, all_behavior);
     }
 
     #[test]
