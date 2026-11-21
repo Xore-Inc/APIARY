@@ -277,7 +277,9 @@ pub async fn filter_values(State(state): State<AppState>) -> Result<Json<FilterV
             "kinds": {"terms": {"field": "honeypot.event", "size": 40}}
         }
     });
-    let result = state.es.search(body).await.map_err(bad_gateway)?;
+    // #3908: a vocabulary, not a count: the Modbus PDUs add no sensor,
+    // port or kind the other zeek logs lack, only seconds of scanning.
+    let result = state.es.search_agg(body).await.map_err(bad_gateway)?;
     let keys = |agg: &str| -> Vec<String> {
         result["aggregations"][agg]["buckets"]
             .as_array()

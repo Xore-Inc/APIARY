@@ -455,7 +455,7 @@ pub async fn dashboard(
             } else {
                 state
                     .es
-                    .search(limit_aggs(main_body, &main_allowed))
+                    .search_agg(limit_aggs(main_body, &main_allowed))
                     .await
                     .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
             }
@@ -466,7 +466,7 @@ pub async fn dashboard(
             } else {
                 state
                     .es
-                    .search(limit_aggs(behavior_body, &behavior_allowed))
+                    .search_agg(limit_aggs(behavior_body, &behavior_allowed))
                     .await
                     .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
             }

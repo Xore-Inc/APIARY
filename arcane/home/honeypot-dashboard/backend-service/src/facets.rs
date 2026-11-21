@@ -206,9 +206,10 @@ pub async fn get(
         return Err((StatusCode::NOT_FOUND, format!("unknown facet kind {kind:?}; only \"events\" is served")));
     }
     let filters = build_filters(&q);
+    let indices = facet_indices(&q);
     let (result, providers) = tokio::join!(
-        state.es.search(facet_body(filters.clone())),
-        state.es.search(provider_body(filters)),
+        state.es.search_index(indices, facet_body(filters.clone())),
+        state.es.search_index(indices, provider_body(filters)),
     );
     let result = result.map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
     // A failed providers query degrades to an empty list, not a failed page.
@@ -220,6 +221,28 @@ pub async fn get(
         tracing::warn!(shards = %result["_shards"], "facets: shard failures, counts are partial");
     }
     Ok(Json(parse_facets(&kind, &result, &providers)))
+}
+
+/// Which indices a facet request counts over (#3908).
+///
+/// The unnarrowed explorer is a fleet-wide view, so its facets skip Zeek's
+/// per-PDU Modbus log (`es::EVENT_INDICES_AGG`): 59 % of all events, from a
+/// few dozen pollers, which made every picker list Modbus first and cost
+/// 5-8 s per load. Once the explorer is narrowed to one source (`ip`,
+/// `ips`), one flow (`community_id`) or a Zeek sensor, the facets read the
+/// full set again: those filters are cheap, and they are exactly the views
+/// where the PDUs are what the operator came to look at.
+fn facet_indices(q: &EventsQuery) -> &'static [&'static str] {
+    let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+    let zeek_sensor = q
+        .sensor
+        .as_deref()
+        .is_some_and(|sensors| sensors.split(',').any(|sensor| sensor.trim().starts_with("zeek")));
+    if set(&q.ip) || set(&q.ips) || set(&q.community_id) || zeek_sensor {
+        crate::es::EVENT_INDICES
+    } else {
+        crate::es::EVENT_INDICES_AGG
+    }
 }
 
 #[cfg(test)]
@@ -285,5 +308,22 @@ mod tests {
             .collect();
         let f = parse_facets("events", &json!({"aggregations": {"sources": {"buckets": buckets}}}), &Value::Null);
         assert_eq!(f.sources.len(), FACET_LIMIT);
+    }
+
+    #[test]
+    fn fleet_facets_skip_modbus_detail_but_narrowed_ones_do_not() {
+        let q = |v: Value| -> EventsQuery { serde_json::from_value(v).unwrap() };
+        assert_eq!(facet_indices(&q(json!({"since": "24h"}))), crate::es::EVENT_INDICES_AGG);
+        assert_eq!(facet_indices(&q(json!({"since": "24h", "sensor": "cowrie"}))), crate::es::EVENT_INDICES_AGG);
+        assert_eq!(facet_indices(&q(json!({"since": "24h", "ip": ""}))), crate::es::EVENT_INDICES_AGG);
+        for narrowed in [
+            json!({"ip": "203.0.113.7"}),
+            json!({"ips": "203.0.113.7,198.51.100.2"}),
+            json!({"community_id": "1:abc="}),
+            json!({"sensor": "zeek"}),
+            json!({"sensor": "cowrie,zeek-proxy"}),
+        ] {
+            assert_eq!(facet_indices(&q(narrowed.clone())), crate::es::EVENT_INDICES, "{narrowed}");
+        }
     }
 }
