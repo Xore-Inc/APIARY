@@ -3,7 +3,8 @@
 The single Elasticsearch node as a Swarm stack (swarm phase 9 leg D), pinned
 to the homeserver. Same image digest, environment and limits as the Compose
 service it replaces (`arcane/home/honeypot-elk`, `hp-elasticsearch`):
-single-node, security off, 6g heap locked in RAM, 8 CPU / 12G.
+single-node, security off, 6g heap locked in RAM, 16 CPU / 20G (#3913,
+raised from 8 CPU / 12G; the heap stays 6g, the extra memory is page cache).
 
 - **Data:** the Compose volume `honeypot-elk_es-data` (~138 GB), reused in
   place as an external volume, never copied. It is external in the Compose

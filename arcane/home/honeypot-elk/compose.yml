@@ -134,8 +134,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "8.0"
-          memory: 12G
+          # #3913: same limits as swarm/stacks/elasticsearch (legacy rollback).
+          cpus: "16.0"
+          memory: 20G
   # #3596 (swarm phase 9 leg D): every Compose consumer keeps
   # http://elasticsearch:9200. This socat answers under that name on honeynet
   # and honeypot-llm-data and forwards to the stack's task over the D2 overlay
