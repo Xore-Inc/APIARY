@@ -11237,6 +11237,15 @@
               "minimum": 1,
               "type": "integer"
             }
+          },
+          {
+            "description": "Comma-separated source addresses, at most 50. Answers with exactly those addresses that have events in the window (each with its `org`), instead of the busiest ones; `offset` and `size` are then ignored, and the answer is always live. An entry that is not an address, or more than 50 entries, is a 400.",
+            "in": "query",
+            "name": "ips",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
