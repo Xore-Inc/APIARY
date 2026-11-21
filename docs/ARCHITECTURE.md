@@ -164,7 +164,7 @@ malware, and is reached by the scoring loops — never by a browser.
 | `honeypot-v2-*` (data stream), ILM `honeypot-30d` | Filebeat + `geoip-honeypot` | all workers, dashboard, Kibana |
 | `suricata-*`, ILM `suricata-7d` | Filebeat | dashboard, workers, EveBox |
 | `portbridge-v2-*`, ILM `portbridge-30d` | Filebeat | dashboard, zeek-proxy-attribution |
-| `zeek-v1-*` / `zeek-proxy-v1-*`, ILM `zeek-60d` / `zeek-proxy-60d` | Filebeat | dashboard, attribution loop |
+| `zeek-v1-*` / `zeek-proxy-v1-*`, ILM `zeek-60d` / `zeek-proxy-60d` (`zeek` is `flattened`; the charted sub-fields are also copied to keyword `zeek_kw.*` in indices created since #3911) | Filebeat + `geoip-honeypot` | dashboard, attribution loop |
 | `traefik-v1-*`, ILM `traefik-30d` | Filebeat | dashboard |
 | `dead-letter-honeypot*`, ILM `dead-letter-60d` | Elasticsearch itself (rejected docs) | dead-letters page, source-health |
 | `*-analysis-v1` (ghidra/sandbox/cape/revdeck/github), ILM `analysis-results-180d` | `backend-worker-importer` (read-only mirror) | identity worker, workbench |

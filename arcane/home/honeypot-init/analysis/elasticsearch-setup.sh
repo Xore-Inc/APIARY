@@ -326,6 +326,15 @@ geoip_pipeline_body="$(cat <<'JSON'
         "description": "#238/#416: flags JNDI/Log4Shell injection attempts across every sensor's captured free-text fields (concatenates every string value under honeypot.*, so this covers path/body/user_agent/headers/command/etc. uniformly without hardcoding field names per sensor -- automatically covers future sensors too). Deobfuscates Log4j lookup-based evasion first (nested lookup tricks like lower:j + ndi splitting the word jndi across sub-expressions, which a naive substring check for the literal jndi prefix would miss) -- ported from Log4Pot's deobfuscator.py (detection only, not its payloader.py, which actively downloads the attacker's LDAP/RMI callback payload; that outbound fetch is a distinct, larger decision out of scope here). depth is a hard recursion cap (25) and blob length is capped at 8192 chars -- both defend against a crafted pathological input causing runaway recursion/allocation on the ingest node, which the original Python implementation does not bound.",
         "source": "String deobfuscate(String expr, int depth) { if (depth > 25) { return expr; } if (expr.startsWith('${')) { int posEnd = expr.indexOf('}'); if (posEnd == -1) { return expr; } int posLookup = expr.indexOf('${', 2); if (posLookup != -1 && posLookup < posEnd) { return deobfuscate(expr.substring(0, posLookup) + deobfuscate(expr.substring(posLookup, posEnd + 1), depth + 1) + deobfuscate(expr.substring(posEnd + 1), depth + 1), depth + 1); } int posColon = expr.indexOf(':'); if (posColon == -1) { return expr; } String lookupType = expr.substring(2, posColon).toLowerCase(); int posValue = -1; int posValueRaw = expr.indexOf(':-'); if (posValueRaw != -1) { posValue = posValueRaw + 2; } if (lookupType.equals('jndi')) { return '${jndi' + expr.substring(6); } if (lookupType.equals('lower')) { return expr.substring(posColon + 1, posEnd).toLowerCase() + deobfuscate(expr.substring(posEnd + 1), depth + 1); } if (lookupType.equals('upper')) { return expr.substring(posColon + 1, posEnd).toUpperCase() + deobfuscate(expr.substring(posEnd + 1), depth + 1); } if (posValue != -1 && posValue < posEnd) { return expr.substring(posValue, posEnd) + deobfuscate(expr.substring(posEnd + 1), depth + 1); } return expr.substring(posColon + 1, posEnd) + deobfuscate(expr.substring(posEnd + 1), depth + 1); } int posExpr = expr.indexOf('${'); if (posExpr == -1) { return expr; } return expr.substring(0, posExpr) + deobfuscate(expr.substring(posExpr), depth + 1); } if (ctx.honeypot != null) { StringBuilder sb = new StringBuilder(); for (def v : ctx.honeypot.values()) { if (v instanceof String) { sb.append((String) v).append(' '); } } String blob = sb.toString(); if (blob.length() > 0 && blob.length() < 8192 && blob.indexOf('${') >= 0) { String result = deobfuscate(blob, 0); if (result.toLowerCase().indexOf('${jndi:') >= 0) { if (ctx.event == null) { ctx.event = new HashMap(); } ctx.event.log4shell = true; } } }"
       }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "ignore_failure": true,
+        "description": "#3911: copy the zeek sub-fields the dashboard aggregates on into zeek_kw.*, which the zeek templates map as real keyword fields. A terms aggregation on a key of the flattened zeek field (zeek.ja4t) has to rebuild the global ordinals of the WHOLE zeek._keyed field after every refresh of a hot index: 8.1 of 9.6 s of tcp-stack-clusters on 2026-11-21. A dedicated keyword field has a handful of distinct values, so its ordinals build in milliseconds. Written only into zeek indices dated on or after params.from, i.e. indices created after the templates gained the zeek_kw mapping; an older index would map zeek_kw dynamically as text, and a terms aggregation on a text field fails that shard. zeek_kw.schema marks every zeek document of such an index, so a reader can send the documents without it (older indices) to the flattened path. Values are stored as strings, as the flattened field already returns them (iec104 type_id is a number in the log).",
+        "params": {"from": "2026.11.21", "fields": ["ja4t", "ja4l", "ja4ls", "func", "function_name", "fc_request", "type_id"]},
+        "source": "if (ctx.zeek instanceof Map && ctx._index != null) { String ix = ctx._index.toString(); if ((ix.startsWith('zeek-v1-') || ix.startsWith('zeek-proxy-v1-')) && ix.length() > 10) { String d = ix.substring(ix.length() - 10); if (d.length() == 10 && d.charAt(4) == (char) '.' && d.charAt(7) == (char) '.' && d.compareTo(params.from) >= 0) { Map kw = new HashMap(); kw.put('schema', 1); for (String f : params.fields) { def v = ctx.zeek.get(f); if (v != null && !(v instanceof Map) && !(v instanceof List)) { kw.put(f, v.toString()); } } ctx.zeek_kw = kw; } } }"
+      }
     }
   ]
 }
@@ -546,6 +555,15 @@ JSON
 # connection record, which community_id alone cannot do when one flow carries
 # several.
 #
+# #3911: zeek_kw.* holds real keyword copies of the zeek sub-fields the
+# dashboard aggregates on (JA4T/JA4L/JA4LS on conn, the ICS function fields).
+# `zeek` itself stays flattened, and a terms aggregation on one of its keys
+# rebuilds the global ordinals of every key of every document after each
+# refresh of the hot index. The geoip-honeypot pipeline fills zeek_kw only in
+# indices created after this mapping (see its params.from), so existing
+# indices are left exactly as they are; backend-service/src/charts.rs reads
+# documents without zeek_kw.schema through the flattened field instead.
+#
 # zeek-v1-* retention deliberately matches the pcap window rather than
 # Suricata's shorter one. Zeek is the highest-volume producer here, but an
 # investigation that has the packets and not the metadata -- or the reverse --
@@ -574,6 +592,18 @@ curl -fsS -X PUT "$es_url/_index_template/zeek-events" \
       "properties": {
         "zeek": {
           "type": "flattened"
+        },
+        "zeek_kw": {
+          "properties": {
+            "schema": { "type": "byte" },
+            "ja4t": { "type": "keyword" },
+            "ja4l": { "type": "keyword" },
+            "ja4ls": { "type": "keyword" },
+            "func": { "type": "keyword" },
+            "function_name": { "type": "keyword" },
+            "fc_request": { "type": "keyword" },
+            "type_id": { "type": "keyword" }
+          }
         },
         "event": {
           "properties": {
@@ -702,6 +732,16 @@ curl -fsS -X PUT "$es_url/_index_template/zeek-proxy-events" \
     "mappings": {
       "properties": {
         "zeek": { "type": "flattened" },
+        "zeek_kw": { "properties": {
+          "schema": { "type": "byte" },
+          "ja4t": { "type": "keyword" },
+          "ja4l": { "type": "keyword" },
+          "ja4ls": { "type": "keyword" },
+          "func": { "type": "keyword" },
+          "function_name": { "type": "keyword" },
+          "fc_request": { "type": "keyword" },
+          "type_id": { "type": "keyword" }
+        } },
         "event": { "properties": { "sensor": { "type": "keyword" }, "category": { "type": "keyword" } } },
         "source": { "properties": {
           "ip": { "type": "ip", "ignore_malformed": true },
