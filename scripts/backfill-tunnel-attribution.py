@@ -453,6 +453,29 @@ def decide(source: dict, pb: Portbridge, starts: dict) -> Decision:
     return Decision(ATTRIBUTED, writes, lags)
 
 
+def _real(ip) -> bool:
+    return bool(ip) and ip != TUNNEL_PEER_IP and ip not in LOOPBACK_IPS
+
+
+def _as_unrewritten(source: dict) -> dict:
+    """The document as the sensor wrote it: a client address the worker put
+    in place of the tunnel peer goes back to the peer, so classify() sees the
+    joins the line needed. Flat lines carry it in honeypot.src_ip; dionaea
+    incidents in the nested connection / parent / child remote_ip (#3832).
+    """
+    h = source.get("honeypot") or {}
+    if _real(h.get("src_ip")):
+        return {**source, "honeypot": {**h, "src_ip": TUNNEL_PEER_IP}}
+    data = h.get("data")
+    if isinstance(data, dict) and not h.get("src_ip"):
+        back = {k: {**c, "remote_ip": TUNNEL_PEER_IP}
+                for k, c in data.items() if k in ("connection", "parent", "child")
+                and isinstance(c, dict) and _real(c.get("remote_ip"))}
+        if back:
+            return {**source, "honeypot": {**h, "data": {**data, **back}}}
+    return source
+
+
 def record_start(starts: dict, source: dict) -> None:
     """Pass 1: the earliest time seen for every named session.
 
@@ -460,13 +483,11 @@ def record_start(starts: dict, source: dict) -> None:
     the tunnel peer's, and classify() answers "other" for them without a
     session. They are still the lines that opened the connection (mailoney's
     envelope lines, cowrie's connect), so they count here as if the worker had
-    not rewritten them (#3815).
+    not rewritten them (#3815). Dionaea incidents are the same: the worker
+    rewrites each nested connection's remote_ip, and that connection's first
+    incident is the one that opened it (#3832).
     """
-    h = source.get("honeypot") or {}
-    ip = h.get("src_ip")
-    if ip and ip != TUNNEL_PEER_IP and ip not in LOOPBACK_IPS:
-        source = {**source, "honeypot": {**h, "src_ip": TUNNEL_PEER_IP}}
-    _, needs = classify(source)
+    _, needs = classify(_as_unrewritten(source))
     for need in needs:
         if need.session is not None and need.line_at:
             known = starts.get(need.session)
