@@ -48,6 +48,17 @@ Per service:
     ops/firewall/hosts/homeserver-swarm-host-ports.txt, so
     home-swarm-host-guard.sh keeps it off the LAN (a host-mode port binds
     every address of the node).
+  - other homeserver-pinned services (#3596, phase 9: Kibana, Keycloak)
+    follow the same port rules: `mode: host` only (an ingress port would be
+    published on every node, the VPS public address included) and every
+    published port in the guard list.
+  - homeserver-pinned services never publish tcp 5432, 6379 or 9200:
+    portbridge forwards those public ports to 10.8.0.2 for the decoys (#3596).
+  - no short-syntax `tmpfs:` (Arcane's stack deploy drops it, #3888); use a
+    long-syntax `volumes: - {type: tmpfs, ...}` entry.
+  - a service that publishes a port has at least one non-internal network:
+    swarm silently leaves a host-mode port unpublished when all of a task's
+    networks are internal (#3596 gate G1).
   - GPU services (#3594, docs/SWARM-GPU.md): swarm ignores
     `deploy.resources.reservations.devices`, so a GPU is reserved only as the
     generic resource `NVIDIA-GPU`. A service reserving it must pin to
@@ -106,6 +117,11 @@ HOMESERVER_EXCLUDE = re.compile(rf"^node\.labels\.(sensor{_WS}=={_WS}false|edge{
 HOMESERVER_PIN = re.compile(
     rf"^(node\.labels\.sensor{_WS}=={_WS}true|node\.labels\.gpu{_WS}=={_WS}true|node\.hostname{_WS}=={_WS}supermicro)$"
 )
+
+
+# #3596: public ports portbridge forwards to 10.8.0.2 for the decoys (Redis,
+# Elasticsearch, PostgreSQL). A homeserver stack never publishes them.
+DECOY_FORWARDED_PORTS = {("tcp", 5432), ("tcp", 6379), ("tcp", 9200)}
 
 
 def stack_files(root: Path) -> list[Path]:
@@ -296,9 +312,10 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
             err(f"{where}: placement must decide the homeserver (#3722): add `node.labels.sensor == false` to keep "
                 "off it, pin with `node.labels.sensor == true`, or set deploy.labels apiary.homeserver: allow + reason")
 
+        published = _published(svc.get("ports"))
         if any(SENSOR_PIN.match(c) for c in constraints):
             guarded = _guard_ports(root)
-            for proto, pub, mode in _published(svc.get("ports")):
+            for proto, pub, mode in published:
                 if mode != "host":
                     err(f"{where}: sensor ports must use long syntax with `mode: host`; the ingress mesh "
                         "hides the attacker's source IP (#3593)")
@@ -307,6 +324,38 @@ def check_file(path: Path, root: Path, *, template: bool = False) -> list[str]:
                 elif (proto, pub) not in guarded:
                     err(f"{where}: published {proto} {pub} is not in {SWARM_HOST_PORTS}; "
                         "home-swarm-host-guard.sh would leave it open on the LAN")
+        elif any(HOMESERVER_PIN.match(c) for c in constraints):
+            # #3596: every homeserver-pinned service, not only sensors. An
+            # ingress port would publish on every node (the VPS public address
+            # included); a host-mode port binds every homeserver address.
+            guarded = _guard_ports(root)
+            for proto, pub, mode in published:
+                if mode != "host":
+                    err(f"{where}: a homeserver-pinned port must use long syntax with `mode: host`; "
+                        "`mode: ingress` would publish it on every node, the VPS public address included (#3596)")
+                elif pub is None:
+                    err(f"{where}: host-mode ports need an explicit `published:` port")
+                elif (proto, pub) not in guarded:
+                    err(f"{where}: published {proto} {pub} is not in {SWARM_HOST_PORTS}; "
+                        "home-swarm-host-guard.sh would leave it open on the LAN")
+
+        if published:
+            nets = svc.get("networks") or []
+            names = list(nets) if isinstance(nets, (dict, list)) else []
+            defs = doc.get("networks") or {}
+            if names and all((defs.get(n) or {}).get("internal") for n in names):
+                err(f"{where}: publishes a port but every network is internal; swarm does not publish a "
+                    "task's host-mode port then (#3596 gate G1). Add a non-internal overlay")
+
+        if any(HOMESERVER_PIN.match(c) for c in constraints):
+            for proto, pub, _mode in published:
+                if (proto, pub) in DECOY_FORWARDED_PORTS:
+                    err(f"{where}: must not publish {proto} {pub}: portbridge forwards that public port to "
+                        "10.8.0.2 for a decoy, so a data store published there would face the internet (#3596)")
+
+        if "tmpfs" in svc:
+            err(f"{where}: short-syntax `tmpfs:` is dropped by Arcane's stack deploy (#3888); use "
+                "`volumes: - {type: tmpfs, target: ..., tmpfs: {size: ...}}`")
 
         reservations = ((deploy.get("resources") or {}).get("reservations") or {})
         if reservations.get("devices"):

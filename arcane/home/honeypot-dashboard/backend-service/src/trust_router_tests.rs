@@ -8,7 +8,7 @@
 //! tests therefore read "not 401 and not 403" as "the boundary let it in".
 
 use crate::trust::testkit::Signer;
-use crate::trust::{AssertionMode, Rotating, Trust, VerifiedActor};
+use crate::trust::{AssertionMode, DevCredential, Rotating, Trust, VerifiedActor};
 use crate::{audit, config_history, es, obs, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -44,6 +44,7 @@ fn trust(signer: &Signer, mode: AssertionMode) -> Trust {
         export: Some(Rotating::new(EXPORT.into())),
         mode,
         keys: Some(Rotating::new(signer.public())),
+        dev: None,
     }
 }
 
@@ -173,12 +174,24 @@ async fn enforce_refuses_a_viewer_whatever_the_role_header_says() {
     let (status, body) = call(app.clone(), "POST", SERVICES,
         &[("x-service-token", BFF), ("x-actor-assertion", &viewer), ("x-actor-role", "admin"), ("x-actor-username", "root")]).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    // The mutations the dashboard grants viewers still pass, matched by the
-    // router's path template ({key}), not by the literal path.
-    for (method, uri) in [("PUT", "/api/v1/preferences"), ("POST", "/api/v1/alerts/k1/ack")] {
+    // Viewers are read-only (#3857): the mutations the dashboard once let
+    // viewers make are refused too, alert reopen (ack with `ack: false`)
+    // included, while an admin still gets past the boundary.
+    for (method, uri) in [
+        ("POST", "/api/v1/alerts/k1/ack"),
+        ("POST", "/api/v1/canarytokens"),
+        ("POST", "/api/v1/config/validate"),
+        ("PUT", "/api/v1/preferences"),
+        ("POST", "/api/v1/preferences/reset"),
+        ("POST", "/api/v1/problem-reports"),
+        ("POST", "/api/v1/reports/preview"),
+    ] {
         let viewer = signer.mint("viewer", method, uri, now());
         let (status, body) = call(app.clone(), method, uri, &[("x-service-token", BFF), ("x-actor-assertion", &viewer)]).await;
-        assert!(let_in(status), "{method} {uri}: {status} {body}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "viewer {method} {uri}: {body}");
+        let admin = signer.mint("admin", method, uri, now());
+        let (status, body) = call(app.clone(), method, uri, &[("x-service-token", BFF), ("x-actor-assertion", &admin)]).await;
+        assert!(let_in(status), "admin {method} {uri}: {status} {body}");
     }
 }
 
@@ -485,10 +498,10 @@ async fn stamped_attribution_is_the_verified_operator_under_enforce_only() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{mode:?}: {text}");
         assert!(text.contains("expires_days"), "{mode:?}: {text}");
 
-        // A viewer may file a problem report; the display name the client
-        // supplied cannot be verified, so enforce drops it and the record
-        // falls back to the asserted username.
-        let (status, text) = b.send(Some("viewer"), "POST",
+        // A problem report (admin-only since #3857): the display name the
+        // client supplied cannot be verified, so enforce drops it and the
+        // record falls back to the asserted username.
+        let (status, text) = b.send(Some("admin"), "POST",
             "/api/v1/problem-reports?actor_subject=sub-bob&actor_username=bob&actor_display_name=Bob",
             Some(json!({"expected": "it works"}))).await;
         assert!(let_in(status), "{mode:?}: {status} {text}");
@@ -504,7 +517,8 @@ async fn enforce_binds_preferences_to_the_verified_operator() {
     for mode in [AssertionMode::Off, AssertionMode::Log, AssertionMode::Enforce] {
         // A viewer naming bob, and an admin doing the same: nothing in the
         // dashboard edits another operator's preferences, so admin is bound
-        // too.
+        // too. Under enforce a viewer may not write at all (#3857), so only
+        // its read is bound.
         for role in ["viewer", "admin"] {
             let b = bound(mode, &format!("prefs-{role}")).await;
             let (subject, username) = expected(mode);
@@ -512,23 +526,33 @@ async fn enforce_binds_preferences_to_the_verified_operator() {
                 doc["payload"]["users"].as_array().unwrap().iter().find(|u| u["subject"] == who).cloned().unwrap()
             };
 
-            let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
-                Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
-            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
-            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
-            let other = if subject == "sub-alice" { "sub-bob" } else { "sub-alice" };
-            let untouched = if other == "sub-alice" { "light" } else { "system" };
-            assert_eq!(mine(&written, subject)["preferences"]["theme"], "dark", "{mode:?} {role}: {written}");
-            assert_eq!(mine(&written, other)["preferences"]["theme"], untouched, "{mode:?} {role}: {written}");
-            let event = b.audited("preferences.update");
-            assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
+            if role == "viewer" && mode == AssertionMode::Enforce {
+                let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
+                    Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+                let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
+                    Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+                assert!(b.upstream.bodies("POST", "/dashboard-users-v1/_doc/users").is_empty(), "a refused write reached the store");
+            } else {
+                let (status, text) = b.send(Some(role), "PUT", "/api/v1/preferences",
+                    Some(json!({"subject": "sub-bob", "username": "bob", "patch": {"theme": "dark"}}))).await;
+                assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+                let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+                let other = if subject == "sub-alice" { "sub-bob" } else { "sub-alice" };
+                let untouched = if other == "sub-alice" { "light" } else { "system" };
+                assert_eq!(mine(&written, subject)["preferences"]["theme"], "dark", "{mode:?} {role}: {written}");
+                assert_eq!(mine(&written, other)["preferences"]["theme"], untouched, "{mode:?} {role}: {written}");
+                let event = b.audited("preferences.update");
+                assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
 
-            let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
-                Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
-            assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
-            let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
-            assert_eq!(mine(&written, subject)["preferences_revision"], 1, "{mode:?} {role}: reset hit the wrong operator: {written}");
-            assert_eq!(mine(&written, other)["preferences_revision"], 0, "{mode:?} {role}: {written}");
+                let (status, text) = b.send(Some(role), "POST", "/api/v1/preferences/reset",
+                    Some(json!({"subject": "sub-bob", "username": "bob"}))).await;
+                assert_eq!(status, StatusCode::OK, "{mode:?} {role}: {text}");
+                let written = b.upstream.last("POST", "/dashboard-users-v1/_doc/users");
+                assert_eq!(mine(&written, subject)["preferences_revision"], 1, "{mode:?} {role}: reset hit the wrong operator: {written}");
+                assert_eq!(mine(&written, other)["preferences_revision"], 0, "{mode:?} {role}: {written}");
+            }
 
             // A read is bound the same way: naming bob reads alice's own
             // preferences under enforce, bob's otherwise.
@@ -616,12 +640,192 @@ async fn attribution_on_routes_with_external_dependencies() {
         assert_eq!((event["actor_subject"].as_str(), event["actor_username"].as_str()), (Some(subject), Some(username)));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["rotated_by"], username, "{mode:?}");
 
-        // Canarytoken creation is a viewer mutation; `created_by` was the
-        // client's display name until #3577.
-        let (status, text) = b.send(Some("viewer"), "POST", "/api/v1/canarytokens",
+        // Canarytoken creation (admin-only since #3857); `created_by` was
+        // the client's display name until #3577.
+        let (status, text) = b.send(Some("admin"), "POST", "/api/v1/canarytokens",
             Some(json!({"token_type": "adobe_pdf", "memo": "m", "created_by": "Bob Display"}))).await;
         assert_eq!(status, StatusCode::OK, "{mode:?}: {text}");
         let created = if mode == AssertionMode::Enforce { "alice" } else { "Bob Display" };
         assert_eq!(b.upstream.last("POST", "/dashboard-canarytokens-v1/_doc/tok-1")["created_by"], created, "{mode:?}");
     }
+}
+
+// ---- the dev credential pair (#3866) ---------------------------------------
+//
+// One instance trusting both pairs, with the durable request log on, so a test
+// can read what the audit trail and the request log say about each request.
+// The dev pair only exists under `enforce` (a boot refusal otherwise, tested
+// in trust.rs), so that is the only mode these run in.
+
+const DEV: &str = "dev-token-for-tests";
+
+struct Dev {
+    app: Router,
+    prod: Signer,
+    dev: Signer,
+    audit: PathBuf,
+    log: PathBuf,
+}
+
+fn dev_state(mode: AssertionMode, test: &str, with_pair: bool) -> Dev {
+    let (prod, dev) = (Signer::generate(), Signer::generate());
+    let audit = audit_path(&format!("dev-{test}-{}", mode.as_str()));
+    let log = audit_path(&format!("dev-{test}-{}-requests", mode.as_str()));
+    let mut trust = trust(&prod, mode);
+    if with_pair {
+        trust.dev = Some(DevCredential { token: Rotating::new(DEV.into()), key: Rotating::new(dev.public()) });
+    }
+    let state = AppState {
+        es: Arc::new(es::Es::connect("http://127.0.0.1:9").expect("client")),
+        trust: Arc::new(trust),
+        audit: Arc::new(audit::AuditLogger::new(audit.clone())),
+        config_history: Arc::new(config_history::ConfigHistory::new(std::env::temp_dir().join("apiary-3866-history.jsonl"))),
+        observability: Arc::new(obs::Obs::new(log.to_string_lossy().into_owned())),
+    };
+    Dev { app: crate::router(state), prod, dev, audit, log }
+}
+
+impl Dev {
+    /// One call with a request id of its own, so its line in the request log
+    /// can be found again.
+    async fn send(&self, id: &str, method: &str, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, String) {
+        let mut all = headers.to_vec();
+        all.push(("x-request-id", id));
+        call(self.app.clone(), method, uri, &all).await
+    }
+
+    /// The request log line for `id`. The line is appended from a spawned
+    /// task after the response, so wait for it.
+    async fn logged(&self, id: &str) -> serde_json::Value {
+        for _ in 0..200 {
+            let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+            let found = text
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|line| line["request.id"] == id);
+            if let Some(found) = found {
+                return found;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("no request log line for {id}");
+    }
+
+    fn last_audit(&self) -> serde_json::Value {
+        let text = std::fs::read_to_string(&self.audit).expect("the action was audited");
+        serde_json::from_str(text.lines().last().unwrap()).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn dev_requests_are_marked_in_the_audit_trail_and_the_request_log_and_production_ones_are_not() {
+    let d = dev_state(AssertionMode::Enforce, "marker", true);
+
+    let dev_admin = d.dev.mint("admin", "POST", SERVICES, now());
+    let (status, body) = d.send("dev-write", "POST", &format!("{SERVICES}?actor_subject=forged&actor_username=mallory"),
+        &[("x-service-token", DEV), ("x-actor-assertion", &dev_admin)]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "past the boundary: {body}");
+    let event = d.last_audit();
+    assert_eq!((event["actor_username"].as_str(), event["actor_subject"].as_str()), (Some("dev:alice"), Some("dev:sub-alice")), "{event}");
+    assert_eq!(d.logged("dev-write").await["credential"], "dev");
+
+    let prod_admin = d.prod.mint("admin", "POST", SERVICES, now());
+    let (status, body) = d.send("prod-write", "POST", SERVICES, &[("x-service-token", BFF), ("x-actor-assertion", &prod_admin)]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let event = d.last_audit();
+    assert_eq!((event["actor_username"].as_str(), event["actor_subject"].as_str()), (Some("alice"), Some("sub-alice")), "{event}");
+    let line = d.logged("prod-write").await;
+    assert!(line.get("credential").is_none(), "a production line carries no marker: {line}");
+
+    // A dev request that is refused is still a dev request.
+    let (status, _) = d.send("dev-refused", "POST", SERVICES, &[("x-service-token", DEV)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(d.logged("dev-refused").await["credential"], "dev");
+    // An unknown token is not a dev request, and not marked.
+    let (status, _) = d.send("stranger", "GET", "/api/v1/events", &[("x-service-token", "nope")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(d.logged("stranger").await.get("credential").is_none());
+    // The marker is on the response's extension only: nothing is sent to the caller.
+    let response = d.app.clone().oneshot(
+        Request::builder().uri("/api/v1/events").header("x-service-token", DEV).body(Body::empty()).unwrap()).await.unwrap();
+    assert!(!response.headers().keys().any(|name| name.as_str().contains("dev")), "{:?}", response.headers());
+}
+
+#[tokio::test]
+async fn the_dev_pair_is_accepted_and_each_mixed_pair_is_refused() {
+    let d = dev_state(AssertionMode::Enforce, "pair", true);
+    let sign = |signer: &Signer, role: &str, method: &str, path: &str| signer.mint(role, method, path, now());
+
+    let ok = sign(&d.dev, "admin", "GET", "/api/v1/events");
+    let (status, body) = d.send("pair-ok", "GET", "/api/v1/events", &[("x-service-token", DEV), ("x-actor-assertion", &ok)]).await;
+    assert!(let_in(status), "the dev pair: {status} {body}");
+
+    let prod_signed = sign(&d.prod, "admin", "GET", "/api/v1/events");
+    let (status, body) = d.send("pair-mixed-1", "GET", "/api/v1/events", &[("x-service-token", DEV), ("x-actor-assertion", &prod_signed)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "dev token + production assertion: {body}");
+    let dev_signed = sign(&d.dev, "admin", "GET", "/api/v1/events");
+    let (status, body) = d.send("pair-mixed-2", "GET", "/api/v1/events", &[("x-service-token", BFF), ("x-actor-assertion", &dev_signed)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "production token + dev assertion: {body}");
+    // Mutations too, where a refusal also means nothing was audited.
+    let dev_write = sign(&d.dev, "admin", "POST", SERVICES);
+    let (status, _) = d.send("pair-mixed-3", "POST", SERVICES, &[("x-service-token", BFF), ("x-actor-assertion", &dev_write)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!d.audit.exists(), "a refused request was audited");
+
+    // The bare token acts as the production token does without an assertion:
+    // a read passes (marked dev, no actor), a write or an actor claim is a 401.
+    for (id, token) in [("bare-dev", DEV), ("bare-bff", BFF)] {
+        let (status, body) = d.send(&format!("{id}-read"), "GET", "/api/v1/events", &[("x-service-token", token)]).await;
+        assert!(let_in(status), "{id} read: {status} {body}");
+        let (status, _) = d.send(&format!("{id}-write"), "POST", SERVICES, &[("x-service-token", token)]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{id} write");
+        let (status, _) = d.send(&format!("{id}-claim"), "GET", "/api/v1/events",
+            &[("x-service-token", token), ("x-actor-username", "root")]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{id} actor claim");
+    }
+    assert_eq!(d.logged("bare-dev-read").await["credential"], "dev");
+    assert!(d.logged("bare-bff-read").await.get("credential").is_none());
+    assert!(!d.audit.exists(), "a bare read or a refused write was audited");
+}
+
+#[tokio::test]
+async fn unsetting_the_dev_pair_revokes_it_and_touches_nothing_else() {
+    let d = dev_state(AssertionMode::Enforce, "unset", false);
+    let dev_signed = d.dev.mint("admin", "GET", "/api/v1/events", now());
+    let (status, body) = d.send("unset-dev", "GET", "/api/v1/events", &[("x-service-token", DEV), ("x-actor-assertion", &dev_signed)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body, "service token required");
+    let prod = d.prod.mint("admin", "GET", "/api/v1/events", now());
+    let (status, body) = d.send("unset-prod", "GET", "/api/v1/events", &[("x-service-token", BFF), ("x-actor-assertion", &prod)]).await;
+    assert!(let_in(status), "production after the dev pair is gone: {status} {body}");
+    let (status, _) = d.send("unset-export", "GET", "/api/v1/ip-block-export", &[("x-export-token", EXPORT)]).await;
+    assert!(let_in(status), "{status}");
+}
+
+#[tokio::test]
+async fn a_dev_viewer_is_refused_a_write_and_a_dev_admin_gets_through() {
+    let d = dev_state(AssertionMode::Enforce, "roles", true);
+    for (n, (method, uri)) in [
+        ("POST", SERVICES),
+        ("PUT", "/api/v1/preferences"),
+        ("POST", "/api/v1/canarytokens"),
+        ("POST", "/api/v1/alerts/k1/ack"),
+    ].into_iter().enumerate() {
+        let viewer = d.dev.mint("viewer", method, uri, now());
+        let (status, body) = d.send(&format!("role-v{n}"), method, uri, &[("x-service-token", DEV), ("x-actor-assertion", &viewer)]).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "dev viewer {method} {uri}: {body}");
+        assert_eq!(d.logged(&format!("role-v{n}")).await["credential"], "dev");
+        let admin = d.dev.mint("admin", method, uri, now());
+        let (status, body) = d.send(&format!("role-a{n}"), method, uri, &[("x-service-token", DEV), ("x-actor-assertion", &admin)]).await;
+        assert!(let_in(status), "dev admin {method} {uri}: {status} {body}");
+    }
+    // The role is the assertion's, never a header's.
+    let viewer = d.dev.mint("viewer", "POST", SERVICES, now());
+    let (status, _) = d.send("role-header", "POST", SERVICES,
+        &[("x-service-token", DEV), ("x-actor-assertion", &viewer), ("x-actor-role", "admin")]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Reads stay open to a dev viewer.
+    let viewer = d.dev.mint("viewer", "GET", "/api/v1/events", now());
+    let (status, _) = d.send("role-read", "GET", "/api/v1/events", &[("x-service-token", DEV), ("x-actor-assertion", &viewer)]).await;
+    assert!(let_in(status), "{status}");
 }

@@ -1,0 +1,251 @@
+# #3596 (swarm phase 9 leg B, epic #3587): Keycloak and its PostgreSQL as
+# one stack pinned to the homeserver.
+#
+# Nothing reaches either by Docker DNS from outside the stack. Every OIDC
+# client (the dashboard, Arcane, the VPS oidc-* gateways) uses the public
+# issuer, which VPS Traefik forwards through socat-hp-keycloak to
+# 10.8.0.2:18080 over wg0; hp-auth-events-worker calls 10.8.0.2:18080 from
+# its bridge. Postgres is only reached by Keycloak, on the internal `data`
+# overlay, under the service name `postgres` (KC_DB_URL_HOST unchanged).
+#
+# 18080 is a host-mode port, so it binds every homeserver address. It is in
+# ops/firewall/hosts/homeserver-swarm-host-ports.txt: home-swarm-host-guard
+# drops every NEW flow to it except the VPS on wg0 and local containers to
+# 10.8.0.2. 5432 and the management port 9000 are never published.
+#
+# Both Compose services in arcane/home/honeypot-keycloak stay behind the
+# `legacy` profile as the rollback (README.md). They use the same PGDATA
+# volume, so the two must never run together: a second postmaster on the same
+# data directory is not caught across PID namespaces. This file therefore
+# first landed with replicas: 0 for both services (cut over 2026-11-20).
+#
+# The public domain is never in git (and stacks get no .env interpolation,
+# #3790): the entrypoint reads it from the read-only secrets bind and refuses
+# to start without it.
+services:
+  postgres:
+    # Same digest as the Compose rollback: the same PGDATA is opened by the
+    # same server version either way, no conversion.
+    image: postgres:18.7-bookworm@sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f
+    labels:
+      apiary.swarm.migration: keycloak
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak/postgres-password
+      PGDATA: /var/lib/postgresql/18/docker
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql
+      # The same files the Compose stack mounts, so a rollback is symmetric.
+      - type: bind
+        source: /var/dockge/stacks/honeypot-keycloak/secrets
+        target: /run/secrets/keycloak
+        read_only: true
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 60s
+    # The entrypoint reads the password file as root and drops to 999 with
+    # gosu (CAP_SETUID/SETGID; works under the daemon-wide no-new-privileges).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    deploy:
+      mode: replicated
+      # Landed at 0 and scaled to 1 by hand after the Compose
+      # hp-keycloak-postgres stopped (#3596 cutover 2026-11-20, 30 s without
+      # Keycloak); this records the result.
+      replicas: 1
+      # No VIP: IPVS drops idle TCP after 900 s, which breaks Keycloak's
+      # pooled DB connections.
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        # longer than start_period + interval x retries (20 + 100 s)
+        monitor: 180s
+        failure_action: rollback
+        order: stop-first      # one postmaster per PGDATA, ever
+      rollback_config:
+        parallelism: 1
+        monitor: 180s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "identity tier (scripts/honeypot-pause.sh NEVER): the dashboard, Arcane and every oidc-* gateway authenticate through it"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
+    labels:
+      apiary.swarm.migration: keycloak
+    entrypoint: ["/bin/bash", "-ec"]
+    # The Compose entrypoint, plus the public domain from a file (#3596).
+    command:
+      - |
+        domain_file=/run/secrets/keycloak/public-domain
+        if [[ ! -s "$$domain_file" ]]; then
+          echo "keycloak: $$domain_file is missing or empty; refusing to start (the public domain is never in git, see swarm/stacks/keycloak/README.md)" >&2
+          exit 1
+        fi
+        # First line, verbatim: anything but a bare hostname is refused below.
+        IFS= read -r KEYCLOAK_PUBLIC_DOMAIN < "$$domain_file" || true
+        case "$$KEYCLOAK_PUBLIC_DOMAIN" in
+          ""|*[!A-Za-z0-9.-]*) echo "keycloak: invalid public domain in $$domain_file" >&2; exit 1 ;;
+        esac
+        export KEYCLOAK_PUBLIC_DOMAIN
+        export KC_HOSTNAME="https://auth.$${KEYCLOAK_PUBLIC_DOMAIN}"
+        export KC_DB_PASSWORD="$$(< /run/secrets/keycloak/postgres-password)"
+        if [[ -f /run/secrets/keycloak/bootstrap-admin-password ]]; then
+          export KC_BOOTSTRAP_ADMIN_USERNAME="$${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-bootstrap-admin}"
+          export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(< /run/secrets/keycloak/bootstrap-admin-password)"
+        fi
+        # #3824: temporary bootstrap admin client on an empty database only.
+        if [[ -f /run/secrets/keycloak/bootstrap-admin-client-secret ]]; then
+          export KC_BOOTSTRAP_ADMIN_CLIENT_ID="$${KEYCLOAK_BOOTSTRAP_ADMIN_CLIENT_ID:-bootstrap-admin-client}"
+          export KC_BOOTSTRAP_ADMIN_CLIENT_SECRET="$$(< /run/secrets/keycloak/bootstrap-admin-client-secret)"
+        fi
+        sed "s/example\.invalid/$${KEYCLOAK_PUBLIC_DOMAIN}/g" \
+          /opt/keycloak/realm-template/apiary-realm.json \
+          > /opt/keycloak/data/import/apiary-realm.json
+        exec /opt/keycloak/bin/kc.sh start --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_PORT: "5432"
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      # KC_HOSTNAME is exported by the entrypoint from the domain file.
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_SCHEME: http
+      KC_CACHE: local
+    volumes:
+      # Read-only from the honeypot-keycloak project directory, which stays
+      # the source of these files (Arcane syncs keycloak/ into it).
+      - type: bind
+        source: /var/dockge/stacks/honeypot-keycloak/secrets
+        target: /run/secrets/keycloak
+        read_only: true
+      - type: bind
+        source: /var/dockge/stacks/honeypot-keycloak/theme/apiary
+        target: /opt/keycloak/themes/apiary
+        read_only: true
+      - type: bind
+        source: /var/dockge/stacks/honeypot-keycloak/keycloak/realm
+        target: /opt/keycloak/realm-template
+        read_only: true
+      # Long syntax only: Arcane drops short-syntax tmpfs (#3888). uid= cannot
+      # be expressed, so both use the tmpfs default mode 1777 (the import dir
+      # is world-writable, but container-private).
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
+      - type: tmpfs
+        target: /opt/keycloak/data/import
+        tmpfs:
+          size: 4194304
+    networks:
+      - data
+      # Not internal: outbound SMTP/recovery, and a task whose networks are
+      # all internal gets no host-mode port published (phase 9 gate G1).
+      - egress
+    ports:
+      - target: 8080
+        published: 18080
+        protocol: tcp
+        mode: host
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    stop_grace_period: 60s
+    cap_drop: [ALL]
+    deploy:
+      mode: replicated
+      # Landed at 0 and scaled to 1 by hand after postgres was healthy
+      # (#3596 cutover 2026-11-20); this records the result.
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+        reservations:
+          memory: 768M
+      restart_policy:
+        # Keycloak exits while Postgres does not answer yet (no depends_on in
+        # swarm); the retry brings it up.
+        condition: any
+        delay: 5s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        # longer than start_period + interval x retries (60 + 180 s)
+        monitor: 300s
+        failure_action: rollback
+        order: stop-first      # host-mode port: two tasks cannot both bind it
+      rollback_config:
+        parallelism: 1
+        monitor: 300s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "identity tier (scripts/honeypot-pause.sh NEVER): the dashboard, Arcane and every oidc-* gateway authenticate through it"
+        apiary.probe: http:18080/realms/apiary/.well-known/openid-configuration
+networks:
+  data:
+    driver: overlay
+    internal: true
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.32.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+  egress:
+    driver: overlay
+    ipam:
+      config:
+        - subnet: 10.200.33.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+volumes:
+  # The Compose volume, reused in place (never copied).
+  pgdata:
+    external: true
+    name: honeypot-keycloak_keycloak-postgres

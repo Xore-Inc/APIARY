@@ -8,17 +8,13 @@
 # in docs/KEYCLOAK-OPERATIONS.md -- run this instead of copy-pasting kcadm
 # commands seven times by hand.
 #
-# The realm has 11 confidential clients total (#2368, #3578); the other 4 are NOT
+# The realm has 10 confidential clients total (#2368, #3578, #3834); the other 3 are NOT
 # handled here because none of them sit behind a VPS oauth2-proxy gateway.
 # Each of those has its own idempotent provisioner script and must be run
 # separately, alongside this one, as part of the same clean-rebuild pass --
 # see docs/KEYCLOAK-OPERATIONS.md §7:
-#   apiary-dashboard    native OIDC in the dashboard binary itself (no VPS
-#                        gateway since #1026's follow-up retired
-#                        oidc-dashboard) -- provision-dashboard-oidc-secret.sh
-#   apiary-dashboard-rewrite  the rewrite dashboard's own client (#3578), same
-#                        script with DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite
-#                        -- provision-dashboard-oidc-secret.sh
+#   apiary-dashboard-rewrite  the dashboard's own client (#3578, native OIDC,
+#                        no VPS gateway) -- provision-dashboard-oidc-secret.sh
 #   arcane               Arcane's own OIDC login; reads its secret from a
 #                        homeserver .env file, not a VPS secrets file --
 #                        provision-arcane-oidc-secret.sh
@@ -26,17 +22,21 @@
 #                        grant, never an interactive login --
 #                        provision-events-poller.sh
 #
-# Run from the homeserver (needs docker exec access to hp-keycloak) with SSH
-# access to the VPS. Secret values are piped directly over SSH, never
-# written to a local file or passed as a command-line argument.
+# Run from the homeserver as root (root's ~/.ssh/config carries the `vps`
+# alias) with SSH access to the VPS. #3824: authenticates with the permanent
+# admin client (secrets/admin-client-secret) through lib-admin.sh instead of a
+# kcadm password on the command line. Each secret goes from a 0600 file in a
+# private temp dir straight into ssh's stdin -- never a command-line argument,
+# never printed.
 set -euo pipefail
+
+# shellcheck source-path=SCRIPTDIR source=lib-admin.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib-admin.sh"
 
 REALM="${KEYCLOAK_REALM:-apiary}"
 VPS_HOST="${VPS_HOST:-vps}"
 VPS_SECRETS_DIR="${VPS_SECRETS_DIR:-/root/vps/secrets/oidc}"
-KC_CONTAINER="${KC_CONTAINER:-hp-keycloak}"
-KC_CONFIG="${KC_CONFIG:-/tmp/kcadm-sync-client-secrets.config}"
-KC="/opt/keycloak/bin/kcadm.sh"
+ADMIN_ID="${KEYCLOAK_ADMIN_CLIENT_ID:-apiary-ops-admin}"
 
 # client id -> vps/docker-compose.yml service/container name of its
 # oauth2-proxy gateway sidecar (not always a plain "oidc-<client>" prefix --
@@ -65,20 +65,7 @@ declare -A CLIENT_CONTAINERS=(
 )
 CLIENTS=("${!CLIENT_CONTAINERS[@]}")
 
-: "${KEYCLOAK_ADMIN_USERNAME:?set KEYCLOAK_ADMIN_USERNAME (master-realm admin -- the bootstrap account works fine right after a fresh --import-realm, before a named admin exists yet)}"
-: "${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}"
-
-docker exec "$KC_CONTAINER" "$KC" config credentials \
-  --config "$KC_CONFIG" --server http://127.0.0.1:8080 --realm master \
-  --user "$KEYCLOAK_ADMIN_USERNAME" --password "$KEYCLOAK_ADMIN_PASSWORD"
-
-# #2194: from this point the config file holds the live admin access token
-# -- remove it on every exit path, not just success (a mid-run failure under
-# set -euo pipefail used to leave it in hp-keycloak:/tmp until restart).
-# Deliberately ahead of the #2195 pre-flight below so even its abort path
-# cleans up. Idiom per provision-account-console-scopes.sh.
-cleanup() { docker exec "$KC_CONTAINER" rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+kc_login "${ADMIN_ID}" "${KEYCLOAK_SECRETS_DIR}/admin-client-secret"
 
 # #2195: validate the hand-maintained map against the realm's own client
 # list BEFORE syncing anything. A listed-but-decommissioned client used to
@@ -90,8 +77,7 @@ trap cleanup EXIT
 # in by hand. One loud abort before any writes replaces both failure modes;
 # when this fires the MAP above has drifted from the realm and needs
 # editing, not a rerun.
-realm_clients="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-  --fields clientId --format csv --noquotes --config "$KC_CONFIG")"
+realm_clients="$(kc_api GET "/${REALM}/clients" | kc_json '"\n".join(c["clientId"] for c in d)')"
 missing=()
 for client in "${CLIENTS[@]}"; do
   grep -qxF "$client" <<<"$realm_clients" || missing+=("$client")
@@ -105,16 +91,13 @@ fi
 fail=0
 synced_containers=()
 for client in "${CLIENTS[@]}"; do
-  uuid="$(docker exec "$KC_CONTAINER" "$KC" get clients -r "$REALM" \
-    -q "clientId=${client}" --fields id --format csv --noquotes --config "$KC_CONFIG")"
+  uuid="$(kc_client_uuid "${REALM}" "${client}")"
   if [[ -z "$uuid" ]]; then
     echo "SKIP $client: no such client in realm $REALM" >&2
     fail=1
     continue
   fi
-  secret="$(docker exec "$KC_CONTAINER" "$KC" get \
-    "clients/${uuid}/client-secret" -r "$REALM" --config "$KC_CONFIG" \
-    | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')"
+  kc_write_secret "${REALM}" "${uuid}" "${kc_tmp}/${client}.secret" root:root 600
 
   # #787: <<<"$secret" (a herestring) always appends exactly one trailing
   # newline to whatever it feeds a command's stdin -- that's herestring
@@ -129,10 +112,12 @@ for client in "${CLIENTS[@]}"; do
   # masked until now by secrets rarely actually being rotated post-setup.
   # printf '%s' (no \n) is exact-bytes; piping it in instead of using a
   # herestring is what actually avoids the injected newline.
-  printf '%s' "$secret" | ssh "$VPS_HOST" "install -d -m 750 '${VPS_SECRETS_DIR}/${client}' && \
+  # #787's lesson holds: the file carries the exact secret bytes, no newline.
+  ssh "$VPS_HOST" "install -d -m 750 '${VPS_SECRETS_DIR}/${client}' && \
     umask 077 && cat > '${VPS_SECRETS_DIR}/${client}/client-secret' && \
     chown root:65532 '${VPS_SECRETS_DIR}/${client}/client-secret' && \
-    chmod 440 '${VPS_SECRETS_DIR}/${client}/client-secret'"
+    chmod 440 '${VPS_SECRETS_DIR}/${client}/client-secret'" < "${kc_tmp}/${client}.secret"
+  rm -f "${kc_tmp}/${client}.secret"
   synced_containers+=("${CLIENT_CONTAINERS[$client]}")
   echo "synced $client"
 done

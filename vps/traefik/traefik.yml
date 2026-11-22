@@ -59,11 +59,6 @@ entryPoints:
   traefik-oidc:
     address: ":8081"
 
-  # Unpublished compatibility path from oidc-dashboard to the rolling
-  # dashboard load balancer.
-  dashboard-oidc:
-    address: ":8082"
-
   # HTTP — redirect to HTTPS
   web:
     address: ":80"

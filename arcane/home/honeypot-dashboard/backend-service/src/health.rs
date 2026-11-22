@@ -24,6 +24,14 @@ pub struct SensorHealth {
     /// speaks rather than a flat hour for the whole fleet — see
     /// `sensor_state` for why (#1931).
     pub state: String,
+    /// #3908: documents in Zeek's per-PDU Modbus log from this sensor, all
+    /// time. They are NOT in `documents` (or in any total on this page):
+    /// one doc per Modbus request or response from a few dozen pollers was
+    /// 59 % of every event and made this page take 14 s. Present only on
+    /// the sensors that write that log, so the zeek rows can still say
+    /// where the rest of their data went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modbus_pdus: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +144,49 @@ pub struct SourceHealth {
     /// totals beside them; without this the discrepancy reads as a bug in
     /// the dashboard rather than a property of tunnel-delivered traffic.
     pub unattributed_24h: u64,
+    /// #3908: all documents in Zeek's per-PDU Modbus log
+    /// (`es::MODBUS_DETAIL_INDICES`), counted separately because every
+    /// other figure here leaves them out; the per-sensor split is on the
+    /// zeek rows' `modbus_pdus`. 0 when the count could not be read.
+    pub modbus_pdus: u64,
+}
+
+/// Total and per-sensor document counts of the per-PDU Modbus log (#3908).
+/// A cheap read on its own: no query, one terms aggregation on a field
+/// that is constant per index. A failure degrades to "unknown" (all zero)
+/// rather than failing the page.
+async fn modbus_pdu_counts(state: &AppState) -> (u64, std::collections::HashMap<String, u64>) {
+    // #3910: an all-time count, so the worker's snapshot serves it.
+    if let Some(snapshot) = crate::page_rollup::read(state, crate::page_rollup::SOURCE_HEALTH_MODBUS).await {
+        return parse_modbus_pdu_counts(&snapshot);
+    }
+    match state.es.search_index(crate::es::MODBUS_DETAIL_INDICES, modbus_pdu_body()).await {
+        Ok(result) => parse_modbus_pdu_counts(&result),
+        Err(error) => {
+            tracing::warn!(%error, "source-health: modbus PDU count failed");
+            (0, Default::default())
+        }
+    }
+}
+
+/// The Modbus PDU count behind `source-health`, shared with its snapshot.
+pub(crate) fn modbus_pdu_body() -> serde_json::Value {
+    json!({
+        "size": 0,
+        "track_total_hits": true,
+        "aggs": {"sensors": {"terms": {"field": "event.sensor", "size": 10}}}
+    })
+}
+
+fn parse_modbus_pdu_counts(result: &serde_json::Value) -> (u64, std::collections::HashMap<String, u64>) {
+    let total = result["hits"]["total"]["value"].as_u64().unwrap_or(0);
+    let per_sensor = result["aggregations"]["sensors"]["buckets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|bucket| Some((bucket["key"].as_str()?.to_string(), bucket["doc_count"].as_u64()?)))
+        .collect();
+    (total, per_sensor)
 }
 
 /// Uptime + memory from /proc/self — zeroes off Linux or on parse failure
@@ -338,18 +389,10 @@ fn sensor_state(age_s: i64, recent_7d: u64) -> &'static str {
     }
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/v1/source-health",
-    summary = "Per-source ingestion health, the page behind \"Source & pipeline health\".",
-    responses(
-        (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
-        (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
-    ),
-    security(("serviceToken" = [])),
-)]
-pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceHealth>, (StatusCode, String)> {
-    let body = json!({
+/// The all-time per-sensor aggregation behind `/api/v1/source-health`,
+/// shared with its snapshot.
+pub(crate) fn all_time_body() -> serde_json::Value {
+    json!({
         "size": 0,
         "track_total_hits": true,
         // #1677/#1767: self-generated healthcheck probes are excluded from
@@ -364,7 +407,7 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
         "query": {"bool": {"must_not": [crate::es::internal_probe_exclusion()]}},
         "aggs": {
             "sensors": {
-                "terms": {"field": "event.sensor", "size": 60, "order": {"last": "desc"}},
+                "terms": {"field": "event.sensor", "size": SENSOR_TERMS, "order": {"last": "desc"}},
                 "aggs": {
                     "last": {"max": {"field": "@timestamp"}},
                     // #1931: how often this sensor normally speaks, so
@@ -389,12 +432,101 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
                 }
             }
         }
+    })
+}
+
+const SENSOR_TERMS: usize = 60;
+
+/// The live part of `/api/v1/source-health` next to its snapshot (#3910):
+/// the newest event and each sensor's last event over the last hour.
+/// Freshness is what this page is for, so it never trails by a cycle.
+fn recent_body() -> serde_json::Value {
+    json!({
+        "size": 0,
+        "track_total_hits": false,
+        "query": {"bool": {
+            "filter": [{"range": {"@timestamp": {"gte": RECENT_WINDOW}}}],
+            "must_not": [crate::es::internal_probe_exclusion()]
+        }},
+        "aggs": {
+            "sensors": {
+                "terms": {"field": "event.sensor", "size": SENSOR_TERMS, "order": {"last": "desc"}},
+                "aggs": {"last": {"max": {"field": "@timestamp"}}}
+            },
+            "newest": {"max": {"field": "@timestamp"}}
+        }
+    })
+}
+
+const RECENT_WINDOW: &str = "now-1h";
+
+/// The answer to [`all_time_body`]: the worker's snapshot with the last hour
+/// read live on top ([`with_recent`]), or the whole search live when no
+/// recent snapshot exists.
+async fn sensor_activity(state: &AppState) -> anyhow::Result<serde_json::Value> {
+    match crate::page_rollup::read(state, crate::page_rollup::SOURCE_HEALTH).await {
+        Some(snapshot) => {
+            let recent = state.es.search_agg(recent_body()).await?;
+            Ok(with_recent(&snapshot, &recent))
+        }
+        None => state.es.search_agg(all_time_body()).await,
+    }
+}
+
+/// A snapshot of [`all_time_body`] brought up to date with an answer to
+/// [`recent_body`]: `newest` and every sensor's `last` are the later of the
+/// two, a sensor that only the last hour knows is added with that hour's
+/// events, and the sensors are ordered by `last` again. Counts (documents,
+/// the 7-day rate, unattributed) stay as of the snapshot, at most a few
+/// minutes behind.
+fn with_recent(snapshot: &serde_json::Value, recent: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    let later = |old: &Value, new: &Value| -> Value {
+        match (old["value"].as_f64(), new["value"].as_f64()) {
+            (Some(old_ms), Some(new_ms)) if new_ms > old_ms => new.clone(),
+            (None, Some(_)) => new.clone(),
+            _ => old.clone(),
+        }
+    };
+    let mut result = snapshot.clone();
+    let aggs = &recent["aggregations"];
+    result["aggregations"]["newest"] = later(&snapshot["aggregations"]["newest"], &aggs["newest"]);
+    let mut buckets: Vec<Value> = snapshot["aggregations"]["sensors"]["buckets"].as_array().cloned().unwrap_or_default();
+    for live in aggs["sensors"]["buckets"].as_array().into_iter().flatten() {
+        match buckets.iter_mut().find(|bucket| bucket["key"] == live["key"]) {
+            Some(bucket) => bucket["last"] = later(&bucket["last"], &live["last"]),
+            None => buckets.push(json!({
+                "key": live["key"],
+                "doc_count": live["doc_count"],
+                "last": live["last"],
+                "recent": {"doc_count": live["doc_count"]},
+            })),
+        }
+    }
+    buckets.sort_by(|a, b| {
+        let last = |bucket: &Value| bucket["last"]["value"].as_f64().unwrap_or(0.0);
+        last(b).total_cmp(&last(a))
     });
-    let result = state
-        .es
-        .search(body)
-        .await
-        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+    buckets.truncate(SENSOR_TERMS);
+    result["aggregations"]["sensors"]["buckets"] = Value::Array(buckets);
+    result
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/source-health",
+    summary = "Per-source ingestion health, the page behind \"Source & pipeline health\".",
+    responses(
+        (status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
+    ),
+    security(("serviceToken" = [])),
+)]
+pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceHealth>, (StatusCode, String)> {
+    // #3908: the fleet-wide aggregation skips the per-PDU Modbus log, which
+    // is counted on its own beside it.
+    let (result, (modbus_pdus, modbus_per_sensor)) = tokio::join!(sensor_activity(&state), modbus_pdu_counts(&state));
+    let result = result.map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
 
     let cluster_status = state.es.cluster_status().await;
     let total_documents = result["hits"]["total"]["value"].as_u64().unwrap_or(0);
@@ -427,8 +559,10 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
                     let last_ms = bucket["last"]["value"].as_f64().unwrap_or(0.0) as i64;
                     let age_s = ((now_ms - last_ms) / 1000).max(0);
                     let recent_7d = bucket["recent"]["doc_count"].as_u64().unwrap_or(0);
+                    let sensor = bucket["key"].as_str().unwrap_or("").to_string();
                     SensorHealth {
-                        sensor: bucket["key"].as_str().unwrap_or("").to_string(),
+                        modbus_pdus: modbus_per_sensor.get(&sensor).copied(),
+                        sensor,
                         documents: bucket["doc_count"].as_u64().unwrap_or(0),
                         last_seen: bucket["last"]["value_as_string"].as_str().unwrap_or("").to_string(),
                         state: sensor_state(age_s, recent_7d).to_string(),
@@ -452,6 +586,7 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
         // the card states its own reason.
         webhook: crate::webhook_delivery::summary(&state.es).await,
         unattributed_24h: result["aggregations"]["unattributed"]["doc_count"].as_u64().unwrap_or(0),
+        modbus_pdus,
     }))
 }
 
@@ -459,6 +594,80 @@ pub async fn source_health(State(state): State<AppState>) -> Result<Json<SourceH
 #[cfg(test)]
 mod tests {
     use super::sensor_state;
+
+    fn sensor(key: &str, docs: u64, last_ms: f64, recent: u64) -> serde_json::Value {
+        serde_json::json!({
+            "key": key, "doc_count": docs,
+            "last": {"value": last_ms, "value_as_string": format!("t{last_ms}")},
+            "recent": {"doc_count": recent}
+        })
+    }
+
+    #[test]
+    fn the_last_hour_brings_a_snapshot_up_to_date() {
+        let snapshot = serde_json::json!({
+            "hits": {"total": {"value": 1000, "relation": "eq"}},
+            "aggregations": {
+                "newest": {"value": 500.0, "value_as_string": "t500"},
+                "unattributed": {"doc_count": 7},
+                "sensors": {"buckets": [sensor("cowrie", 900, 500.0, 90), sensor("wordpot", 100, 400.0, 2)]}
+            }
+        });
+        let recent = serde_json::json!({"aggregations": {
+            "newest": {"value": 800.0, "value_as_string": "t800"},
+            "sensors": {"buckets": [
+                {"key": "suricata", "doc_count": 3, "last": {"value": 800.0, "value_as_string": "t800"}},
+                {"key": "wordpot", "doc_count": 1, "last": {"value": 700.0, "value_as_string": "t700"}},
+                {"key": "cowrie", "doc_count": 5, "last": {"value": 450.0, "value_as_string": "t450"}}
+            ]}
+        }});
+        let merged = super::with_recent(&snapshot, &recent);
+        // Freshness from the last hour, counts from the snapshot.
+        assert_eq!(merged["aggregations"]["newest"]["value_as_string"], "t800");
+        assert_eq!(merged["hits"]["total"]["value"], 1000);
+        assert_eq!(merged["aggregations"]["unattributed"]["doc_count"], 7);
+        let buckets = merged["aggregations"]["sensors"]["buckets"].as_array().unwrap();
+        let keys: Vec<&str> = buckets.iter().map(|b| b["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, vec!["suricata", "wordpot", "cowrie"], "ordered by last again");
+        assert_eq!(buckets[0]["doc_count"], 3, "a sensor only the last hour knows");
+        assert_eq!(buckets[1]["last"]["value_as_string"], "t700");
+        assert_eq!(buckets[1]["doc_count"], 100);
+        assert_eq!(buckets[2]["last"]["value_as_string"], "t500", "an older live value never wins");
+
+        // A quiet hour leaves the snapshot's own values.
+        let quiet = serde_json::json!({"aggregations": {"newest": {"value": null}, "sensors": {"buckets": []}}});
+        let merged = super::with_recent(&snapshot, &quiet);
+        assert_eq!(merged["aggregations"]["newest"]["value_as_string"], "t500");
+        assert_eq!(merged["aggregations"]["sensors"], snapshot["aggregations"]["sensors"]);
+    }
+
+    #[test]
+    fn the_snapshot_runs_the_live_body() {
+        // The live fallback and the snapshot are one request, and the live
+        // part is only the last hour.
+        let body = super::all_time_body();
+        assert_eq!(body["track_total_hits"], true);
+        assert!(body["query"]["bool"].get("filter").is_none(), "all time");
+        let recent = super::recent_body();
+        assert_eq!(recent["query"]["bool"]["filter"][0]["range"]["@timestamp"]["gte"], "now-1h");
+        assert_eq!(recent["query"]["bool"]["must_not"], body["query"]["bool"]["must_not"]);
+    }
+
+    #[test]
+    fn modbus_pdu_counts_read_total_and_per_sensor() {
+        let result = serde_json::json!({
+            "hits": {"total": {"value": 218_332_307u64, "relation": "eq"}},
+            "aggregations": {"sensors": {"buckets": [
+                {"key": "zeek", "doc_count": 178_222_049u64},
+                {"key": "zeek-proxy", "doc_count": 40_110_258u64}
+            ]}}
+        });
+        let (total, per_sensor) = super::parse_modbus_pdu_counts(&result);
+        assert_eq!(total, 218_332_307);
+        assert_eq!(per_sensor.get("zeek"), Some(&178_222_049));
+        assert_eq!(per_sensor.get("zeek-proxy"), Some(&40_110_258));
+        assert_eq!(super::parse_modbus_pdu_counts(&serde_json::Value::Null), (0, Default::default()));
+    }
 
     // Rates measured on the live fleet, 2026-08-25.
     const COWRIE_7D: u64 = 2_000_000; // millions a day

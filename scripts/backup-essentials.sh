@@ -89,6 +89,15 @@ MAX_AGE_HOURS=${MAX_AGE_HOURS:-48}
 SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
 INSTALL_STAMP=${INSTALL_STAMP:-$SELF.src-sha256}
 
+# The container resolver the homeserver collector needs (#3596): next to the
+# checkout copy in scripts/lib/, or installed beside the libexec copy by
+# install-backup-essentials.sh.
+TASK_CONTAINER_LIB=${TASK_CONTAINER_LIB:-}
+if [ -z "$TASK_CONTAINER_LIB" ]; then
+  for candidate in "$(dirname -- "$SELF")/lib/task-container.sh" "$(dirname -- "$SELF")/apiary-task-container.sh"; do
+    [ -f "$candidate" ] && { TASK_CONTAINER_LIB=$candidate; break; }
+  done
+fi
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15)
 
 dry_run=0
@@ -184,6 +193,9 @@ fi
 
 check_installed_copy
 
+[ -n "$TASK_CONTAINER_LIB" ] && [ -r "$TASK_CONTAINER_LIB" ] \
+  || fail "task-container helper not found next to $SELF (scripts/lib/task-container.sh or apiary-task-container.sh); re-run: sudo $REPO_DIR/scripts/install-backup-essentials.sh"
+
 for host in "$HOMESERVER_SSH" "$VPS_SSH"; do
   ssh "${SSH_OPTS[@]}" "$host" true 2>/dev/null \
     || fail "cannot reach '$host' over SSH — check the alias and that ~/.ssh/id_ed25519_honeypot is in place"
@@ -213,7 +225,10 @@ trap 'rm -rf "$staging" "$workdir"' EXIT INT TERM
 
 log "collecting homeserver state"
 mkdir -p "$staging/homeserver"
-ssh "${SSH_OPTS[@]}" "$HOMESERVER_SSH" 'sudo bash -s' <<'REMOTE' \
+# task_container (scripts/lib/task-container.sh, #3596) is prepended to the
+# remote script: the far side has no checkout to source it from.
+{ cat -- "$TASK_CONTAINER_LIB"; cat; } <<'REMOTE' \
+  | ssh "${SSH_OPTS[@]}" "$HOMESERVER_SSH" 'sudo bash -s' \
   | tar -C "$staging/homeserver" -xf -
 set -euo pipefail
 exec 3>&1 1>&2
@@ -309,18 +324,29 @@ fi
 # if the server is stopped, and a dump restores into any future Postgres
 # version rather than pinning the rebuild to 18.6. This is the realm, the
 # clients, their secrets and every user account.
-if docker inspect hp-keycloak-postgres >/dev/null 2>&1; then
+#
+# The container is resolved, not named (#3596): the swarm task of
+# keycloak_postgres first, the Compose hp-keycloak-postgres second
+# (task_container, prepended to this remote script from scripts/lib). A dump
+# that is missing, fails, or lacks pg_dump's completion footer leaves no
+# keycloak.sql.gz, and the required-item check below turns the run red.
+# pg_dump 18 writes `\unrestrict <key>` and blank lines after the footer
+# (it is the 5th line from the end today), hence the 20-line window.
+if pg_ctr=$(task_container keycloak_postgres hp-keycloak-postgres); then
   mkdir -p "$stage/keycloak"
-  if docker exec hp-keycloak-postgres \
-       pg_dump -U keycloak -d keycloak --clean --if-exists 2>/dev/null \
-       | gzip -9 > "$stage/keycloak/keycloak.sql.gz"; then
-    echo "  keycloak: pg_dump $(du -h "$stage/keycloak/keycloak.sql.gz" | cut -f1)"
+  if docker exec "$pg_ctr" \
+       pg_dump -U keycloak -d keycloak --clean --if-exists > "$stage/keycloak/keycloak.sql" &&
+     [ -s "$stage/keycloak/keycloak.sql" ] &&
+     tail -n 20 "$stage/keycloak/keycloak.sql" | grep -q "PostgreSQL database dump complete" &&
+     gzip -9 < "$stage/keycloak/keycloak.sql" > "$stage/keycloak/keycloak.sql.gz"; then
+    rm -f "$stage/keycloak/keycloak.sql"
+    echo "  keycloak: pg_dump from $pg_ctr $(du -h "$stage/keycloak/keycloak.sql.gz" | cut -f1)"
   else
-    rm -f "$stage/keycloak/keycloak.sql.gz"
-    echo "  keycloak: pg_dump FAILED — container up but dump did not complete" >&2
+    rm -f "$stage/keycloak/keycloak.sql" "$stage/keycloak/keycloak.sql.gz"
+    echo "  keycloak: ERROR: pg_dump from $pg_ctr FAILED (exit status, empty output or no completion footer)" >&2
   fi
 else
-  echo "  keycloak: hp-keycloak-postgres is not running -- no identity dump in this archive" >&2
+  echo "  keycloak: ERROR: no running Keycloak Postgres (swarm keycloak_postgres or Compose hp-keycloak-postgres) -- no identity dump in this archive" >&2
 fi
 
 # The dashboard's operator-authored Elasticsearch documents (#3323).

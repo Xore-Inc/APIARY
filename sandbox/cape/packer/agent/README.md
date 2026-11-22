@@ -6,8 +6,7 @@
 
 Why vendored rather than fetched at build time: this repo's own convention
 (`docs/sandbox/windows`'s golden image bakes in fixed local copies of
-everything it needs; CI already checks two other vendored trees stay in
-sync — "Vendored Xore/theme is in sync", "Vendored noVNC is in sync") is to
+everything it needs) is to
 pin external components as an explicit file in the repo rather than a
 build-time `curl`/`git clone` against a moving upstream ref, so a rebuild
 six months from now installs the exact agent this was tested against, not

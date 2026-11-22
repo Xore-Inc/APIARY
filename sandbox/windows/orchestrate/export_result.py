@@ -220,9 +220,9 @@ def build_result(out_dir: Path) -> dict:
     # reconcileWorkbenchRun. The Go dashboard is gone and neither file exists;
     # the live consumers are backend-service/src/workbench_orchestrator.rs
     # (run_status == "failed" -> incomplete, and child.reason taken from
-    # failure_reason, falling back to timeout_reason) and
-    # frontend-next/src/routes/sandbox.$job.tsx, which renders
-    # "Analysis did not run to completion." followed by failure_reason.
+    # failure_reason, falling back to timeout_reason) and the dashboard
+    # (Xore-Inc/apiary-dashboard), which shows failure_reason for an
+    # incomplete run.
     watchdog_timeout = meta.get('run_status') == 'watchdog_timeout'
     # #2775: detonate_legacy_winrm() now stamps this the same way
     # detonate_inguest() always has -- 'legacy_winrm_failed' on any

@@ -126,7 +126,17 @@ pub struct IpProfile {
     /// this address was both *carried* by a analysed sample and *reached* by
     /// a sandbox detonation of that same sample. See confirmed_malicious().
     pub confirmed_malicious: bool,
+    /// #3918: set (only when true) if Elasticsearch failed shards of the
+    /// profile's searches, so the totals, sensors, first/last and the lists
+    /// are undercounted. Absent on a complete profile.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
+
+/// The aggregatable form of the Suricata alert signature (`text` with this
+/// keyword sub-field; see the `suricata-events` template in
+/// elasticsearch-setup.sh).
+const ALERT_SIGNATURE_FIELD: &str = "suricata.eve.alert.signature.keyword";
 
 /// #1689: is this address confirmed malicious by the floss/sandbox join?
 ///
@@ -262,7 +272,7 @@ fn sensors_total(cardinality: u64, portbridge_total: u64, listed: usize) -> u64 
         ("ip" = inline(String), Path, description = "Source address to profile. A non-address is a 400."),
     ),
     responses(
-        (status = 200, description = "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count.", body = inline(serde_json::Value), content_type = "application/json"),
+        (status = 200, description = "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count. `partial` is present (true) only when Elasticsearch failed shards of the profile's searches, so the counts and lists are undercounted.", body = inline(serde_json::Value), content_type = "application/json"),
         (status = 400, description = "Rejected: the request was understood but its input is not acceptable.", body = String, content_type = "text/plain"),
         (status = 404, description = "No such record, store, or route for the values given.", body = String, content_type = "text/plain"),
         (status = 502, description = "Elasticsearch (or a sibling it proxies) refused or failed the query.", body = String, content_type = "text/plain"),
@@ -305,7 +315,12 @@ pub async fn ip(
             "sessions": {"terms": {"field": "honeypot.session", "size": 20}},
             "techniques": {"terms": {"field": "honeypot.canonical_attck_techniques", "size": 20}},
             "payloads": {"terms": {"field": "honeypot.canonical_shasum", "size": 20}},
-            "alerts": {"terms": {"field": "suricata.eve.alert.signature", "size": 20}},
+            // #3918: `.keyword`, like every other reader of the signature. The
+            // bare field is `text` in every Suricata index (dynamic mapping),
+            // so a terms aggregation on it fails each alert shard, and the
+            // answer was a 200 that dropped the alerts and every count they
+            // contributed to.
+            "alerts": {"terms": {"field": ALERT_SIGNATURE_FIELD, "size": 20}},
             "fingerprints": {"terms": {"field": "honeypot.canonical_fingerprint", "size": 20}},
             "paths": {"terms": {"field": "honeypot.path", "size": 20}}
         }
@@ -345,6 +360,10 @@ pub async fn ip(
         .await
         .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
 
+    // #3918: the searches log their own failed shards (Es::search_index); the
+    // profile also says so, instead of presenting undercounted totals as the
+    // whole story.
+    let partial = [&aggs, &events, &portbridge].iter().any(|answer| crate::es::shards_failed(answer) > 0);
     let total = aggs["hits"]["total"]["value"].as_u64().unwrap_or(0);
     if total == 0 {
         return Err((StatusCode::NOT_FOUND, "no events for this ip".into()));
@@ -359,6 +378,7 @@ pub async fn ip(
     let (as_organization, as_number) = as_profile(&aggs);
     Ok(Json(IpProfile {
         confirmed_malicious: is_confirmed,
+        partial,
         ip,
         total,
         first: text(&aggs["aggregations"]["first"]["value_as_string"]),

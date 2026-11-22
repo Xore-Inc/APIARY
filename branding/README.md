@@ -10,13 +10,15 @@
 
 This folder is the canonical, reusable visual system for APIARY. It packages
 the approved bee-and-honeycomb preset into web, repository, social, favicon,
-and print-ready forms while matching the production dashboard's established
-dark and light palettes.
+and print-ready forms, with the dark and light palettes below.
 
-`Xore/theme` remains the implementation authority for dashboard CSS. The
-portable tokens and website starter in this folder mirror that contract, but
-dashboard selectors must be added upstream and re-vendored; APIARY carries no
-custom dashboard stylesheet.
+This folder is the brand spec, not the dashboard's stylesheet. The live
+dashboard is [Xore-Inc/apiary-dashboard](https://github.com/Xore-Inc/apiary-dashboard):
+its themes live in that repo's `src/themes/`, are generated with the Astryx
+CLI, and its visual decisions are recorded in its `DESIGN.md`. APIARY carries
+no dashboard stylesheet and no vendored copy of one. (Until #3834 this folder
+was checked against a vendored `Xore/theme` stylesheet, the theme of the
+retired in-repo dashboard; that check and the copy were removed with it.)
 
 **Live specimen:** <https://xore.github.io/APIARY/>
 
@@ -83,23 +85,22 @@ Rules:
 | Copper | `#af593f` | brand accent and primary actions |
 
 `#c76548` is the *old* light copper and is not the accent any more. It
-survives in the stylesheet inside one alpha tint (`--accent-soft:
-rgba(199, 101, 72, 0.12)`) and in the reports light-theme preview swatch, so
-grepping for it still finds hits — those are leftovers, not the token.
+survives inside one alpha tint (`--apiary-copper-soft:
+rgba(199, 101, 72, 0.12)` in `templates/web/apiary-theme.css`) and in the
+print and raster tooling under `scripts/`, so grepping for it still finds
+hits; those are leftovers, not the token.
 
 Semantic colors are evidence states, not decoration. Dark mode uses
 information blue `#78a9d4`, green `#79c99e`, amber `#deb36a`, and red
 `#dc7774`; light-mode values live beside them in `tokens.json`.
 
-Links are **not** blue. They derive from the theme's accent — `#de866b` in
-dark, `#9b4f3a` in light for the default `claude` theme. They used to be a
-standalone blue (`#6da7ec` / `#2a78d6`), and the light one measured 3.95:1
-against a card, below the AA floor for text; Xore/theme#103 fixed that by
-deriving links from the accent and tuning them like every other theme's,
+Links are **not** blue. They derive from the accent — `#de866b` in dark,
+`#9b4f3a` in light. They used to be a standalone blue (`#6da7ec` /
+`#2a78d6`), and the light one measured 3.95:1 against a card, below the AA
+floor for text; Xore/theme#103 fixed that by deriving links from the accent
 rather than keeping a brand blue that failed. A link colour is therefore
-theme-scoped, not a brand invariant — a theme is expected to move it, and
-`scripts/check-contrast.mjs` upstream asserts the result clears AA on every
-run.
+theme-scoped, not a brand invariant: a theme is expected to move it, as long
+as the result still clears AA.
 
 ## Typography and voice
 

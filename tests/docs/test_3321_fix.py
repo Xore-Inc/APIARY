@@ -36,7 +36,7 @@ BASE_IMAGE_SCAN = REPO_ROOT / ".github/workflows/image-security-scan.yml"
 INSTALLER = REPO_ROOT / "scripts/install-homeserver.sh"
 INSTALL_TRIVY = REPO_ROOT / "scripts/install-trivy.sh"
 
-SBOM_IMAGES = {"backend-service", "dashboard-next"}
+SBOM_IMAGES = {"backend-service"}  # #3749: dashboard-next left with frontend-next
 
 
 def _load(path: pathlib.Path) -> dict:
@@ -57,12 +57,12 @@ def _step_running(workflow: dict, needle: str) -> dict:
 # --------------------------------------------------------------- matrix ----
 
 
-def test_only_the_two_dashboard_rows_opt_into_the_sbom():
+def test_only_the_backend_row_opts_into_the_sbom():
     workflow = _load(CONTAINERS)
     rows = workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
     opted_in = {r["image"] for r in rows if r.get("sbom") is True}
     assert opted_in == SBOM_IMAGES, (
-        "exactly backend-service and dashboard-next carry `sbom: true` (#3321); "
+        "exactly backend-service carries `sbom: true` (#3321, #3749); "
         f"got {sorted(opted_in)}. Adding it to another row puts a syft run and a "
         "Trivy advisory-DB download in front of that image's build."
     )
@@ -262,7 +262,7 @@ def test_the_sbom_opt_in_is_spelled_out_by_grep():
     # explaining the flag, and those are prose, not opt-ins.
     opt_ins = [ln for ln in text.splitlines() if ln.strip() == "sbom: true"]
     assert len(opt_ins) == len(SBOM_IMAGES), (
-        f"expected `sbom: true` exactly twice in containers.yml (#3321); found {len(opt_ins)}"
+        f"expected `sbom: true` exactly {len(SBOM_IMAGES)} time(s) in containers.yml (#3321); found {len(opt_ins)}"
     )
     for image in SBOM_IMAGES:
         block = re.search(rf"- image: {re.escape(image)}\n(?:(?!- image:).)*", text, re.S)

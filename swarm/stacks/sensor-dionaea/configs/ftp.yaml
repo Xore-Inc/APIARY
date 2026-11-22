@@ -1,0 +1,5 @@
+- name: ftp
+  config:
+    root: "var/lib/dionaea/ftp/root"
+    response_messages:
+      welcome_msg: 220 legacy-svc-02.meridian.internal Microsoft FTP Service ready.

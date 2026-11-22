@@ -17,7 +17,7 @@
 #   healthcheck replace it (an unhealthy task is replaced by swarm).
 services:
   endlessh:
-    image: ghcr.io/xore-inc/honeypot-endlessh-honeypot@sha256:f039cfeac6290174eaca4a1118b7c00640830dfb45e2d7949ff0186313dff4ca
+    image: ghcr.io/xore-inc/honeypot-endlessh-honeypot@sha256:da53811ef94bb56faa97f23b6a14bc77fd1720ada3ab75527386a1d21877e03f
     ports:
       - target: 2222
         published: 19024

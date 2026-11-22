@@ -53,11 +53,10 @@ tooling images meant to always be fresh).
 
 Known deliberate `:latest` exceptions (each justified inline at its own
 `image:` line — read the comment there before "fixing" it):
-- `arcane/home/honeypot-keycloak/compose.yml` — `quay.io/keycloak/keycloak:latest`
-  with `pull_policy: always`. Keycloak is the identity provider for the
-  whole stack; staying current on it matters more than a reproducible
-  image id (a prior digest pin kept a build with an unauthenticated
-  account-takeover CVE running until someone edited the file).
+- (none for Keycloak any more: since #3824 `arcane/home/honeypot-keycloak/compose.yml`
+  pins `quay.io/keycloak/keycloak:<version>@sha256:…` like every other
+  image, and a security release is applied by moving that pin -- see
+  docs/KEYCLOAK-OPERATIONS.md §7.)
 
 ## 2. Check the latest available version per image
 

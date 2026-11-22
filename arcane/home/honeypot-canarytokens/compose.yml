@@ -90,8 +90,14 @@ services:
     # 17 keys); the move is one-way, an 8.x RDB does not load on 7.x, so
     # rollback is the pre-upgrade volume tarball plus the old image. Redis 8
     # is RSALv2/SSPLv1/AGPLv3; private use only, never redistributed.
-    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    image: redis:8.10.3-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
     container_name: hp-canarytokens-redis
+    # #3596 (swarm phase 9 leg C): LEGACY, the rollback for the swarm stack
+    # canarytokens-redis (swarm/stacks/canarytokens-redis), which opens the
+    # same volume. Kept stopped; never start it while that stack runs a task
+    # (two writers on one AOF). Rollback: stop canarytokens-redis-relay, scale
+    # canarytokens-redis_redis to 0, then `docker start hp-canarytokens-redis`.
+    profiles: ['legacy']
     restart: unless-stopped
     command: redis-server --appendonly yes --protected-mode no --save 60 1
     volumes:
@@ -126,7 +132,10 @@ services:
     container_name: hp-canarytokens-frontend
     restart: unless-stopped
     command: bash -c "cd frontend; uv run --no-sync python -m uvicorn app:app --host 0.0.0.0 --port 8082"
-    depends_on: [canarytokens-redis]
+    # The Compose Redis is the legacy rollback (#3596); the relay below
+    # answers as canarytokens-redis, and the client reconnects by name.
+    depends_on:
+      canarytokens-redis: {condition: service_started, required: false}
     environment:
       - TZ=Europe/Berlin
       - CANARY_PUBLIC_IP=${HP_BIND:-10.8.0.2}
@@ -216,7 +225,10 @@ services:
     container_name: hp-canarytokens-switchboard
     restart: unless-stopped
     command: bash -c "cd switchboard; rm -f switchboard.pid; uv run --no-sync twistd -noy switchboard.tac --pidfile=switchboard.pid"
-    depends_on: [canarytokens-redis]
+    # The Compose Redis is the legacy rollback (#3596); the relay below
+    # answers as canarytokens-redis, and the client reconnects by name.
+    depends_on:
+      canarytokens-redis: {condition: service_started, required: false}
     environment:
       - TZ=Europe/Berlin
       - CANARY_PUBLIC_DOMAIN=${CANARY_PUBLIC_HOSTNAME:-honeypot.example}
@@ -307,7 +319,9 @@ services:
     build: ./canarytokens-http-router
     container_name: hp-canarytokens-http-router
     restart: unless-stopped
-    depends_on: [canarytokens-switchboard, canarytokens-redis]
+    depends_on:
+      canarytokens-switchboard: {condition: service_started}
+      canarytokens-redis: {condition: service_started, required: false}
     environment:
       - TZ=Europe/Berlin
       - LISTEN_ADDR=:8083
@@ -331,6 +345,44 @@ services:
         limits:
           cpus: "0.5"
           memory: 128M
+
+  # #3596 (swarm phase 9 leg C): the store is the swarm stack
+  # canarytokens-redis. This relay answers as `canarytokens-redis` on
+  # canarytokens_net and forwards to it over that stack's overlay, so the
+  # canarytokens services keep CANARY_REDIS_HOST / REDIS_ADDR and never join
+  # an overlay themselves (#3837). apiary-overlay-attach starts the relay
+  # after a dockerd restart (ops/swarm/hosts/homeserver-overlay-attach.txt).
+  # The stack uses endpoint_mode dnsrr; socat resolves the name per
+  # connection, so a new task is found on the next reconnect.
+  canarytokens-redis-relay:
+    <<: *runtime-defaults
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+    container_name: hp-canarytokens-redis-relay
+    restart: unless-stopped
+    command: ['TCP4-LISTEN:6379,fork,reuseaddr', 'TCP4:canarytokens-redis_redis:6379,connect-timeout=5']
+    networks:
+      canarytokens_net:
+        aliases: [canarytokens-redis]
+      redis_store: {}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # busybox nc in this image has no -z; socat probes its own listener.
+      test: ['CMD', 'socat', '-u', '/dev/null', 'TCP4:127.0.0.1:6379,connect-timeout=2']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - autoheal=true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 32M
 
   canarytokens-adapter:
     <<: *runtime-defaults
@@ -370,7 +422,16 @@ services:
 networks:
   canarytokens_net:
     driver: bridge
+  # swarm/stacks/canarytokens-redis (internal, encrypted, attachable). Only
+  # the relay joins it.
+  redis_store:
+    name: canarytokens-redis_store
+    external: true
 
 volumes:
+  # #3596: shared with the swarm stack canarytokens-redis, so external here:
+  # a `compose down -v` of this project can never delete the canary data.
   canarytokens-redis-data:
+    name: honeypot-canarytokens_canarytokens-redis-data
+    external: true
   canarytokens-uploads:

@@ -1,7 +1,6 @@
 # honeypot-backend-workers -- #3575 (BFF split, #3579): the sensor-bound Rust
 # workers and the local services-adapter as their own homeserver project,
-# independent of the old honeypot-dashboard project that also carries the
-# legacy frontend-next.
+# independent of the honeypot-dashboard project (backend-service-mounted).
 #
 # Placement (Xore, #3582/#3592 decisions): both HTTP Rust APIs move to
 # precision; every worker below stays on the sensor/Elasticsearch homeserver
@@ -390,8 +389,7 @@ services:
       - /opt/stacks/apiary/logs/enriched:/logs/enriched:rw
       - /opt/stacks/apiary/state/ip-enrichment-worker:/state/ip-enrichment-worker:rw
     # /logs/enriched is github-deploy-runner:github-deploy-runner (994:979,
-    # Arcane's own deploy-time provisioning owner) on disk, same as the
-    # dashboard-secrets dir dashboard-next mounts above. This image runs
+    # Arcane's own deploy-time provisioning owner) on disk. This image runs
     # unprivileged (nobody), so without group membership every open() here
     # fails EACCES -- confirmed live: every single source failed to open
     # its output file from the container's first log line onward, silently
@@ -400,21 +398,17 @@ services:
     # (everything Filebeat tails from /logs/enriched/*.json -- see
     # honeypot-elk/analysis/filebeat.yml's own #746 comment for the full
     # list) went STALE the moment the retired Go worker's last write aged
-    # out. Same group_add fix as dashboard-next's identical EACCES above -- and
-    # the same interpolation, for the same reason. This was the literal 979,
+    # out. This was the literal 979,
     # which after the 2026-09-03 rebuild belonged to github-ci-runner-4 rather
     # than deploy-runner. The failure was exactly what this comment predicts:
     # 22 "open output failed ... Permission denied" WARNs, /logs/enriched empty,
     # and the container reporting healthy throughout while every Filebeat
     # consumer of /logs/enriched/*.json went stale.
     group_add:
-      # Same value as dashboard-next's group_add above, deliberately. These two
-      # disagreed (980 vs 979) while naming the same group, so whichever
-      # fallback happened to be wrong on a given host silently mis-grouped one
-      # of the two containers. Neither number is meaningful on its own: a GID
-      # is host-specific, and step_pin_deploy_runner_gid writes the real one
-      # into this stack's .env. The literal only covers a host that has not
-      # been through that step, so both must at least agree.
+      # The number is not meaningful on its own: a GID is host-specific, and
+      # step_pin_deploy_runner_gid writes the real one into this stack's
+      # .env. The literal only covers a host that has not been through that
+      # step. Do not hard-code it (the literal 979 broke after a rebuild).
       - "${DEPLOY_RUNNER_GID:-980}"
     security_opt:
       - no-new-privileges:true
@@ -445,8 +439,8 @@ services:
   # same reasoning as backend-worker-importer/-enrichment above:
   # backend-worker is deliberately host-mount-free (see its own "movable to
   # any docker host" comment), and this loop needs read access to both
-  # payload capture sources -- the exact PAYLOAD_DIRS mounts dashboard/
-  # dashboard-next already carry -- plus a live ES connection (unlike
+  # payload capture sources (the PAYLOAD_DIRS mounts below) plus a live ES
+  # connection (unlike
   # backend-worker-enrichment just above, which is network_mode: none).
   backend-worker-payload-inventory:
     <<: *runtime-defaults

@@ -907,7 +907,7 @@ step_clone_repo() {
 # ARCANE_OIDC_CLIENT_SECRET good enough to satisfy the compose file's `:?`
 # guard and start the container; step_provision_arcane_oidc_secret later
 # replaces it with the real per-realm secret Keycloak generates on
-# --import-realm (same pattern as apiary-dashboard's own client secret --
+# --import-realm (same pattern as the dashboard's own client secret --
 # see provision-arcane-oidc-secret.sh) and re-ups Arcane.
 #
 # Unresolved from-scratch chicken-and-egg (#1504, still needs a live call):
@@ -1318,28 +1318,29 @@ step_stage_keycloak_theme() {
 
 step_provision_keycloak_secrets() {
   # #787: step_provision_stack_dirs only creates an empty secrets/ dir --
-  # nothing populated postgres-password/bootstrap-admin-password before this,
-  # so a genuinely fresh, unattended install would fail here (Postgres'
-  # POSTGRES_PASSWORD_FILE and Keycloak's own entrypoint both read files that
-  # never existed). This test/reinstall path resets Keycloak to a known
-  # initial admin rather than restoring a prior one -- same "start from
-  # zero" treatment as the rest of the honeypot stack's data, not an
-  # exception carved out just for identity.
+  # nothing populated postgres-password before this, so a genuinely fresh,
+  # unattended install would fail here (Postgres' POSTGRES_PASSWORD_FILE and
+  # Keycloak's own entrypoint both read files that never existed).
+  #
+  # #3824: the initial administrator is a temporary bootstrap *client*
+  # (client_credentials), not a bootstrap user. This used to write a fixed
+  # admin/admin123 bootstrap password; now a random bootstrap-admin-client-
+  # secret is generated only while no permanent admin-client-secret exists, and
+  # step_provision_keycloak_admin_client swaps it for the permanent client once
+  # Keycloak is up. No human account exists until an operator creates one.
   local dir="/var/dockge/stacks/honeypot-keycloak/secrets"
   install -d -m 750 "$dir"
   if [[ ! -f "$dir/postgres-password" ]]; then
     (umask 027; openssl rand -base64 48 > "$dir/postgres-password")
     echo "generated postgres-password"
   fi
-  if [[ ! -f "$dir/bootstrap-admin-password" ]]; then
-    (umask 027; printf 'admin123\n' > "$dir/bootstrap-admin-password")
-    echo "wrote initial bootstrap-admin-password (admin/admin123 -- rotate after first login)"
-  fi
-  chown root:root "$dir"/postgres-password "$dir"/bootstrap-admin-password
-  chmod 440 "$dir"/postgres-password "$dir"/bootstrap-admin-password
-  local env_file="/var/dockge/stacks/honeypot-keycloak/.env"
-  if [[ -f "$env_file" ]] && grep -q '^KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=' "$env_file"; then
-    sed -i 's/^KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=.*/KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME=admin/' "$env_file"
+  chown root:root "$dir"/postgres-password
+  chmod 440 "$dir"/postgres-password
+  if [[ ! -f "$dir/admin-client-secret" && ! -f "$dir/bootstrap-admin-client-secret" ]]; then
+    (umask 027; openssl rand -base64 48 | tr -d '\n' > "$dir/bootstrap-admin-client-secret")
+    chown root:root "$dir/bootstrap-admin-client-secret"
+    chmod 440 "$dir/bootstrap-admin-client-secret"
+    echo "generated bootstrap-admin-client-secret (temporary; replaced by provision-keycloak-admin-client)"
   fi
 }
 
@@ -1446,6 +1447,16 @@ step_create_shared_resources() {
   docker volume inspect dionaea-lib >/dev/null 2>&1 || docker volume create dionaea-lib
   docker volume inspect yara-results >/dev/null 2>&1 || docker volume create yara-results
 
+  # #3596 (swarm phase 9): data volumes shared by a Compose project (legacy
+  # rollback) and a swarm stack are external on both sides, so neither side
+  # creates them. Created here with their old project-scoped names, so a
+  # fresh host and a migrated host look the same.
+  local v
+  for v in honeypot-elk_es-data honeypot-keycloak_keycloak-postgres \
+           honeypot-canarytokens_canarytokens-redis-data; do
+    docker volume inspect "$v" >/dev/null 2>&1 || docker volume create "$v"
+  done
+
   # arcane/home/honeypot-init/compose.yml's own header comment: "state/init-markers/ must
   # be mode 777 on the host before this stack's [containers run]" --
   # log-init/elasticsearch-setup/arkime-init/snare-clone each touch a
@@ -1511,8 +1522,8 @@ step_provision_buildx_cache() {
 }
 
 step_provision_image_sbom() {
-  # #3321: containers.yml writes a digest-keyed CycloneDX SBOM for the two
-  # dashboard images (backend-service, dashboard-next) to
+  # #3321: containers.yml writes a digest-keyed CycloneDX SBOM for the
+  # backend-service image to
   # /var/image-sbom/<image>/ whenever a build lands on this box's self-hosted
   # runners, so the inventory of what is in a running image sits next to the
   # image rather than only in a CI artifact that expires.
@@ -1624,10 +1635,26 @@ step_build_zeek_image() {
 # on its own once sshfs-mounts runs -- it has restart: unless-stopped and
 # autoheal watches it, and this was confirmed live: the moment the mounts
 # appeared it went healthy without intervention.
+#
+# #3596 (swarm phase 9 leg D): with the elasticsearch stack, ES is the swarm
+# task and the Compose `elasticsearch` is the legacy rollback; the gate is the
+# shim. Never name `elasticsearch` then: an explicitly named service runs even
+# behind a disabled profile, and two nodes on one data path must not start.
+# Without the stack (a fresh install), the legacy ES comes up and the shim stays
+# out (its overlay may not exist, and one failed container aborts the whole
+# `compose up`); the legacy Kibana stays out too, as before (the kibana stack).
 step_start_elasticsearch_first() {
   cd /var/dockge/stacks/honeypot-elk || return 1
-  with_retry 3 15 docker compose -f compose.yml up -d
-  with_retry 3 15 docker compose -f compose.yml up -d --wait --no-recreate elasticsearch
+  if docker service inspect elasticsearch_es >/dev/null 2>&1; then
+    with_retry 3 15 docker compose -f compose.yml up -d
+    with_retry 3 15 docker compose -f compose.yml up -d --wait --no-recreate elasticsearch-shim
+    return
+  fi
+  local services=()
+  mapfile -t services < <(docker compose -f compose.yml --profile legacy config --services \
+                            | grep -vx -e elasticsearch-shim -e kibana)
+  with_retry 3 15 docker compose -f compose.yml --profile legacy up -d "${services[@]}"
+  with_retry 3 15 docker compose -f compose.yml --profile legacy up -d --wait --no-recreate elasticsearch
 }
 
 # #1609 follow-up: make Elasticsearch actually load the GeoIP databases.
@@ -1674,12 +1701,18 @@ step_geoip_reload_elasticsearch() {
 
   echo "geoip pipeline reports _geoip_database_unavailable despite the databases"
   echo "being present -- restarting Elasticsearch to reinstantiate its processors"
-  docker restart hp-elasticsearch >/dev/null
   local waited=0
-  while (( waited < 180 )); do
-    [[ "$(docker inspect hp-elasticsearch --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break
-    sleep 5; waited=$(( waited + 5 ))
-  done
+  if docker service inspect elasticsearch_es >/dev/null 2>&1; then
+    # #3596: the swarm task. --force replaces it (stop-first, 120 s grace);
+    # the command returns once the new task is running and healthy.
+    docker service update --force --detach=false --quiet elasticsearch_es >/dev/null
+  else
+    docker restart hp-elasticsearch >/dev/null
+    while (( waited < 180 )); do
+      [[ "$(docker inspect hp-elasticsearch --format '{{.State.Health.Status}}' 2>/dev/null)" == healthy ]] && break
+      sleep 5; waited=$(( waited + 5 ))
+    done
+  fi
   out=$(docker run --rm --network honeynet curlimages/curl:latest -sS -m 20 \
         -X POST "http://elasticsearch:9200/_ingest/pipeline/geoip-honeypot/_simulate" \
         -H 'Content-Type: application/json' -d "$probe" 2>/dev/null) || true
@@ -1812,9 +1845,33 @@ step_start_remaining_stacks() {
     # failures put four spurious FAILEDs in the summary of every clean install,
     # which is exactly the expected-noise problem that trains an operator to
     # skim past a real one.
-    echo "-- $name: docker compose -f $compose_file up -d --wait"
+    # #3596 (swarm phase 9): both honeypot-keycloak services sit behind the
+    # `legacy` profile because Keycloak + Postgres run as swarm/stacks/keycloak.
+    # The provisioning steps below need a running Keycloak, and this script
+    # deploys no swarm stack, so a host without a keycloak stack bootstraps the
+    # identity tier on Compose. Moving it to the stack afterwards is the
+    # cutover in swarm/stacks/keycloak/README.md. Never both: one PGDATA.
+    local profile_args=() service_args=()
+    if [[ "$name" == "honeypot-keycloak" ]] && ! docker service inspect keycloak_postgres >/dev/null 2>&1; then
+      profile_args=(--profile legacy)
+    fi
+    # #3596 leg C: the same for the stores that run as swarm stacks. Without
+    # the stack, the Compose store (profile legacy) comes up and the relay
+    # stays down: its external overlay does not exist yet, and one failed
+    # container aborts the whole `compose up`. Naming the other services
+    # leaves the relay out.
+    local store_service="" relay=""
+    case "$name" in
+      honeypot-canarytokens) store_service=canarytokens-redis_redis relay=canarytokens-redis-relay ;;
+      honeypot-tanner) store_service=tanner-redis_redis relay=tanner_redis_relay ;;
+    esac
+    if [[ -n "$store_service" ]] && ! docker service inspect "$store_service" >/dev/null 2>&1; then
+      profile_args=(--profile legacy)
+      mapfile -t service_args < <(cd "$dir" && docker compose -f "$compose_file" --profile legacy config --services | grep -vx "$relay")
+    fi
+    echo "-- $name: docker compose -f $compose_file ${profile_args[*]} up -d --wait ${service_args[*]}"
     local out rc
-    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" up -d --wait) 2>&1 ); rc=$?
+    out=$( (cd "$dir" && with_retry 3 15 docker compose -f "$compose_file" "${profile_args[@]}" up -d --wait "${service_args[@]}") 2>&1 ); rc=$?
     printf '%s\n' "$out"
     if (( rc != 0 )); then
       if printf '%s' "$out" | grep -qi 'no service selected'; then
@@ -1834,29 +1891,41 @@ step_start_remaining_stacks() {
 # actually healthy (to grant its service-account client the view-events
 # role) -- `up -d --wait` in the previous step already confirmed that.
 # ---------------------------------------------------------------------------
+step_provision_keycloak_admin_client() {
+  # #3824: replace the temporary bootstrap admin client Keycloak created from
+  # bootstrap-admin-client-secret with the permanent master admin client every
+  # provisioner below authenticates with, delete the bootstrap one, then apply
+  # the repo's master-realm settings (--import-realm cannot carry master).
+  # Keycloak is healthy here: start-remaining waited for it.
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
+    "$KEYCLOAK_PROVISION_DIR/provision-admin-client.sh"
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
+    "$KEYCLOAK_PROVISION_DIR/provision-master-realm.sh"
+}
+
 step_provision_events_poller_secrets() {
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-events-poller.sh"
 }
 
-# #1609 follow-up: pin the real deploy-runner GID into honeypot-dashboard's .env.
+# #1609 follow-up: pin the real deploy-runner GID into the .env of every
+# project that joins a container to that group.
 #
-# That stack's compose joins dashboard-next to a group so the unprivileged
-# `node` user can read the OIDC client secret, and a group_add must be a
-# numeric GID because /etc/group does not exist inside the image. It used to be
-# the literal 980. System GIDs are assigned in creation order, so they describe
-# how a host was built rather than being constants: after the 2026-09-03
-# rebuild 980 was github-ci-runner-3 and deploy-runner had become 977. The
-# container joined an unrelated CI group, could not read the secret, and every
-# sign-in failed with EACCES -- surfaced to users as "Sign-in is temporarily
-# unavailable ... the identity provider or session store did not answer", which
-# points at Keycloak for a local file-permission problem.
+# Two consumers, both numeric because /etc/group does not exist inside the
+# images: apiary-dashboard (the dashboard reads its OIDC client secret and
+# actor-assertion key through it) and honeypot-backend-workers (the enrichment
+# worker writes its output through it). It used to be the literal 980. System
+# GIDs are assigned in creation order, so they describe how a host was built
+# rather than being constants: after the 2026-09-03 rebuild 980 was
+# github-ci-runner-3 and deploy-runner had become 977. The legacy dashboard
+# joined an unrelated CI group, could not read the secret, and every sign-in
+# failed with EACCES. (#3749: the legacy dashboard-next is gone; #3575: the
+# workers moved out of honeypot-dashboard.)
 step_pin_deploy_runner_gid() {
   local group="${DASHBOARD_SECRETS_GROUP:-deploy-runner}" gid env_file
   gid="$(getent group "$group" | cut -d: -f3)"
@@ -1872,15 +1941,18 @@ step_pin_deploy_runner_gid() {
   done
   echo "provisioned enrichment output/state dirs group-owned by $group"
 
-  env_file=/var/dockge/stacks/honeypot-dashboard/.env
-  [[ -f "$env_file" ]] || { echo "no $env_file yet"; return 1; }
-  if grep -q '^DEPLOY_RUNNER_GID=' "$env_file"; then
-    sed -i "s/^DEPLOY_RUNNER_GID=.*/DEPLOY_RUNNER_GID=${gid}/" "$env_file"
-  else
-    printf '\n# GID of %s on THIS host, for honeypot-dashboard compose group_add.\n' "$group" >> "$env_file"
-    printf 'DEPLOY_RUNNER_GID=%s\n' "$gid" >> "$env_file"
-  fi
-  echo "pinned DEPLOY_RUNNER_GID=$gid ($group)"
+  local project
+  for project in honeypot-backend-workers apiary-dashboard; do
+    env_file=/var/dockge/stacks/$project/.env
+    [[ -f "$env_file" ]] || { echo "no $env_file yet -- skipping $project"; continue; }
+    if grep -q '^DEPLOY_RUNNER_GID=' "$env_file"; then
+      sed -i "s/^DEPLOY_RUNNER_GID=.*/DEPLOY_RUNNER_GID=${gid}/" "$env_file"
+    else
+      printf '\n# GID of %s on THIS host, for this compose group_add.\n' "$group" >> "$env_file"
+      printf 'DEPLOY_RUNNER_GID=%s\n' "$gid" >> "$env_file"
+    fi
+    echo "pinned DEPLOY_RUNNER_GID=$gid ($group) in $project"
+  done
 
   # Writing the .env is not enough. group_add is a CREATE-time property: an
   # already-running container keeps whatever supplementary GID it was built
@@ -1899,13 +1971,19 @@ step_pin_deploy_runner_gid() {
   # tick forever -- a spin that ships no enrichment while `docker ps` shows
   # nothing wrong. Confirmed live on the 2026-09-04 rebuild: the container
   # carried GID 979 (the compose fallback) while deploy-runner was 977.
-  (cd /var/dockge/stacks/honeypot-dashboard \
-    && docker compose up -d backend-worker-enrichment dashboard-next) \
-    || echo "could not recreate honeypot-dashboard services -- DEPLOY_RUNNER_GID will not take effect until they are"
+  [[ -d /var/dockge/stacks/honeypot-backend-workers ]] && { (cd /var/dockge/stacks/honeypot-backend-workers \
+    && docker compose up -d backend-worker-enrichment) \
+    || echo "could not recreate backend-worker-enrichment -- DEPLOY_RUNNER_GID will not take effect until it is"; }
+  [[ -d /var/dockge/stacks/apiary-dashboard ]] && { (cd /var/dockge/stacks/apiary-dashboard \
+    && docker compose up -d dashboard) \
+    || echo "could not recreate the dashboard -- DEPLOY_RUNNER_GID will not take effect until it is"; }
+  return 0
 }
 
 step_provision_dashboard_oidc_secret() {
-  # honeypot-dashboard is one of the generic STACK_DEFS stacks
+  # The dashboard is apiary-dashboard (client apiary-dashboard-rewrite,
+  # secret under that project's secrets/). apiary-dashboard is one of the
+  # generic STACK_DEFS stacks
   # step_start_remaining_stacks already started (and it has no secret yet
   # at that point, so it crash-loops on first boot) -- this step runs
   # after that, once Keycloak is actually up, same as
@@ -1914,12 +1992,13 @@ step_provision_dashboard_oidc_secret() {
   # own crash-restart loop picks up the freshly written secret within
   # seconds.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
+  DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite \
+  DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets \
     "$KEYCLOAK_PROVISION_DIR/provision-dashboard-oidc-secret.sh"
 }
 
@@ -1932,12 +2011,11 @@ step_provision_arcane_oidc_secret() {
   # Arcane with it. Path convention deliberately identical to its two sibling
   # provisioner steps above so a single fix covers all three.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-arcane-oidc-secret.sh"
 }
 
@@ -1950,12 +2028,11 @@ step_provision_account_console_scopes() {
   # alongside the sibling provisioners that also exist because the realm
   # format cannot express what they set.
   local secrets_dir="/var/dockge/stacks/honeypot-keycloak/secrets"
-  [[ -f "$secrets_dir/bootstrap-admin-password" ]] || {
-    echo "no bootstrap-admin-password at $secrets_dir -- was provision-keycloak-secrets skipped?" >&2
+  [[ -f "$secrets_dir/admin-client-secret" ]] || {
+    echo "no admin-client-secret at $secrets_dir -- was provision-keycloak-admin-client skipped?" >&2
     return 1
   }
-  KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}" \
-  KEYCLOAK_ADMIN_PASSWORD="$(< "$secrets_dir/bootstrap-admin-password")" \
+  KEYCLOAK_STACK_DIR=/var/dockge/stacks/honeypot-keycloak \
     "$KEYCLOAK_PROVISION_DIR/provision-account-console-scopes.sh"
 }
 
@@ -3181,7 +3258,7 @@ run_step arcane-import-stacks  "Import honeypot-* + auth-events-worker/llm-worke
 run_step stage-keycloak-theme  "Check out and sync the Keycloak login theme" step_stage_keycloak_theme
 run_step bootstrap-missing-envs "Bootstrap any still-missing .env from .example" step_bootstrap_missing_envs
 run_step seed-canary-hostname "Seed honeypot-canarytokens' CANARY_PUBLIC_HOSTNAME from KEYCLOAK_PUBLIC_DOMAIN (#2498)" step_seed_canary_public_hostname
-run_step provision-keycloak-secrets "Generate Keycloak secrets, reset bootstrap admin to admin/admin123" step_provision_keycloak_secrets
+run_step provision-keycloak-secrets "Generate Keycloak secrets (postgres + temporary bootstrap admin client)" step_provision_keycloak_secrets
 
 run_step shared-resources      "Create honeynet + placeholder volumes" step_create_shared_resources
 run_step provision-buildx-cache "Create /var/buildx-cache for the CI runners (#2822)" step_provision_buildx_cache
@@ -3203,8 +3280,9 @@ run_step geoip-reload-es       "Reload ES if geoip databases arrived after it st
 run_step fix-snare-ownership   "Set logs/snare root-owned (snare drops caps)" step_fix_snare_ownership
 run_step start-remaining       "Start remaining sensor/dashboard stacks" step_start_remaining_stacks
 
+run_step provision-keycloak-admin-client "Permanent master admin client, drop the bootstrap one, master realm settings (#3824)" step_provision_keycloak_admin_client
 run_step provision-events-poller-secrets "Grant auth-events-poller view-events + write its secret" step_provision_events_poller_secrets
-run_step pin-deploy-runner-gid  "Pin deploy-runner GID + enrichment dirs for honeypot-dashboard" step_pin_deploy_runner_gid
+run_step pin-deploy-runner-gid  "Pin deploy-runner GID + enrichment dirs for the dashboard and workers" step_pin_deploy_runner_gid
 run_step provision-dashboard-oidc-secret "Write dashboard's OIDC client secret from Keycloak" step_provision_dashboard_oidc_secret
 run_step fix-apiary-backend-permissions "Grant apiary-backend's nobody uid ACL access to dashboard-state/dionaea-lib/services-adapter-socket" step_fix_apiary_backend_permissions
 run_step provision-arcane-oidc-secret "Sync Arcane's real OIDC client secret from Keycloak, re-up" step_provision_arcane_oidc_secret

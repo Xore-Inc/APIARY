@@ -319,10 +319,16 @@ pub async fn observe(
     // emits — grepping stdout for one id answers which handler ran and what
     // it saw, halving #1942's archaeology problem even before ES has the
     // durable copy.
-    let span = tracing::info_span!("request", request_id = %request_id, method = %method, path = %uri_path);
+    // `credential` stays empty unless the trust middleware records "dev" on
+    // it (#3866), so every line a dev request's handler logs carries it.
+    let span = tracing::info_span!(
+        "request", request_id = %request_id, method = %method, path = %uri_path,
+        credential = tracing::field::Empty
+    );
     let response = next.run(request).instrument(span).await;
 
     let status = response.status().as_u16();
+    let dev = response.extensions().get::<crate::trust::DevRequest>().is_some();
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     state.observability.metrics.record(&family, status, duration_ms);
 
@@ -332,7 +338,7 @@ pub async fn observe(
     }
 
     if !state.observability.log_file.is_empty() {
-        let line = json!({
+        let mut line = json!({
             "@timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "event.category": "api_request",
             "service": "backend-service",
@@ -343,6 +349,11 @@ pub async fn observe(
             "duration_ms": duration_ms,
             "level": if status >= 500 { "error" } else { "info" },
         });
+        // Only a dev request carries the field (#3866): a production line is
+        // byte for byte what it was.
+        if dev {
+            line["credential"] = json!("dev");
+        }
         let observability = state.observability.clone();
         tokio::spawn(async move {
             append_line(

@@ -197,13 +197,13 @@ alone. Re-verify against whatever Arcane version is pinned in
 happened and the re-verification has not:** every item below was confirmed
 against `v2.8.0`–`v2.9.0` (including the no-`profiles:`-support finding,
 which cites the upstream issue as still open at `v2.8.1`), while
-`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.0`
-by digest (2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
+`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.3`
+by digest (2026-11-17 maintenance window; `v2.17.0` from 2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
 before that `v2.11.1`). The edge agents on precision and the VPS run the
-matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.0`, digest-pinned in
+matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.3`, digest-pinned in
 their host-local compose files; the template is
 `ops/arcane-agent/compose.yml`.
-Nothing here is claimed to be false of `v2.17.0` — it is claimed to be
+Nothing here is claimed to be false of `v2.17.3` — it is claimed to be
 unconfirmed against it, and eight minor versions of upstream is exactly the
 gap that re-verification is for.
 
@@ -356,7 +356,8 @@ gap that re-verification is for.
   arrays, which merely echo what a compose file declared and are omitted
   from a plain project GET. `honeypot-dashboard`'s project record reports
   `serviceCount: 8` — exactly the eight services its
-  `arcane/home/honeypot-dashboard/compose.yml` defines today
+  `arcane/home/honeypot-dashboard/compose.yml` defined at the time (since
+  #3575 and #3749 it defines only `backend-service-mounted`)
   (`oidc-sessions`, `backend-service-mounted`, `backend-worker`,
   `dashboard-next`, `backend-worker-importer`,
   `backend-worker-enrichment`, `backend-worker-payload-inventory`,
@@ -584,8 +585,8 @@ The failure this section exists for is quoted above: a content-change
 redeploy leaves the dashboard *"green, healthy, running the old code."*
 Everything else about that state is a lie by omission — a fresh container
 id, a passing healthcheck and a recent image build all say the machinery
-ran, not that this code is what is running. So both dashboard images now
-carry the git revision they were built from, in three places, and
+ran, not that this code is what is running. So the backend image now
+carries the git revision it was built from, in three places, and
 `scripts/verify-deploy.sh` compares them.
 
 **Where the stamp is.**
@@ -601,13 +602,12 @@ carry the git revision they were built from, in three places, and
   `cargo:rerun-if-env-changed=GIT_SHA`, which is load-bearing: without it
   cargo reuses a cached build and the second build of an identical tree
   keeps the *first* revision, producing the exact failure this fixes.
-- **Frontend** — a static `public/build.json` (`{"revision":…,"built":…,
-  "source":…}`), written by `frontend-next/scripts/write-build-info.mjs`
-  into the build stage before `npm run build` so vite copies it into the
-  output. Served by Nitro from `public/`, the same mechanism the image
-  healthcheck already uses for `/static/theme.css`. It is gitignored: a
-  committed `build.json` would be a revision claim about nobody's build.
-- **Both** — `org.opencontainers.image.revision` (plus `.source` and
+- **Dashboard** — not built here. The dashboard is
+  Xore-Inc/apiary-dashboard, a GHCR image pinned by tag and digest in its
+  Arcane project's `.env`; its revision is that repository's commit, on the
+  image's `org.opencontainers.image.revision` label. (The in-repo frontend's
+  `public/build.json` stamp left with it in #3749.)
+- **Labels** — `org.opencontainers.image.revision` (plus `.source` and
   `.created`) as image labels, readable without running anything:
   `docker image inspect apiary-backend:latest --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'`.
 
@@ -667,7 +667,8 @@ scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
 ```
 
-`--healthz-url http://host:19090/build.json` is the frontend form. Exit
+`--healthz-url URL` reads the same JSON over HTTP when the endpoint is
+reachable. Exit
 codes are the point: **0** the deployed revision matches, **1** a finding
 (missing, unstamped, malformed, or stale past `--behind-days`), **2**
 "could not tell" — deliberately distinct, so an unreadable body or an image
@@ -936,3 +937,37 @@ mitigations remain: Arcane is only reachable over the WireGuard tunnel (no
 public exposure), native OIDC/MFA gates its own login, and the registered
 Git credential (currently none needed — public repo) should stay
 least-privilege and read-only if the repository is ever made private.
+
+### Edge agent token: rotate and revoke (#3583)
+
+Each remote environment (`precision`, `vps`) authenticates its edge agent
+with one environment API key, the agent's `AGENT_TOKEN`. The live agent
+composes inline it (`/home/xore/arcane-agent/compose.yml` on precision,
+`/root/vps/arcane-agent/compose.yml` on the VPS, both 0600; template
+[`ops/arcane-agent/compose.yml`](../ops/arcane-agent/compose.yml)). Behaviour
+below was read from Arcane `v2.17.0`'s source
+(`backend/internal/environment/handler.go`, `UpdateEnvironment`, and
+`children/swarm/service.go`, `EnsureApiKey`).
+
+- **Rotate:** `PUT /api/environments/<id>` with `{"regenerateApiKey": true}`,
+  as a signed-in user or with a user's `X-API-Key`. Arcane creates a new
+  environment key, links it, returns it once as `data.apiKey`, and then
+  deletes the previous key: from that moment the agent's old token no longer
+  authenticates and the environment shows `pending`. Capture the response
+  into a 0600 file (never on a command line or in a log), put the new value
+  into the host's agent compose (backup alongside, edit that one line), and
+  run `docker compose up -d` there. Only `arcane-edge-agent` restarts; check
+  the environment is `online connected=true` again.
+- **Revoke:** the same call, keeping the returned key nowhere. The old token
+  is dead at once and the agent cannot reconnect. Set `{"enabled": false}`
+  as well to keep the environment out of Arcane's connection tests.
+  Revoking the precision transport is separate: remove the
+  `arcane-fibre-tunnel` key from the homeserver's `authorized_keys`
+  ([SWARM-NETWORK.md](SWARM-NETWORK.md)).
+- **If the delete of the old key fails,** Arcane logs `Failed to delete
+  previous environment API key; the old key remains valid until deleted
+  manually`. Delete it on the API Keys page.
+- **What it does to workloads:** nothing. An agent that is offline stops and
+  recreates nothing, and reconnecting deploys nothing (outage test,
+  2026-11-01, #3583). Swarm tasks keep running under the swarm managers
+  either way.

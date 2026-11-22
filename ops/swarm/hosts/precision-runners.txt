@@ -14,4 +14,7 @@ actions.runner.Xore-apiary-dashboard.precision-dashboard-4.service  github-dashb
 actions.runner.Xore-apiary-dashboard.precision-dashboard-5.service  github-dashboard-runner-5  /var/lib/github-runners/github-dashboard-runner-5
 actions.runner.Xore-apiary-dashboard.precision-dashboard-6.service  github-dashboard-runner-6  /var/lib/github-runners/github-dashboard-runner-6
 # Registry mirror: ci-registry-mirror.service (scripts/github-ci-runner/install-registry-mirror.sh),
-# published on the docker0 gateway 172.16.0.1:5555 only, never on the LAN.
+# published on 172.16.0.1:5555 only, never on the LAN. precision's docker0 is
+# 172.17.0.1/16, so that address lives on the NetworkManager dummy interface
+# ci-mirror0 (hosts/precision.nm, #3664). Install by hand from the unit the
+# installer writes; its env file is the homeserver's /etc/apiary-registry-mirror.env.

@@ -147,7 +147,7 @@ the only internet-facing component.
    has run at least once. See the root `README.md`'s "Home container
    interaction map" for why these are two stacks.
 8. Run `python3 analysis/verify-stack.py` (with `DASHBOARD_SERVICE_TOKEN`
-   from `honeypot-dashboard/.env`) and inspect `/source-health`.
+   from `honeypot-dashboard-backend/.env`) and inspect `/source-health`.
 
 Each stack is a folder under your Arcane stacks dir (`/var/dockge/stacks`;
 `/opt/stacks` is a symlink to it, #1185). **Since #1502 nothing is uploaded

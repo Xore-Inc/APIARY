@@ -105,8 +105,10 @@ trusted members are just as much a part of the plane and are easy to forget:
 - the two root-path stacks `auth-events-worker` and `ml-worker`.
 
 Deliberately *not* on `honeynet`: `backend-worker-enrichment` and
-`services-adapter` (both `network_mode: none`), and the dashboard's
-`oidc-sessions`, which has its own single-member `oidc-session` network.
+`services-adapter` (both `network_mode: none`), and the dashboard's session
+store. That store is the swarm stack `dashboard-sessions` on its own internal
+overlay; the dashboard reaches it as `oidc-sessions` through a relay on its
+private `oidc-session` bridge (#3596), and neither joins `honeynet`.
 
 SNARE/TANNER and its dependencies keep their own separate `tanner_local`,
 unchanged — all seven services of `honeypot-tanner`, including `snare`, are on

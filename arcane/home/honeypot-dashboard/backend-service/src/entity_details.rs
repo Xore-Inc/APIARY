@@ -224,16 +224,31 @@ macro_rules! document_route {
 }
 
 #[utoipa::path(get, path = "/api/v1/store/{name}/{id}", summary = "One allowlisted store document.",
-    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, or agent-campaigns."), ("id" = inline(String), Path, description = "Document id.")),
+    params(("name" = inline(String), Path, description = "ml-anomalies, llm-analysis, agent-campaigns or dead-letters (the list's own index)."), ("id" = inline(String), Path, description = "Document id.")),
     responses((status = 200, description = "Success.", body = inline(serde_json::Value), content_type = "application/json"), (status = 404, description = "No such document or store.", body = inline(serde_json::Value), content_type = "application/json"), (status = 502, description = "Elasticsearch failed.", body = String, content_type = "text/plain")), security(("serviceToken" = [])))]
 pub async fn store_detail(State(state): State<AppState>, Path((name, id)): Path<(String, String)>) -> Response {
-    let index = match name.as_str() {
-        "ml-anomalies" => "ml-worker-state",
-        "llm-analysis" => "llm-worker-state",
-        "agent-campaigns" => "agent-campaigns-v1",
-        _ => return Ok((StatusCode::NOT_FOUND, Json(Value::Null))),
+    let Some(index) = store_detail_index(&name) else {
+        return Ok((StatusCode::NOT_FOUND, Json(Value::Null)));
     };
     doc(&state, index, id).await
+}
+
+/// The index behind each store that serves single documents.
+fn store_detail_index(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // #3854: each one reads the index its list reads (stores.rs
+        // `store_config`). These were "ml-worker-state" and
+        // "llm-worker-state" (the workers' own bookkeeping) and
+        // "agent-campaigns-v1" (no such index), so every anomaly, analysis
+        // and agent campaign detail was a 404.
+        "ml-anomalies" => "ml-anomalies",
+        "llm-analysis" => "llm-analysis",
+        "agent-campaigns" => "agent-intrusion-campaigns",
+        // The whole rejected event, which the list cuts (stores.rs
+        // `summarize_dead_letter`).
+        "dead-letters" => "dead-letter-honeypot",
+        _ => return None,
+    })
 }
 
 // campaigns-v1 is written by campaign_correlator; it is empty on a fresh
@@ -903,8 +918,22 @@ pub async fn ioc_catalog(State(state): State<AppState>, Query(query): Query<IocC
     if q.is_some_and(|q| q.len() > 256) {
         return Err((StatusCode::BAD_REQUEST, "q too long".into()));
     }
-    let result = state.es.search(catalog_body(&range, &defs, q, size)).await.map_err(bad_gateway)?;
+    let body = catalog_body(&range, &defs, q, size);
+    // #3910: the dashboard's catalog request (every kind, `range=30d`,
+    // `size=100`, no `q`) is the worker's snapshot (`page_rollup`) while
+    // recent; every other combination is read live.
+    let result = match crate::page_rollup::read_matching(&state, crate::page_rollup::IOC_CATALOG, crate::es::EVENT_INDICES, &body).await {
+        Some(snapshot) => snapshot,
+        None => state.es.search(body).await.map_err(bad_gateway)?,
+    };
     Ok((StatusCode::OK, Json(catalog_response(&result, &defs, &range, size))))
+}
+
+/// The catalog request the IOC hub sends (every kind over 30 days, the 100
+/// busiest values each, no filter), which the worker snapshots.
+pub(crate) fn catalog_default_body() -> Value {
+    let defs: Vec<&'static IocKindDef> = IOC_KINDS.iter().collect();
+    catalog_body("now-30d", &defs, None, CATALOG_MAX_SIZE)
 }
 
 #[utoipa::path(get, path = "/api/v1/ioc/{kind}/{value}", summary = "One indicator: counts, sensors, top sources, sessions, payloads and recent events.",
@@ -1026,6 +1055,22 @@ fn bad_entity(message: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, message.to_string())
 }
 
+/// Cluster kinds that are not indicator kinds: an infrastructure cluster can
+/// also group sources by their provider class (`source.as.type`, e.g.
+/// `hosting`, `isp`, `network`), which the dashboard's clusters page lists.
+const CLUSTER_ONLY_KINDS: &[&str] = &["provider"];
+
+/// `cluster:` accepts every indicator kind plus `CLUSTER_ONLY_KINDS`.
+fn cluster_pair(text: &str) -> Result<(String, String), (StatusCode, String)> {
+    if let Some((kind, value)) = text.split_once(':') {
+        let (kind, value) = (kind.trim(), value.trim());
+        if CLUSTER_ONLY_KINDS.contains(&kind) && !value.is_empty() && value.len() <= 2048 {
+            return Ok((kind.to_string(), value.to_string()));
+        }
+    }
+    indicator_pair(text)
+}
+
 fn indicator_pair(text: &str) -> Result<(String, String), (StatusCode, String)> {
     let (kind, value) = text.split_once(':').ok_or_else(|| bad_entity("expected kind:value after ioc:/cluster:"))?;
     let kind = kind.trim();
@@ -1037,7 +1082,7 @@ fn indicator_pair(text: &str) -> Result<(String, String), (StatusCode, String)> 
 
 /// Parses an entity id. `kind:value` with kind one of ip (source), cidr
 /// (network, net), asn, session, payload (hash, sha256), identity, campaign,
-/// cluster or ioc. A bare id is inferred: an address, a CIDR, `AS<n>`, a
+/// cluster (an indicator kind, or `provider`) or ioc. A bare id is inferred: an address, a CIDR, `AS<n>`, a
 /// 32/40/64-digit hex hash, otherwise a session id.
 fn parse_entity(raw: &str) -> Result<Entity, (StatusCode, String)> {
     let raw = raw.trim();
@@ -1062,7 +1107,7 @@ fn parse_entity(raw: &str) -> Result<Entity, (StatusCode, String)> {
                 "payload" | "hash" | "sha256" => Ok(Entity::Payload(rest.to_ascii_lowercase())),
                 "identity" => Ok(Entity::Identity { id: rest.to_string(), ips: vec![] }),
                 "campaign" => valid_cidr(rest).map(Entity::Campaign).ok_or_else(|| bad_entity("campaign ids are CIDRs")),
-                "cluster" => indicator_pair(rest).map(|(kind, value)| Entity::Cluster { kind, value }),
+                "cluster" => cluster_pair(rest).map(|(kind, value)| Entity::Cluster { kind, value }),
                 _ => indicator_pair(rest).map(|(kind, value)| Entity::Ioc { kind, value }),
             };
         }
@@ -1108,6 +1153,7 @@ fn entity_clause(entity: &Entity) -> Value {
         Entity::Payload(hash) => json!({"term": {"honeypot.canonical_shasum": hash}}),
         Entity::Identity { ips, .. } if ips.is_empty() => json!({"match_none": {}}),
         Entity::Identity { ips, .. } => json!({"terms": {"source.ip": ips}}),
+        Entity::Cluster { kind, value } if kind == "provider" => json!({"term": {"source.as.type": value}}),
         Entity::Cluster { kind, value } | Entity::Ioc { kind, value } => {
             ioc_kind(kind).and_then(|def| ioc_value_clause(def, value).ok()).unwrap_or_else(|| json!({"match_none": {}}))
         }
@@ -1538,34 +1584,45 @@ fn sources_under(filter: Value) -> Value {
 }
 
 /// The stage 2 body, or `None` when the entity has nothing to pivot on.
+///
+/// Every pivot is a filter aggregation, so the query itself is bounded to the
+/// union of those filters: an aggregation only ever sees documents its own
+/// filter keeps, which makes the union a superset and the counts identical.
+/// Without it ES aggregates the whole window (#3856: 51 s, then a 502 at the
+/// 30 s client timeout); with it only the pivot documents are read.
 fn related_shared_body(entity: &Entity, range: &str, pivots: &SharedPivots) -> Option<Value> {
-    let mut aggs = serde_json::Map::new();
+    let mut pivot_filters: Vec<(&str, Value)> = Vec::new();
     if !pivots.payloads.is_empty() {
-        aggs.insert("payload".into(), sources_under(json!({"terms": {"honeypot.canonical_shasum": pivots.payloads}})));
+        pivot_filters.push(("payload", json!({"terms": {"honeypot.canonical_shasum": pivots.payloads}})));
     }
     if !pivots.fingerprints.is_empty() {
-        aggs.insert("fingerprint".into(), sources_under(json!({"terms": {"honeypot.canonical_fingerprint": pivots.fingerprints}})));
+        pivot_filters.push(("fingerprint", json!({"terms": {"honeypot.canonical_fingerprint": pivots.fingerprints}})));
     }
     if !pivots.credentials.is_empty() {
         let should: Vec<Value> = pivots.credentials.iter().map(|(user, pass)| credential_clause(user, pass)).collect();
-        aggs.insert("credential".into(), sources_under(json!({"bool": {
+        pivot_filters.push(("credential", json!({"bool": {
             "filter": [{"bool": {"should": should, "minimum_should_match": 1}}],
             "must_not": secret_exclusion()
         }})));
     }
     if let Some(subnet) = &pivots.subnet {
-        aggs.insert("subnet".into(), sources_under(json!({"term": {"source.ip": subnet}})));
+        pivot_filters.push(("subnet", json!({"term": {"source.ip": subnet}})));
     }
     if let Some(asn) = pivots.asn {
-        aggs.insert("asn".into(), sources_under(json!({"term": {"source.as.asn": asn}})));
+        pivot_filters.push(("asn", json!({"term": {"source.as.asn": asn}})));
     }
-    if aggs.is_empty() {
+    if pivot_filters.is_empty() {
         return None;
     }
+    let union = json!({"bool": {
+        "should": pivot_filters.iter().map(|(_, filter)| filter.clone()).collect::<Vec<_>>(),
+        "minimum_should_match": 1
+    }});
+    let aggs: serde_json::Map<String, Value> = pivot_filters.into_iter().map(|(name, filter)| (name.to_string(), sources_under(filter))).collect();
     Some(json!({
         "size": 0,
         "track_total_hits": false,
-        "query": ioc_scope(vec![time_range(range)], {
+        "query": ioc_scope(vec![time_range(range), union], {
             let mut excluded = entity_extra_must_not(entity);
             excluded.push(entity_clause(entity));
             excluded
@@ -2242,6 +2299,7 @@ mod tests {
         assert_eq!(parse_entity("identity:e69").unwrap(), Entity::Identity { id: "e69".into(), ips: vec![] });
         assert_eq!(parse_entity("campaign:203.0.113.0/24").unwrap(), Entity::Campaign("203.0.113.0/24".into()));
         assert_eq!(parse_entity("cluster:fingerprint:JA4:t13").unwrap(), Entity::Cluster { kind: "fingerprint".into(), value: "JA4:t13".into() });
+        assert_eq!(parse_entity("cluster:provider:hosting").unwrap(), Entity::Cluster { kind: "provider".into(), value: "hosting".into() });
         assert_eq!(parse_entity("ioc:credential:root:toor").unwrap(), Entity::Ioc { kind: "credential".into(), value: "root:toor".into() });
     }
 
@@ -2299,6 +2357,7 @@ mod tests {
         assert!(rendered(&entity_clause(&Entity::Identity { id: "i".into(), ips: vec![] })).contains("match_none"));
         assert!(rendered(&entity_clause(&Entity::Ioc { kind: "signature".into(), value: "ET X".into() })).contains("suricata.eve.alert.signature.keyword"));
         assert!(rendered(&entity_clause(&Entity::Cluster { kind: "bogus".into(), value: "x".into() })).contains("match_none"));
+        assert!(rendered(&entity_clause(&Entity::Cluster { kind: "provider".into(), value: "network".into() })).contains("\"source.as.type\":\"network\""));
     }
 
     #[test]
@@ -2578,6 +2637,20 @@ mod tests {
         let query = rendered(&body["query"]);
         let must_not = rendered(&body["query"]["bool"]["must_not"]);
         assert!(must_not.contains("203.0.113.7"), "the entity's own events are excluded: {query}");
+        // The query is bounded to the union of every pivot filter (#3856), so ES
+        // never aggregates the whole window; each aggregation still re-applies its own.
+        let filters = body["query"]["bool"]["filter"].as_array().unwrap();
+        assert_eq!(filters.len(), 2, "time range plus the pivot union: {query}");
+        let union = &filters[1]["bool"];
+        assert_eq!(union["minimum_should_match"], 1);
+        let should = union["should"].as_array().unwrap();
+        assert_eq!(should.len(), 5, "payload, fingerprint, credential, subnet and AS");
+        for agg in ["payload", "fingerprint", "credential", "subnet", "asn"] {
+            assert!(should.contains(&aggs[agg]["filter"]), "the union holds the {agg} pivot filter verbatim");
+        }
+        let only_network = SharedPivots { payloads: vec![], fingerprints: vec![], credentials: vec![], subnet: Some("203.0.113.0/24".into()), asn: Some(13335) };
+        let narrow = related_shared_body(&entity, "now-7d", &only_network).unwrap();
+        assert_eq!(narrow["query"]["bool"]["filter"][1]["bool"]["should"], json!([{"term": {"source.ip": "203.0.113.0/24"}}, {"term": {"source.as.asn": 13335}}]));
         let nothing = SharedPivots { payloads: vec![], fingerprints: vec![], credentials: vec![], subnet: None, asn: None };
         assert!(related_shared_body(&entity, "now-7d", &nothing).is_none());
     }
@@ -2643,5 +2716,33 @@ mod tests {
         }
         let nothing = related_response(&Entity::Asn(1), "now-7d", &[], [&json!({}), &Value::Null, &Value::Null, &Value::Null, &Value::Null]);
         assert_eq!(nothing["groups"], json!([]));
+    }
+}
+
+#[cfg(test)]
+mod provider_cluster_tests {
+    use super::parse_entity;
+
+    #[test]
+    fn provider_is_a_cluster_kind_but_not_an_indicator_kind() {
+        assert!(parse_entity("ioc:provider:hosting").is_err());
+        assert!(parse_entity("cluster:provider:").is_err());
+        assert!(parse_entity("cluster:provider:hosting").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod store_detail_tests {
+    use super::store_detail_index;
+
+    #[test]
+    fn every_detail_reads_the_index_its_list_reads() {
+        for name in ["ml-anomalies", "llm-analysis", "agent-campaigns", "dead-letters"] {
+            let (list_index, ..) = crate::stores::store_config(name).expect("a known store");
+            assert_eq!(store_detail_index(name), Some(list_index), "{name}");
+        }
+        assert_eq!(store_detail_index("agent-campaigns"), Some("agent-intrusion-campaigns"));
+        assert_eq!(store_detail_index("dead-letters"), Some("dead-letter-honeypot"));
+        assert_eq!(store_detail_index("nope"), None);
     }
 }

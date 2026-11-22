@@ -447,6 +447,11 @@ squarely phase 3's scope, not something to build inside this research pass.
 
 ## 10. Authentication events: Keycloak tokens through the BFF into the Rust tiers
 
+> **2026-10-30 (#3749):** the BFF and renderer analysed in this section were
+> `frontend-next`, removed after production moved to Xore-Inc/apiary-dashboard.
+> The cited `frontend-next/` paths are historical. Re-assessing these entries
+> against apiary-dashboard is #3751.
+
 **Extends §5.** §5 covers workload identity for service-to-service calls;
 this section covers the *human* identity tier — the Keycloak-issued token and
 the session derived from it, as it moves through
@@ -556,6 +561,11 @@ the session derived from it, as it moves through
 ---
 
 ## 11. Payload handling: captured bytes to YARA, detonation, and the renderer
+
+> **2026-10-30 (#3749):** the BFF and renderer analysed in this section were
+> `frontend-next`, removed after production moved to Xore-Inc/apiary-dashboard.
+> The cited `frontend-next/` paths are historical. Re-assessing these entries
+> against apiary-dashboard is #3751.
 
 **Extends §2.** §2 covers untrusted structured-data processing generally;
 this section follows one specific object — a captured payload — through the
