@@ -252,9 +252,6 @@ pub async fn get(
         tracing::warn!(%error, "facets: providers query failed");
         Value::Null
     });
-    if result["_shards"]["failed"].as_u64().unwrap_or(0) > 0 {
-        tracing::warn!(shards = %result["_shards"], "facets: shard failures, counts are partial");
-    }
     Ok(Json(parse_facets(&kind, &result, &providers)))
 }
 

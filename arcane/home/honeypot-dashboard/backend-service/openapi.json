@@ -6744,7 +6744,7 @@
                 "schema": {}
               }
             },
-            "description": "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count."
+            "description": "Success. `asn` is deprecated: it holds the AS organization name, not a number; use `as_organization` (same value) and `as_number` (the AS number, null when unknown). `correlation.sensors` is the top 10 only; `correlation.sensors_total` is the real distinct-sensor count. `partial` is present (true) only when Elasticsearch failed shards of the profile's searches, so the counts and lists are undercounted."
           },
           "400": {
             "content": {

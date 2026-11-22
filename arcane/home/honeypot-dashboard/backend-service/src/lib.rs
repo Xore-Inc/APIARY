@@ -97,6 +97,8 @@ pub mod page_rollup;
 mod page_rollup_tests;
 #[cfg(test)]
 mod rollup_read_tests;
+#[cfg(test)]
+mod investigate_partial_tests;
 pub mod rollups;
 pub mod sandbox_submit;
 pub mod sensors;

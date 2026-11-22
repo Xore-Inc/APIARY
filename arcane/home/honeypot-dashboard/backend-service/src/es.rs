@@ -673,6 +673,7 @@ impl Es {
     pub async fn search_index(&self, indices: &[&str], mut body: Value) -> anyhow::Result<Value> {
         absolute_time(&mut body, chrono::Utc::now());
         let aggregation_only = body.get("size").and_then(Value::as_u64) == Some(0);
+        let aggregations = aggregation_names(&body);
         let response = self
             .client
             .search(SearchParts::Index(indices))
@@ -686,6 +687,9 @@ impl Es {
         if !status.is_success() {
             anyhow::bail!("elasticsearch {}: {}", status, json);
         }
+        // #3918: a 200 can still be a partial answer. Every search passes
+        // through here, so the one place that notices says which search it was.
+        warn_on_failed_shards(&format!("search over {} (aggs: {aggregations})", indices.join(",")), &json);
         Ok(json)
     }
 
@@ -868,12 +872,29 @@ impl Es {
     }
 }
 
+/// The names of a search body's aggregations, for log lines that have to say
+/// which search was partial.
+fn aggregation_names(body: &Value) -> String {
+    match body.get("aggs").or_else(|| body.get("aggregations")).and_then(Value::as_object) {
+        Some(aggs) => aggs.keys().cloned().collect::<Vec<_>>().join(","),
+        None => "none".to_string(),
+    }
+}
+
+/// How many shards a `_search` response reports as failed (0 when it has no
+/// `_shards`, like the placeholder of a skipped search). A caller that must
+/// not present a partial answer as complete asks this; see
+/// [`warn_on_failed_shards`] for why a 2xx is not enough.
+pub fn shards_failed(response: &Value) -> u64 {
+    response["_shards"]["failed"].as_u64().unwrap_or(0)
+}
+
 /// True when a `_search` response reports failed shards. ES answers 200 with
 /// partial results when a shard errors (e.g. a terms agg on a field mapped
 /// `text` in one index, #3570), so a 2xx alone does not mean the aggregations
 /// are complete. Logs a warning naming `context` and the first failure reason.
 pub fn warn_on_failed_shards(context: &str, response: &Value) -> bool {
-    let failed = response["_shards"]["failed"].as_u64().unwrap_or(0);
+    let failed = shards_failed(response);
     if failed == 0 {
         return false;
     }
@@ -1130,6 +1151,20 @@ mod tests {
         let es = Es::connect(&url).expect("client");
         let all = es.search_paginated("idx", |_| serde_json::json!({}), 2, 10).await.expect("walk");
         assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn shards_failed_reads_the_count_and_defaults_to_zero() {
+        assert_eq!(shards_failed(&serde_json::json!({"_shards": {"total": 5, "successful": 1, "failed": 4}})), 4);
+        assert_eq!(shards_failed(&serde_json::json!({"_shards": {"total": 5, "successful": 5, "failed": 0}})), 0);
+        assert_eq!(shards_failed(&serde_json::json!({})), 0);
+    }
+
+    #[test]
+    fn the_aggregation_names_say_which_search_was_partial() {
+        assert_eq!(aggregation_names(&serde_json::json!({"aggs": {"alerts": {}, "ports": {}}})), "alerts,ports");
+        assert_eq!(aggregation_names(&serde_json::json!({"aggregations": {"a": {}}})), "a");
+        assert_eq!(aggregation_names(&serde_json::json!({"query": {}})), "none");
     }
 
     #[test]
