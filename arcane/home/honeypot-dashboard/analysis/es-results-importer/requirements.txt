@@ -5,4 +5,4 @@
 # clients one major back, so this client's compatible-with=8 header stays
 # valid (recorded in docs/runtime-compatibility-record.md).
 elasticsearch==8.19.3
-loguru==0.7.3
+loguru==0.8.0
