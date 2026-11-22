@@ -727,6 +727,9 @@ def background_subprocess(command_args, cwd, base64_encode, shell=False):
 
 def spawn(args, cwd, base64_encode, shell=False):
     """Kick off a subprocess in the background."""
+    if cwd is not None:
+        if not re.match(r'^[a-zA-Z0-9_\-./\\]+$', cwd):
+            raise ValueError("Invalid cwd parameter")
     proc = subprocess.Popen(args, cwd=cwd, shell=shell)
     state["status"] = Status.RUNNING
     state["description"] = ""
