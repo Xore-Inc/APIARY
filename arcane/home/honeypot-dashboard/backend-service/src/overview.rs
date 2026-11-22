@@ -359,8 +359,9 @@ pub async fn kpis(State(state): State<AppState>) -> Result<Json<OverviewKpis>, (
     }
 
     // #3910: the fallback is one search, and the worker's snapshot of it
-    // (`page_rollup`) answers while recent. Until #3929 the rollup path
-    // above never covers the window, so this is the path production takes.
+    // (`page_rollup`) answers while recent. Since #3929 the rollup path above
+    // covers the window, so this is the path for a window it does not cover
+    // (a fresh deploy, a rollup read that failed).
     let result = match crate::page_rollup::read(&state, crate::page_rollup::OVERVIEW_KPIS).await {
         Some(snapshot) => snapshot,
         None => state

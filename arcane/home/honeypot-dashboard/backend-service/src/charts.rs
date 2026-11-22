@@ -252,18 +252,15 @@ async fn traffic_sum(
 /// Note `zeek_fields`/`suricata_field` are rollup-matched, not re-checked:
 /// write_overview_bucket sums exactly those field lists per family.
 async fn traffic_from_rollup(state: &AppState, hours: usize, name: &str) -> Option<Series> {
-    let docs = crate::rollups::netflow_hours(state, hours).await.ok()?;
     let start =
         crate::rollups::hour_floor(chrono::Utc::now()) - chrono::Duration::hours(hours as i64 - 1);
     // One fixed hourly grid per family, zero-filled — superset of what the
-    // live date_histograms return between their min/max data points.
-    let collect = |family: &str| -> Option<Vec<f64>> {
+    // live date_histograms return between their min/max data points. A leg
+    // is read only when it is needed: Suricata's only if Zeek's was empty.
+    let collect = |docs: Vec<(chrono::DateTime<chrono::Utc>, Value)>| -> Option<Vec<f64>> {
         let mut values = vec![0.0; hours];
         let mut found = 0usize;
-        for (doc_family, hour, doc) in &docs {
-            if doc_family != family {
-                continue;
-            }
+        for (hour, doc) in &docs {
             let offset = (*hour - start).num_hours();
             if !(0..hours as i64).contains(&offset) {
                 continue;
@@ -277,11 +274,11 @@ async fn traffic_from_rollup(state: &AppState, hours: usize, name: &str) -> Opti
             None
         }
     };
-    let zeek = collect(crate::rollups::FAMILY_ZEEK)?;
+    let zeek = collect(crate::rollups::netflow_hours(state, crate::rollups::FAMILY_ZEEK, hours).await.ok()?)?;
     let values = if zeek.iter().any(|&value| value > 0.0) {
         zeek
     } else {
-        collect(crate::rollups::FAMILY_SURICATA)?
+        collect(crate::rollups::netflow_hours(state, crate::rollups::FAMILY_SURICATA, hours).await.ok()?)?
     };
     Some(Series {
         name: name.to_string(),
