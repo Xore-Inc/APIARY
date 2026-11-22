@@ -194,6 +194,12 @@ pub struct SankeyData {
     pub links: Vec<SankeyLink>,
 }
 
+/// Whether the sankey may be served from the hourly `link`/`touch` docs. Off
+/// since #3929: those sums count a group once per hour it was active, the live
+/// grouping once over the whole window, so the two never agreed. The docs are
+/// still written, for the day the rollup carries a distinct count.
+const ROLLED_SANKEY: bool = false;
+
 /// #2046: the sankey rebuilt from the rollup's hourly `link`/`touch` docs.
 /// Summing per-hour link counts reproduces the live group-flow totals
 /// except at hour boundaries, where a group (session or IP burst)
@@ -250,10 +256,12 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
     if let Some(snapshot) = crate::page_rollup::read(&state, crate::page_rollup::KILL_CHAIN_SANKEY).await {
         return Ok(Json(sankey_from_groups(&snapshot)));
     }
-    // #2046: rolled links/touches are the next path; the two-level
-    // grouping aggregation below remains the fall-through while coverage
-    // is missing. Node/link assembly is identical either way.
-    if crate::rollups::window_covered(&state, 48).await {
+    // #2046: rolled links/touches would be the next path, but they do not
+    // answer the same question (#3929: on production the hourly sums were 3x
+    // to 30x the live flows, because a session or address active over many
+    // hours is one group live and one per hour in the rollup), so the
+    // two-level grouping aggregation below is the only fall-through.
+    if ROLLED_SANKEY && crate::rollups::window_covered(&state, 48).await {
         if let Some(data) = sankey_from_rollup(&state).await {
             return Ok(Json(data));
         }

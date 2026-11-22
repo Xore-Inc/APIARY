@@ -109,14 +109,19 @@ pub(crate) fn bucket_label(h: DateTime<Utc>) -> String {
     h.format("%Y-%m-%dT%H:00:00.000Z").to_string()
 }
 
+/// Reads an hour back from either spelling the module uses: the stored
+/// `bucket` ([`bucket_key`], `2026-11-21T19:00Z`, no seconds) and the heatmap
+/// label ([`bucket_label`], full RFC 3339). RFC 3339 requires seconds, so the
+/// stored form needs its own format; until #3929 only the RFC 3339 grammar was
+/// tried, no stored `bucket` ever parsed, and every rollup read fell back to
+/// the live query.
 fn label_to_hour(label: &str) -> Option<DateTime<Utc>> {
-    // The label IS an RFC3339 timestamp (bucket_label keeps the exact shape
-    // ES key_as_string used), so lean on the real RFC3339 grammar rather
-    // than a custom format string — chrono rejects literal digit runs
-    // (":00:00.000") right after a numeric specifier while parsing.
-    chrono::DateTime::parse_from_rfc3339(label)
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(label) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    chrono::NaiveDateTime::parse_from_str(label, "%Y-%m-%dT%H:%MZ")
         .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+        .map(|naive| naive.and_utc())
 }
 
 fn overview_doc_id(family: &str, key: &str) -> String {
@@ -229,17 +234,33 @@ async fn docs_since(
         .collect())
 }
 
-/// One hour doc per requested family, oldest-first, over the window.
+/// The family filter of an hour read. `family` is dynamically mapped as
+/// `text` (with a `keyword` sub-field), so a `terms` query on `family` itself
+/// matches single-token values (`_all`, `zeek`) but never `suricata-netflow`,
+/// which the standard analyzer indexes as `suricata` and `netflow` (#3929).
+fn family_clause(families: &[&str]) -> Value {
+    json!({"terms": {"family.keyword": families}})
+}
+
+/// The `_all` fleet docs of the current scope: the coverage scan's own filter
+/// ([`coverage_scan_body`]) on the read side. A fleet doc from before the
+/// Modbus exclusion (#3908) counted a different set of events, so it reads as
+/// absent (the window is then not covered and the reader answers live)
+/// instead of mixing two scopes into one window (#3929).
+fn fleet_clause() -> Value {
+    json!({"bool": {"filter": [family_clause(&[FAMILY_ALL]), {"term": {FLEET_SCOPE_FIELD: true}}]}})
+}
+
+/// One hour doc per matched family doc (`series` families), oldest-first,
+/// over the window.
 async fn overview_hours(
     state: &AppState,
-    families: &[&str],
+    clause: Value,
+    series: usize,
     hours: usize,
 ) -> anyhow::Result<Vec<(DateTime<Utc>, Value)>> {
     let since = bucket_label(hour_floor(Utc::now()) - Duration::hours(hours as i64 - 1));
-    let clause = json!({"terms": {"family": families}});
-    let docs =
-        docs_since(state, OVERVIEW_INDEX, &since, Some(clause), hours * families.len() + 4)
-            .await?;
+    let docs = docs_since(state, OVERVIEW_INDEX, &since, Some(clause), hours * series + 4).await?;
     Ok(docs
         .into_iter()
         .filter_map(|doc| {
@@ -249,12 +270,13 @@ async fn overview_hours(
         .collect())
 }
 
-/// The KPI/heatmap slice (`_all` fleet doc per hour), oldest-first.
+/// The KPI/heatmap slice (`_all` fleet doc per hour, current scope),
+/// oldest-first.
 pub async fn fleet_hours(
     state: &AppState,
     hours: usize,
 ) -> anyhow::Result<Vec<(DateTime<Utc>, Value)>> {
-    overview_hours(state, &[FAMILY_ALL], hours).await
+    overview_hours(state, fleet_clause(), 1, hours).await
 }
 
 /// Presence signal shared by the kill-chain consumers: the `_all` fleet
@@ -265,19 +287,16 @@ pub async fn window_covered(state: &AppState, hours: usize) -> bool {
     matches!(fleet_hours(state, hours).await, Ok(docs) if covered(docs.len(), hours))
 }
 
-/// Both netflow legs keyed by family name, oldest-first within each leg —
-/// exactly what charts.rs::traffic_sum consumes per chart.
+/// One netflow leg (`FAMILY_ZEEK` or `FAMILY_SURICATA`), oldest-first —
+/// what charts.rs::traffic_sum consumes per chart. One leg per call: the
+/// Suricata leg is only the fallback for a window Zeek produced nothing in,
+/// so the caller asks for it only then.
 pub async fn netflow_hours(
     state: &AppState,
+    family: &str,
     hours: usize,
-) -> anyhow::Result<Vec<(String, DateTime<Utc>, Value)>> {
-    let mut out = Vec::new();
-    for family in [FAMILY_ZEEK, FAMILY_SURICATA] {
-        for (hour, doc) in overview_hours(state, &[family], hours).await? {
-            out.push((family.to_string(), hour, doc));
-        }
-    }
-    Ok(out)
+) -> anyhow::Result<Vec<(DateTime<Utc>, Value)>> {
+    overview_hours(state, family_clause(&[family]), 1, hours).await
 }
 
 pub async fn geo_cities(state: &AppState) -> anyhow::Result<Vec<Value>> {
@@ -775,6 +794,7 @@ async fn missing_buckets(state: &AppState, now: DateTime<Utc>) -> anyhow::Result
 
 pub async fn run_cycle(state: &AppState) -> anyhow::Result<()> {
     let now = Utc::now();
+    let started = std::time::Instant::now();
     let current = hour_floor(now);
     let always: Vec<DateTime<Utc>> = vec![current - Duration::hours(1), current];
 
@@ -812,9 +832,17 @@ pub async fn run_cycle(state: &AppState) -> anyhow::Result<()> {
     if let Err(error) = write_geo_cycle(state).await {
         tracing::warn!(%error, "geo rollup refresh failed");
     }
+    // The hour, geo and attack rollups above; the page snapshots below log
+    // their own times.
+    let rollups_ms = started.elapsed().as_millis() as u64;
     // #3756: whole-page snapshots of the reads too slow to run per request.
     crate::page_rollup::write_cycle(state).await;
     prune_old_buckets(state, now).await;
+    tracing::info!(
+        rollups_ms,
+        total_ms = started.elapsed().as_millis() as u64,
+        "dashboard rollup cycle done"
+    );
     Ok(())
 }
 
@@ -875,6 +903,33 @@ mod tests {
     fn label_round_trip_recovers_the_hour() {
         assert_eq!(label_to_hour(&bucket_label(hour(7))), Some(hour(7)));
         assert_eq!(label_to_hour("garbage"), None);
+    }
+
+    #[test]
+    fn stored_bucket_key_round_trips_to_the_hour() {
+        // #3929: `bucket` is written as `bucket_key`, which has no seconds,
+        // so the RFC 3339 grammar alone never parsed a stored hour.
+        for offset in [-200, -1, 0, 1, 7, 23, 47, 191] {
+            assert_eq!(label_to_hour(&bucket_key(hour(offset))), Some(hour(offset)), "offset {offset}");
+        }
+        assert_eq!(label_to_hour("2026-11-21T19:00Z"), DateTime::from_timestamp(1_795_287_600, 0));
+        // The RFC 3339 spellings (with seconds, with an offset) still parse.
+        assert_eq!(label_to_hour("2026-11-21T19:00:00Z"), label_to_hour("2026-11-21T19:00Z"));
+        assert_eq!(label_to_hour("2026-11-21T20:00:00+01:00"), label_to_hour("2026-11-21T19:00Z"));
+        assert_eq!(label_to_hour("2026-11-21T19:00:00.000Z"), label_to_hour("2026-11-21T19:00Z"));
+        // Anything else stays unparsed.
+        for bad in ["", "2026-11-21", "2026-11-21T19Z", "2026-11-21T19:00", "2026-11-21 19:00Z", "2026-13-01T00:00Z"] {
+            assert_eq!(label_to_hour(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_family_filter_reads_the_keyword_field() {
+        // #3929: `family` is a text field, so `terms` on it never matched
+        // the two-token `suricata-netflow` family.
+        let clause = family_clause(&[FAMILY_SURICATA]);
+        assert_eq!(clause, json!({"terms": {"family.keyword": ["suricata-netflow"]}}));
+        assert!(clause["terms"].get("family").is_none());
     }
 
     #[test]
