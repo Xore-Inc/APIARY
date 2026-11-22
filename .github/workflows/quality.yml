@@ -1501,8 +1501,8 @@ jobs:
             run: |
               set -euo pipefail
               bin="$RUNNER_TEMP/hadolint"
-              curl -fsSL -o "$bin" https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64
-              echo "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507  $bin" | sha256sum -c -
+              curl -fsSL -o "$bin" https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-linux-x86_64
+              echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  $bin" | sha256sum -c -
               chmod +x "$bin"
               git ls-files -z | grep -zE '(^|/)Dockerfile[^/]*$' | xargs -0 "$bin" --config .hadolint.yaml
 
