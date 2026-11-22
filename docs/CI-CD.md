@@ -1683,7 +1683,7 @@ where the pushed image digest exists.
 
 **The digest is stamped into the document, not just the filename.** syft's
 CycloneDX output records the image's name and tag and no digest at all
-(verified against syft 1.52.0), so `scripts/generate-image-sbom.sh` adds
+(verified against syft 1.52.0 and re-checked on 1.57.2), so `scripts/generate-image-sbom.sh` adds
 CycloneDX properties to `metadata.component` afterwards:
 `apiary:image-digest`, `apiary:image-reference`, and `apiary:image-name`,
 plus `component.version` set to the digest for viewers that show only

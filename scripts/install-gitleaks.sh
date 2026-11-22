@@ -25,7 +25,7 @@
 #                                    safe to assign
 #
 # Overrides (all three must move together; see the guard below):
-#   GITLEAKS_VERSION  release tag, e.g. 8.30.0
+#   GITLEAKS_VERSION  release tag, e.g. 8.30.1
 #   GITLEAKS_SHA256   sha256 of the release tarball for that version
 #   GITLEAKS_BIN_DIR  where to unpack (default $RUNNER_TEMP/gitleaks-bin)
 #   GITLEAKS_BIN      use this gitleaks verbatim and skip the fetch (trusted as
@@ -34,8 +34,8 @@ set -euo pipefail
 
 # The pin. Bump these together, after checking the release's own checksum
 # file: GITLEAKS_SHA256 is the sha256 of the asset named below.
-readonly PINNED_GITLEAKS_VERSION=8.30.0
-readonly PINNED_GITLEAKS_SHA256=79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+readonly PINNED_GITLEAKS_VERSION=8.30.1
+readonly PINNED_GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 print_path=0
 case "${1:-}" in
