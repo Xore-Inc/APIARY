@@ -65,9 +65,20 @@ FICTIONAL_LABELS = [
     "FileBrowser",
 ]
 
-# Ports the fixed script now treats as "always expected up" -- see the
-# corresponding `probe $WG <port>` calls in vps/debug-backends.sh.
-ALWAYS_UP_PORTS = [19092, 19636, 19601, 19091, 19080, 18080, 3552]  # #3749: 19090 retired
+# Always-expected-up gateways: env var the script reads its home port from ->
+# live port (the script's default). #3951: the test binds ephemeral ports and
+# passes them in through these variables, so it never depends on the live
+# ports being free on the shared CI host (the live stack publishes some of
+# them on 0.0.0.0, which makes a loopback bind fail with EADDRINUSE).
+ALWAYS_UP_PORTS = {
+    "PORT_DASHBOARD": 19092,  # apiary-dashboard
+    "PORT_EVEBOX": 19636,
+    "PORT_KIBANA": 19601,
+    "PORT_TANNER": 19091,
+    "PORT_ARKIME": 19080,
+    "PORT_KEYCLOAK": 18080,
+    "PORT_ARCANE": 3552,
+}  # #3749: 19090 retired
 
 
 def _script_text():
@@ -171,11 +182,9 @@ class _OKHandler(http.server.BaseHTTPRequestHandler):
 def _mock_host():
     """A per-process loopback address for the mock backends.
 
-    The port numbers below are fixed by debug-backends.sh itself, so they
-    cannot be randomised -- but several CI jobs share one self-hosted
-    runner host, and two concurrent runs of this file both binding
-    127.0.0.1:19090 lose with EADDRINUSE. 127/8 is entirely loopback on
-    Linux, so give each process its own address instead. Falls back to
+    Ports are ephemeral (see _servers_on), so the address only keeps
+    concurrent runs apart on a shared runner. 127/8 is entirely loopback
+    on Linux, so give each process its own address. Falls back to
     127.0.0.1 where only that one address is configured (macOS).
     """
     pid = os.getpid()
@@ -191,30 +200,52 @@ def _mock_host():
 MOCK_HOST = _mock_host()
 
 
+def _free_port():
+    """An ephemeral port on MOCK_HOST that nothing is listening on."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((MOCK_HOST, 0))
+        return s.getsockname()[1]
+
+
 @contextlib.contextmanager
-def _servers_on(ports):
+def _servers_on(names, closed=()):
+    """Serve _OKHandler on an ephemeral port for each PORT_* variable in
+    `names`; variables in `closed` get a port nothing listens on. Yields a
+    {variable: port} map to hand to the script."""
     servers = []
+    ports = {}
     try:
-        for port in ports:
-            server = http.server.ThreadingHTTPServer((MOCK_HOST, port), _OKHandler)
+        for name in names:
+            server = http.server.ThreadingHTTPServer((MOCK_HOST, 0), _OKHandler)
             servers.append(server)
+            ports[name] = server.server_address[1]
             threading.Thread(target=server.serve_forever, daemon=True).start()
-        yield
+        for name in closed:
+            ports[name] = _free_port()
+        yield ports
     finally:
         for server in servers:
             server.shutdown()
             server.server_close()
 
 
-def _run_script():
+def _run_script(ports):
+    overrides = {name: str(port) for name, port in ports.items()}
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=REPO_ROOT,
-        env=os.environ | {"WG": MOCK_HOST},
+        env=os.environ | {"WG": MOCK_HOST} | overrides,
         capture_output=True,
         text=True,
         timeout=60,
     )
+
+
+def test_always_up_port_defaults_are_the_live_ports():
+    """The env overrides must not change what the script probes by default."""
+    text = _script_text()
+    for name, port in ALWAYS_UP_PORTS.items():
+        assert f'{name}="${{{name}:-{port}}}"' in text, f"{name} must default to {port} in debug-backends.sh"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="uses /dev/tcp and bash")
@@ -222,8 +253,8 @@ def test_exits_zero_when_every_always_up_port_answers():
     """Acceptance criterion from #2297: running against a healthy
     deployment exits 0 with zero failures. Snare/RevDeck are left closed
     (they're WARN-tier optional) to prove those don't sink the gate."""
-    with _servers_on(ALWAYS_UP_PORTS):
-        result = _run_script()
+    with _servers_on(ALWAYS_UP_PORTS) as ports:
+        result = _run_script(ports)
     assert result.returncode == 0, (
         "script should exit 0 when every non-optional backend answers "
         f"(stdout follows):\n{result.stdout}\n{result.stderr}"
@@ -235,9 +266,9 @@ def test_exits_zero_when_every_always_up_port_answers():
 def test_exits_nonzero_when_an_always_up_port_is_down():
     """The gate must still catch a real outage -- unconditionally exiting
     0 would be as useless as the unconditional-1 bug #2297 reported."""
-    broken = ALWAYS_UP_PORTS[1:]  # leave the first port (dashboard) closed
-    with _servers_on(broken):
-        result = _run_script()
+    names = list(ALWAYS_UP_PORTS)
+    with _servers_on(names[1:], closed=names[:1]) as ports:  # dashboard stays closed
+        result = _run_script(ports)
     assert result.returncode != 0, f"script must fail when a real backend is down (stdout follows):\n{result.stdout}"
     assert "[FAIL]" in result.stdout
 
