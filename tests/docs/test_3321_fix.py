@@ -180,8 +180,8 @@ def test_both_scans_use_one_pinned_trivy():
         )
 
     pin = INSTALL_TRIVY.read_text(encoding="utf-8")
-    assert re.search(r"PINNED_TRIVY_VERSION=0\.74\.0", pin), (
-        "the shared installer must carry the 0.74.0 pin image-security-scan.yml "
+    assert re.search(r"PINNED_TRIVY_VERSION=0\.76\.2", pin), (
+        "the shared installer must carry the 0.76.2 pin image-security-scan.yml "
         "was already using, so adopting it here is not a version bump (#3321)"
     )
     assert re.search(r"PINNED_TRIVY_SHA256=[0-9a-f]{64}", pin), (
@@ -247,7 +247,7 @@ def test_pins_are_not_duplicated_anywhere_by_grep():
         and ".git/" not in p.relative_to(REPO_ROOT).as_posix()
         and "node_modules" not in p.relative_to(REPO_ROOT).as_posix()
         and "PINNED_TRIVY_SHA256" not in p.name
-        and "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+        and "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
         in p.read_text(encoding="utf-8", errors="replace")
     ]
     assert offenders == [INSTALL_TRIVY.relative_to(REPO_ROOT).as_posix()], (
