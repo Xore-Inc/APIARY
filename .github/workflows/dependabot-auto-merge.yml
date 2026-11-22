@@ -5,9 +5,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 # #3313: nothing at the workflow level. The one job below is the only thing
-# here that needs a token and it declares what it spends -- approving, arming
-# auto-merge and commenting -- so a job or step added later starts with no
-# token rather than inheriting two write scopes by accident.
+# here that needs a token and it declares what it spends -- arming auto-merge
+# and commenting -- so a job or step added later starts with no token rather
+# than inheriting two write scopes by accident.
 permissions: {}
 
 jobs:
@@ -30,79 +30,80 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # #3311: under semver, 0.y.z has no stability promise -- a 0.9 -> 0.10
-      # bump is a major change, and Cargo's caret rules treat it as one.
-      # fetch-metadata still labels it semver-minor, which is how rand
-      # 0.9 -> 0.10 and sha2 0.10 -> 0.11 qualified for auto-merge and landed
-      # on main with a broken backend build (#3287, #3289). Hold any update
-      # that moves a 0.x dependency's minor version (grouped PRs: any member).
-      - name: Hold 0.x minor bumps for manual review
-        id: zero-major
-        env:
-          DEPS: ${{ steps.metadata.outputs.updated-dependencies-json }}
-        run: |
-          held="$(jq -r '[.[] | select(.updateType == "version-update:semver-minor"
-                                   and ((.prevVersion // "") | startswith("0.")))
-                             | "\(.dependencyName) \(.prevVersion) -> \(.newVersion)"] | join(", ")' <<<"${DEPS:-[]}")"
-          if [ -n "$held" ]; then
-            echo "hold=true" >>"$GITHUB_OUTPUT"
-            echo "held=$held" >>"$GITHUB_OUTPUT"
-            echo "::notice::0.x minor bump(s), not auto-merging: $held"
-          fi
-
-      - name: Check out the PR head
+      # The lockfile check below diffs the PR's base and head commits, so the
+      # checkout needs their history. The token is not persisted: nothing after
+      # this step pushes.
+      - name: Check out the PR history
         if: >-
           steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
           steps.metadata.outputs.update-type == 'version-update:semver-minor'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
-      # #2741's npm-lockfile gate checked frontend-next's package-lock.json
-      # under node:26-alpine's npm. It left with frontend-next (#3749): this
-      # repo has no other npm project with a Dockerfile-pinned npm.
-      - name: Approve patch and minor updates
-        if: >-
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          steps.zero-major.outputs.hold != 'true'
+      # Every reason a person should merge this one by hand is decided here,
+      # and any reason holds it:
+      # - a GitHub Actions bump: the action runs on main with secrets and write
+      #   scopes, and no required check exercises the new action code;
+      # - a 0.x minor or major bump (#3311): under semver it is breaking, even
+      #   though Dependabot labels it semver-minor, and an update to a 0.x
+      #   dependency can be a major change (#3287, #3289). Only direct
+      #   dependencies appear in updated-dependencies-json, so the lockfiles are
+      #   checked too (#3946: lopdf 0.44 -> 0.47 was a transitive move);
+      # - any 0.x minor-line move in Cargo.lock, requirements*.txt or go.sum,
+      #   as reported by the base-side copy of the checker.
+      # The checker is read from the base commit, so a PR cannot change it.
+      - name: Hold updates a person should review
+        id: hold
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          DEPS: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # main's ruleset requires zero approving reviews, so this approval
-          # is a courtesy, not a merge gate. When the repository setting
-          # "Allow GitHub Actions to create and approve pull requests" is off,
-          # GitHub refuses it with "GitHub Actions is not permitted to approve
-          # pull requests" -- treat only that refusal as non-fatal so the step
-          # below can still arm auto-merge, rather than failing this check on
-          # every compatible dependabot PR (as it did from 2026-10-12 on).
-          if err="$(gh pr review --approve "$PR_URL" 2>&1)"; then
-            echo "$err"
-            exit 0
+          set -euo pipefail
+          reasons=()
+          if [ "$ECOSYSTEM" = "github_actions" ]; then
+            reasons+=("GitHub Actions bump (runs with secrets and write scopes on main; no required check exercises the new action code)")
           fi
-          echo "$err"
-          if printf '%s' "$err" | grep -q "not permitted to approve pull requests"; then
-            echo "::notice::GitHub Actions may not approve PRs in this repository; skipping the courtesy approval (main requires none)."
-            exit 0
+          zero="$(jq -r '[.[] | select((.updateType == "version-update:semver-minor" or .updateType == "version-update:semver-major")
+                                   and ((.prevVersion // "") | startswith("0.")))
+                             | "\(.dependencyName) \(.prevVersion) -> \(.newVersion)"] | join(", ")' <<<"${DEPS:-[]}")"
+          if [ -n "$zero" ]; then
+            reasons+=("0.x minor bump: $zero")
           fi
-          exit 1
+          if [ "$UPDATE_TYPE" = "version-update:semver-patch" ] || [ "$UPDATE_TYPE" = "version-update:semver-minor" ]; then
+            git show "$BASE_SHA:scripts/check-dependabot-lockfiles.py" >"$RUNNER_TEMP/check-dependabot-lockfiles.py"
+            moves="$(python3 "$RUNNER_TEMP/check-dependabot-lockfiles.py" "$BASE_SHA" "$HEAD_SHA")"
+            if [ -n "$moves" ]; then
+              reasons+=("0.x lockfile move: ${moves//$'\n'/; }")
+            fi
+          fi
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            held="$(printf '%s; ' "${reasons[@]}")"
+            held="${held%; }"
+            echo "hold=true" >>"$GITHUB_OUTPUT"
+            echo "held=$held" >>"$GITHUB_OUTPUT"
+            echo "::notice::Not auto-merging: $held"
+          fi
 
+      # Arm GitHub's native auto-merge so the PR merges once its required
+      # checks pass. This needs branch protection (or a ruleset) on the base
+      # branch; without it the enablePullRequestAutoMerge mutation returns
+      # "Protected branch rules not configured for this branch". Treat only
+      # that specific case as non-fatal -- a human still merges manually --
+      # instead of failing this required check on every dependabot PR.
       - name: Enable squash auto-merge after required checks
         if: >-
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
            steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          steps.zero-major.outputs.hold != 'true'
+          steps.hold.outputs.hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          # Arm GitHub's native auto-merge so the PR merges once its required
-          # checks pass. This needs branch protection (or a ruleset) on the base
-          # branch; without it the enablePullRequestAutoMerge mutation returns
-          # "Protected branch rules not configured for this branch". Treat only
-          # that specific case as non-fatal -- a human still merges manually --
-          # instead of failing this required check on every dependabot PR.
           if err="$(gh pr merge --auto --squash "$PR_URL" 2>&1)"; then
             echo "$err"
             exit 0
@@ -116,12 +117,12 @@ jobs:
           fi
           exit 1
 
-      - name: Leave the 0.x minor bump for a human
-        if: steps.zero-major.outputs.hold == 'true'
+      - name: Leave the update for a human
+        if: steps.hold.outputs.hold == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          HELD: ${{ steps.zero-major.outputs.held }}
+          HELD: ${{ steps.hold.outputs.held }}
         run: |
           gh pr comment "$PR_URL" --body \
-            "Not auto-merging: this moves the minor version of a 0.x dependency ($HELD). Under semver that is a breaking change even though Dependabot labels it semver-minor (#3311). Check the changelog and merge by hand once the required checks pass."
+            "Not auto-merging: $HELD. Check the changelog and merge by hand once the required checks pass. Auto-merge holds GitHub Actions bumps, 0.x minor and major bumps, and 0.x minor-line moves in a lockfile (#3311, #3946)."
