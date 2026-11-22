@@ -18,6 +18,6 @@ EXPOSE 11434
 USER 65534
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=5 \
-  CMD nc -z 127.0.0.1 11434 || exit 1
+  CMD ["sh", "-c", "nc -z 127.0.0.1 11434 || exit 1"]
 
 ENTRYPOINT ["/usr/local/bin/galah-llm-broker"]

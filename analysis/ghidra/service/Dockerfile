@@ -53,6 +53,6 @@ ENV PORT=9090
 EXPOSE 9090
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=10 \
-  CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9090/v1/health', timeout=3).status==200 else 1)"
+  CMD ["python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9090/v1/health', timeout=3).status==200 else 1)"]
 
 ENTRYPOINT ["python3", "/opt/service/server.py"]

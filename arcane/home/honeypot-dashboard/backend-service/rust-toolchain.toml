@@ -13,8 +13,10 @@
 # deliberate one-line commit that can be reviewed with the lint fixes it
 # requires.
 #
-# 1.98.0 is what the image already ships and what the deployed
-# apiary-backend:latest was built with.
+# 1.100.0 is the stable channel as of #3941 batch B3 (2026-11-22). It is also
+# what the pinned rust:1-slim-trixie build image ships, so the container build
+# and CI compile with the same compiler. The previous pin, 1.98.0, was the
+# compiler the deployed apiary-backend:latest was built with before B3.
 [toolchain]
-channel = "1.98.0"
+channel = "1.100.0"
 components = ["clippy"]

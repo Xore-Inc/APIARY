@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.16"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -185,9 +185,9 @@ dependencies = [
 
 [[package]]
 name = "huginn-net"
-version = "2.0.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3acf76b6476e2318e1773a201c39da80e44bbe9f9e4ae7891500480392aa2e2"
+checksum = "cf0c6fc877ecbdcd09e4a15e32c04937bb220e97b783b5e7c452e351d2dcd34f"
 dependencies = [
  "huginn-net-db",
  "huginn-net-http",
@@ -196,29 +196,29 @@ dependencies = [
  "pcap-file",
  "pnet",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "ttl_cache",
 ]
 
 [[package]]
 name = "huginn-net-db"
-version = "2.0.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f6a1e45881ae16ecfdd55de2e80922083665c2c5a8873cf1ad08fb15e078190"
+checksum = "aabbe23b01fcf1effa3b377ee963ba6ac12c9c0db99022b4494e4decc3504491"
 dependencies = [
  "huginn-net-http",
  "huginn-net-tcp",
  "nom 8.0.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
 [[package]]
 name = "huginn-net-http"
-version = "2.0.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1207bab2896b2b5cda3b0f23bbe994e6deb085b7e4537384a995a79a02541855"
+checksum = "4b97af4f9b8b6f376271d25d29bccbe01310c612ca0bdb10e84467a412aed235"
 dependencies = [
  "crossbeam-channel",
  "hpack-patched",
@@ -227,38 +227,38 @@ dependencies = [
  "pnet",
  "serde",
  "sha2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "ttl_cache",
 ]
 
 [[package]]
 name = "huginn-net-tcp"
-version = "2.0.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d8531575ab38ca4626a8ec9846865c3f183e1c0b00e119831662c33beff5a5"
+checksum = "d1c0661b347f5a769871eb6862622dd5c252cc044f481a676f24eef9fe78eb61"
 dependencies = [
  "crossbeam-channel",
  "pcap-file",
  "pnet",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "ttl_cache",
 ]
 
 [[package]]
 name = "huginn-net-tls"
-version = "2.0.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0432d73ce496924dae6bb35ece0ffe6c52745897bb8e9f15fb303a8f930f1478"
+checksum = "dd8717b36080edce2156f798abd4f386fa75fff1c4011e2a16d890925813d918"
 dependencies = [
  "crossbeam-channel",
  "pcap-file",
  "pnet",
  "serde",
  "sha2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tls-parser",
  "tracing",
  "ttl_cache",
@@ -311,9 +311,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
@@ -777,11 +777,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -797,9 +797,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",

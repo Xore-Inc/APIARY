@@ -133,7 +133,7 @@ ENV XDG_CONFIG_HOME=/opt/sentrypeer
 EXPOSE 5060/udp 5060/tcp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD nc -z -u 127.0.0.1 5060 || exit 1
+  CMD ["sh", "-c", "nc -z -u 127.0.0.1 5060 || exit 1"]
 
 # No -a (RESTful API, port 8082): nothing in this stack consumes it, the
 # JSON log file is read directly, and it's an unused extra surface. No -p

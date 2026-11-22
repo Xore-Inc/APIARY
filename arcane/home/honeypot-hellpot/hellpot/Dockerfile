@@ -63,6 +63,6 @@ EXPOSE 8080
 USER 65534
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD nc -z 127.0.0.1 8080 || exit 1
+  CMD ["sh", "-c", "nc -z 127.0.0.1 8080 || exit 1"]
 
 ENTRYPOINT ["/usr/local/bin/hellpot", "-c", "/config.toml"]
