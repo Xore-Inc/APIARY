@@ -1,0 +1,49 @@
+# Phase 7 step 2 proof (#3594, docs/SWARM-GPU.md). Not a GitOps stack (it is
+# outside swarm/stacks/ on purpose). Run by hand on a manager, then remove it:
+#   docker stack deploy -c ops/swarm/gpu-canary.stack.yml gpu-canary
+#   docker stack rm gpu-canary
+# It takes the whole GPU: only when nothing else owns the card.
+services:
+  probe:
+    image: nvidia/cuda:12.4.0-base-ubuntu22.04@sha256:80d4d9ac041242f6ae5d05f9be262b3374e0e0b8bb5a49c6c3e94e192cde4a44
+    command: ["sh", "-c", "env | grep -E '^(DOCKER_RESOURCE|NVIDIA_VISIBLE)' ; nvidia-smi -L ; exec sleep infinity"]
+    read_only: true
+    cap_drop: [ALL]
+    volumes:
+      # The device request the runtime honours for an unprivileged swarm task
+      # (accept-nvidia-visible-devices-as-volume-mounts = true). The
+      # generic_resources reservation below is the scheduler's accounting.
+      - type: bind
+        source: /dev/null
+        target: /var/run/nvidia-container-devices/GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3
+        read_only: true
+    healthcheck:
+      test: ["CMD", "nvidia-smi", "-L"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == true
+      resources:
+        reservations:
+          generic_resources:
+            - discrete_resource_spec:
+                kind: NVIDIA-GPU
+                value: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+      update_config:
+        monitor: 60s
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        order: stop-first
+        failure_action: pause
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "a hand-run proof; remove it with docker stack rm instead"

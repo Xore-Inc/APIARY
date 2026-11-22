@@ -172,8 +172,8 @@ SAME_VERSION_REFRESHES = {
         "new": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
         "files": [
             "arcane/home/honeypot-tanner/tanner/redis/Dockerfile",
-            "scripts/test-dashboard-oidc-chaos.sh",
-            "scripts/test-dashboard-oidc-pkce-totp-login.sh",
+            # The two dashboard OIDC suites also pinned it; they left with
+            # frontend-next (#3749, port tracked in #3750).
         ],
     },
 }

@@ -30,8 +30,13 @@ Two Compose files outside this stack now attach to its overlays as
 
 | Compose file | service | overlay | alias |
 |---|---|---|---|
-| `analysis/ghidra/docker-compose.ghidra.yml` | `ollama` | `galah-broker_back` | `ollama` |
+| `analysis/ghidra/docker-compose.ghidra.yml` | `ollama` (legacy profile, rollback only since #3594) | `galah-broker_back` | `ollama` |
 | `arcane/home/honeypot-galah/compose.yml` | `galah` | `galah-broker_front` | (broker answers as `galah-llm-broker`) |
+
+Since #3594 the broker reaches Ollama on the `llm` stack's overlay
+`llm_ollama` (external network `llm` in this stack), so the `llm` stack must
+be deployed before this one. `back` is kept for the rollback to the Compose
+Ollama.
 
 Compose refuses to start a service whose external network is missing.
 **Ollama in the Ghidra stack will not start until this stack has been

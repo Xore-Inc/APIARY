@@ -73,7 +73,8 @@ pub fn from_env(
         .ok_or_else(|| anyhow::anyhow!("GATEWAY_MODE=1 needs HOST_GATEWAY_TOKEN (or _FILE)"))?;
     let token = crate::trust::rotating(env, read, "HOST_GATEWAY_TOKEN", Some(current))?
         .expect("a current token was given");
-    for other in ["SERVICE_TOKEN", "EXPORT_TOKEN"] {
+    // #3866: the dev token too, when this host happens to hold it.
+    for other in ["SERVICE_TOKEN", "EXPORT_TOKEN", "DEV_SERVICE_TOKEN"] {
         if let Some(value) = crate::trust::secret(env, read, other)? {
             if token.current == value || token.previous.as_ref().is_some_and(|(previous, _)| *previous == value) {
                 anyhow::bail!("HOST_GATEWAY_TOKEN equals {other}; the gateway credential must be its own secret");

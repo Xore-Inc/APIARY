@@ -1,0 +1,11 @@
+- name: upnp
+  config:
+    root: "var/lib/dionaea/upnp/root"
+    max_request_size: 32768
+    personality:
+      cache: "CACHE-CONTROL: max-age=1800\r\n"
+      st: "ST: upnp:rootdevice\r\n"
+      usn: "USN: uuid:meridian-legacy-nas-02::upnp:rootdevice\r\n"
+      server: "SERVER: Linux/3.10.102 UPnP/1.0 ReadyDLNA/1.1\r\n"
+      location: "LOCATION: http://10.42.4.18:8200/rootDesc.xml\r\n"
+      opt: "OPT: http://schemas.upnp.org/upnp/1/0/\r\n"

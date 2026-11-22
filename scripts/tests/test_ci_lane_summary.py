@@ -108,13 +108,13 @@ class PairCellTest(unittest.TestCase):
             needs(
                 ("go-test-homeserver", "skipped"),
                 ("go-test-cloud", "success"),
-                ("vendored-theme", "success"),
-                ("vendored-theme-cloud", "skipped"),
+                ("public-safety", "success"),
+                ("public-safety-cloud", "skipped"),
             )
         )
         self.assertEqual(
             [ci_lane_summary._lane_key(lane) for lane in lanes],
-            ["go-test-homeserver", "vendored-theme"],
+            ["go-test-homeserver", "public-safety"],
         )
 
 

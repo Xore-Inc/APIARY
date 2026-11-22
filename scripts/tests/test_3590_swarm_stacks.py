@@ -160,6 +160,56 @@ class LintTest(unittest.TestCase):
         guard.write_text("udp 25\n")
         self.assertTrue(any("not in" in e for e in lint.check_file(path, root)))
 
+    def test_homeserver_pinned_ports_host_mode_guarded(self):
+        # #3596: phase 9 stacks pinned by hostname follow the sensor port rules.
+        body = good_stack().replace("node.labels.sensor == false", "node.hostname == supermicro")
+        self.assertFlags(body + "    ports: ['19601:5601']\n", "every node, the VPS public address included")
+        self.assertFlags(body + "    ports:\n      - {target: 5601, published: 19601, mode: ingress}\n",
+                         "every node, the VPS public address included")
+        host = body + "    ports:\n      - {target: 5601, published: 19601, mode: host, protocol: tcp}\n"
+        self.assertFlags(host, "homeserver-swarm-host-ports.txt")
+        root, path = self.write(host)
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("tcp 19601\n")
+        self.assertEqual(lint.check_file(path, root), [])
+        # Off-homeserver services keep their freedom (edge stacks publish nothing,
+        # but a precision service may use ingress).
+        self.assertEqual(self.errors(good_stack() + "    ports: ['8080:8080']\n"), [])
+
+    def test_published_port_needs_a_non_internal_network(self):
+        # #3596 gate G1: swarm publishes no host-mode port for a task whose
+        # networks are all internal.
+        nets = ("networks:\n  a: {driver: overlay, internal: true, ipam: {config: [{subnet: 10.200.97.0/24}]}}\n"
+                "  b: {driver: overlay, ipam: {config: [{subnet: 10.200.96.0/24}]}}\n")
+        port = "    ports: ['8080:8080']\n"
+        self.assertFlags(good_stack(port + "    networks: [a]\n", top=nets), "every network is internal")
+        self.assertEqual(self.errors(good_stack(port + "    networks: [a, b]\n", top=nets)), [])
+        self.assertEqual(self.errors(good_stack("    networks: [a]\n", top=nets)), [])
+
+    def test_homeserver_stack_never_publishes_decoy_forwarded_ports(self):
+        # #3596: portbridge forwards public 5432/6379/9200 to 10.8.0.2 for decoys.
+        body = good_stack().replace("node.labels.sensor == false", "node.hostname == supermicro")
+        root, path = self.write(body + "    ports:\n      - {target: 5432, published: 5432, mode: host, protocol: tcp}\n")
+        guard = root / "ops/firewall/hosts/homeserver-swarm-host-ports.txt"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("tcp 5432\n")
+        errs = lint.check_file(path, root)
+        self.assertTrue(any("must not publish tcp 5432" in e for e in errs), errs)
+        root2, path2 = self.write(body + "    ports:\n      - {target: 5432, published: 15432, mode: host, protocol: tcp}\n")
+        (root2 / "ops/firewall/hosts").mkdir(parents=True)
+        (root2 / "ops/firewall/hosts/homeserver-swarm-host-ports.txt").write_text("tcp 15432\n")
+        self.assertEqual(lint.check_file(path2, root2), [])
+
+    def test_short_syntax_tmpfs_refused(self):
+        # #3888: Arcane drops short-syntax tmpfs; long syntax is fine.
+        self.assertFlags(good_stack("    tmpfs: ['/tmp:size=8m']\n"), "short-syntax `tmpfs:`")
+        self.assertEqual(self.errors(good_stack(
+            "    volumes:\n      - {type: tmpfs, target: /tmp, tmpfs: {size: 8388608}}\n")), [])
+        # #3888 converted the last two (backend-api, dashboard-sessions): no exceptions
+        for name in ("backend-api", "dashboard-sessions"):
+            self.assertFlags(good_stack("    tmpfs: ['/tmp:size=8m']\n"), "short-syntax `tmpfs:`", name=name)
+
     def test_gpu_reservation_rules(self):
         # #3594: one GPU as a swarm generic resource.
         body = good_stack().replace(

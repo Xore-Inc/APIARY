@@ -1,0 +1,5 @@
+- name: printer
+  config:
+    root: "var/lib/dionaea/printer/root"
+    pjl_msgs:
+      info_id: "LEXMARK MS810dn;MODEL:MS810dn;SERIAL:7018429;FW:LW80.DN2.P024"

@@ -92,6 +92,13 @@ pub mod reports_api;
 pub mod reports_data;
 pub mod reports_store;
 pub mod reporter_stats;
+pub mod page_rollup;
+#[cfg(test)]
+mod page_rollup_tests;
+#[cfg(test)]
+mod rollup_read_tests;
+#[cfg(test)]
+mod investigate_partial_tests;
 pub mod rollups;
 pub mod sandbox_submit;
 pub mod sensors;
@@ -452,16 +459,39 @@ pub fn allow_unauth_dev_from_env(raw: Option<&str>) -> bool {
 ///    (`actor_subject`, preferences `subject`, ML `actor`, ...) bind those
 ///    fields with, so `enforce` overrides them with the verified actor and
 ///    `log` reports where it would.
+///
+/// 5. A request on the dev credential pair (#3866) goes through the same
+///    steps with its own key, and is marked `dev` on the request span, in the
+///    durable request log (a `trust::DevRequest` response extension that
+///    `obs::observe` reads) and, under `enforce`, in the verified actor
+///    (`trust::DEV_ACTOR_PREFIX`) every audit and attribution record takes.
 async fn require_service_token(
     State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let now = chrono::Utc::now();
+    let Some(principal) = state.trust.principal(request.headers(), now) else {
+        return (StatusCode::UNAUTHORIZED, "service token required").into_response();
+    };
+    if principal != trust::Principal::Dev {
+        return gate(&state, principal, now, request, next).await;
+    }
+    tracing::Span::current().record("credential", "dev");
+    let mut response = gate(&state, principal, now, request, next).await;
+    response.extensions_mut().insert(trust::DevRequest);
+    response
+}
+
+/// Steps 2 to 4 above, for a request whose credential is already known.
+async fn gate(
+    state: &AppState,
+    principal: trust::Principal,
+    now: chrono::DateTime<chrono::Utc>,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let trust = state.trust.as_ref();
-    let now = chrono::Utc::now();
-    let Some(principal) = trust.principal(request.headers(), now) else {
-        return (StatusCode::UNAUTHORIZED, "service token required").into_response();
-    };
     let matched = request
         .extensions()
         .get::<axum::extract::MatchedPath>()
@@ -483,7 +513,7 @@ async fn require_service_token(
     }
     let path = request.uri().path().to_string();
     let route = format!("{method} {}", matched.as_deref().unwrap_or(path.as_str()));
-    let verdict = trust.evaluate(&method, &path, matched.as_deref(), request.headers(), now);
+    let verdict = trust.evaluate(principal, &method, &path, request.headers(), now);
     if trust.mode == trust::AssertionMode::Log {
         match &verdict {
             trust::Verdict::Deny(status, reason) => tracing::warn!(
@@ -898,10 +928,11 @@ mod build_stamp_tests {
                    "3dca4457f1b2c0d4e5a69788796a5b4c3d2e1f0ab");
     }
 
-    /// The table is a file rather than a literal list so that the other
-    /// implementation of this rule -- dashboard-next's normalizeRevision, in
-    /// JavaScript, in a different CI lane -- can be driven from exactly the
-    /// same cases. `scripts/tests/test_3315_image_revision.py` runs both.
+    /// The table is a file rather than a literal list so that another
+    /// implementation of this rule can be driven from exactly the same cases.
+    /// The JavaScript one (dashboard-next's normalizeRevision) left with
+    /// frontend-next in #3749; `scripts/tests/test_3315_image_revision.py`
+    /// still checks the file's shape.
     /// Written inline, the two lists would drift the first time either gained
     /// a case, and the failure would be a deploy disagreement that is not one:
     /// two tiers stamping different strings for the same build, which

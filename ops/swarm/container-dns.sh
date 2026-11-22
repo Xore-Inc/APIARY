@@ -34,7 +34,10 @@ PY
 networks=$(docker network ls --filter driver=bridge --format '{{.Name}}')
 failed=0
 checked=0
-if [ "$mode" = rejoin ] && docker container inspect hp-elasticsearch >/dev/null 2>&1; then
+# Only a RUNNING hp-elasticsearch: since phase 9 leg D (#3596) it is the
+# stopped legacy rollback of the elasticsearch stack, and restarting it next to
+# the swarm task would put two nodes on one data path.
+if [ "$mode" = rejoin ] && [ "$(docker container inspect hp-elasticsearch --format '{{.State.Running}}' 2>/dev/null)" = true ]; then
   if dns_resolves hp-elasticsearch hp-elasticsearch 2>/dev/null; then :; else
     rc=$?
     if [ "$rc" -ne 10 ]; then echo "could not check hp-elasticsearch (probe exit $rc)" >&2; exit 1; fi

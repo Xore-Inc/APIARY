@@ -315,7 +315,7 @@ pub async fn commands_csv(
 pub async fn ips_csv(State(state): State<AppState>) -> Result<impl IntoResponse, (StatusCode, String)> {
     let page = crate::aggregates::sources(
         State(state),
-        Query(crate::aggregates::PageQuery { offset: 0, size: 1000 }),
+        Query(crate::aggregates::PageQuery { offset: 0, size: 1000, ips: None }),
     )
     .await?
     .0;

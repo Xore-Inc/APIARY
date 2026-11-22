@@ -23,7 +23,7 @@
 # Traefik via socat-hp-http.
 services:
   http:
-    image: ghcr.io/xore-inc/honeypot-http-honeypot@sha256:a44e608be81e47ca57a784a8f2e8522e2568cd9a2a70db1e65001747507dca74
+    image: ghcr.io/xore-inc/honeypot-http-honeypot@sha256:e0d79d808d0e43ea5f5a3e104a2648cf228f632283c1aa73e039d7fe763a59b1
     ports:
       - target: 8080
         published: 19081

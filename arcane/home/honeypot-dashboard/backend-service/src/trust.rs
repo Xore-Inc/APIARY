@@ -39,6 +39,19 @@
 //!    verified actor under `enforce`, reported under `log`, as sent under
 //!    `off`.
 //!
+//! 6. **A dev credential pair** (#3866). `DEV_SERVICE_TOKEN` plus
+//!    `DEV_ACTOR_ASSERTION_PUBLIC_KEY`, both or neither, give a workstation's
+//!    local dashboard its own credentials, so the production token and
+//!    signing key never leave the homeserver. The pair is bound: the dev
+//!    token is only believed with an assertion signed by the dev key, and
+//!    the production token only with one signed by the production key. With
+//!    no assertion at all it is the production token with none, whatever
+//!    that allows under the mode. It uses no rotation slot, and everything
+//!    it does is marked `dev`. It exists only under
+//!    `ACTOR_ASSERTION_MODE=enforce`: under `off` or `log` the verified actor
+//!    that carries the marker is not what records are attributed to, so the
+//!    boot is refused.
+//!
 //! Every secret can be given as `NAME` or as `NAME_FILE` (the swarm secret
 //! convention from #3590), never both.
 //!
@@ -69,24 +82,27 @@ pub const CLOCK_SKEW_SECS: i64 = 30;
 /// An assertion longer than this is not one the BFF made.
 const MAX_ASSERTION_LEN: usize = 4096;
 
+/// Prefixed to the subject and username of an actor verified through the
+/// dev credential pair (#3866). Every record fed from the verified actor (the
+/// audit trail, config history, `created_by`, `BlockedBy`, preferences, ...)
+/// then names the dev origin, with no handler having to know about it.
+pub const DEV_ACTOR_PREFIX: &str = "dev:";
+
+/// Response extension the trust middleware sets on every response to a
+/// request the dev pair authenticated, so the outermost observability layer
+/// can mark its request log line (#3866). Set on refusals too: a dev request
+/// that was turned away is still a dev request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevRequest;
+
 /// The one route the export credential may call.
 pub const EXPORT_ROUTE: &str = "/api/v1/ip-block-export";
 
-/// Mutations a `viewer` may perform under `enforce`. Everything else that
-/// is not GET/HEAD/OPTIONS needs `admin`. This mirrors the dashboard's own
-/// policy (apiary-dashboard `src/server/authorize.ts`: every mutation not in
-/// `ADMIN_QUERIES`), keyed by the router's matched path. Deny by default: a
-/// route missing here is refused to a viewer, which `log` mode reports
-/// before `enforce` turns it on.
-pub const VIEWER_MUTATIONS: &[(&str, &str)] = &[
-    ("POST", "/api/v1/alerts/{key}/ack"),
-    ("POST", "/api/v1/canarytokens"),
-    ("POST", "/api/v1/config/validate"),
-    ("PUT", "/api/v1/preferences"),
-    ("POST", "/api/v1/preferences/reset"),
-    ("POST", "/api/v1/problem-reports"),
-    ("POST", "/api/v1/reports/preview"),
-];
+// A `viewer` is strictly read-only (#3857): under `enforce`, every request
+// that is not GET/HEAD/OPTIONS needs `admin`. There is no per-route
+// allow-list for viewers; a new mutation is admin-only by default. The
+// dashboard's own policy (apiary-dashboard `src/server/authorize.ts`)
+// refuses the same requests before they get here.
 
 /// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410): SEQUENCE {
 /// SEQUENCE { OID 1.3.101.112 }, BIT STRING (0 unused bits) } followed by
@@ -146,6 +162,9 @@ pub enum Principal {
     Bff,
     /// The export-only credential.
     Export,
+    /// The dev credential pair (#3866): a BFF request from a local dev
+    /// dashboard, verified against the dev key only.
+    Dev,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,13 +211,24 @@ pub struct Trust {
     pub export: Option<Rotating<String>>,
     pub mode: AssertionMode,
     pub keys: Option<Rotating<[u8; 32]>>,
+    /// The optional dev pair (#3866). Never a rotation slot of `bff`/`keys`.
+    pub dev: Option<DevCredential>,
+}
+
+/// A dev service token and the one public key its assertions must verify
+/// against. Both are `Rotating` only so the production constant-time compare
+/// and key check are reused as they are; neither ever has a previous value.
+#[derive(Debug, Clone)]
+pub struct DevCredential {
+    pub token: Rotating<String>,
+    pub key: Rotating<[u8; 32]>,
 }
 
 impl Trust {
     /// The pre-#3577 posture: one token, nothing else. What tests and the
     /// default configuration amount to.
     pub fn bff_only(token: Option<String>) -> Self {
-        Self { bff: token.map(Rotating::new), export: None, mode: AssertionMode::Off, keys: None }
+        Self { bff: token.map(Rotating::new), export: None, mode: AssertionMode::Off, keys: None, dev: None }
     }
 
     /// Which credential the request presents, or None (401).
@@ -206,8 +236,14 @@ impl Trust {
         let Some(bff) = &self.bff else {
             return Some(Principal::Bff);
         };
-        if matches_any(bff, header(headers, SERVICE_TOKEN_HEADER), now) {
+        let presented = header(headers, SERVICE_TOKEN_HEADER);
+        if matches_any(bff, presented, now) {
             return Some(Principal::Bff);
+        }
+        if let Some(dev) = &self.dev {
+            if matches_any(&dev.token, presented, now) {
+                return Some(Principal::Dev);
+            }
         }
         if let Some(export) = &self.export {
             if matches_any(export, header(headers, EXPORT_TOKEN_HEADER), now) {
@@ -224,13 +260,19 @@ impl Trust {
     /// - An assertion that does not verify is a 401, whatever the route.
     /// - No assertion: a mutation, or any request claiming an actor through
     ///   the plain headers, is a 401. A plain read passes as Anonymous.
-    /// - A verified viewer on a mutation outside [`VIEWER_MUTATIONS`] is a
-    ///   403, whatever `x-actor-role` says.
+    /// - A verified viewer on any mutation is a 403, whatever `x-actor-role`
+    ///   says: viewers are read-only.
+    /// - The dev credential (#3866) is a bound pair: its assertion is checked
+    ///   against the dev key only. Without an assertion it is exactly the
+    ///   production token without one (a plain read passes as Anonymous, a
+    ///   mutation or an actor claim is a 401), so a local dev instance
+    ///   behaves like production. The verified actor it yields carries
+    ///   [`DEV_ACTOR_PREFIX`].
     pub fn evaluate(
         &self,
+        principal: Principal,
         method: &Method,
         path: &str,
-        matched: Option<&str>,
         headers: &HeaderMap,
         now: DateTime<Utc>,
     ) -> Verdict {
@@ -249,7 +291,7 @@ impl Trust {
         let actor = match raw
             .to_str()
             .map_err(|_| "not ASCII".to_string())
-            .and_then(|token| self.verify(token, method, path, now))
+            .and_then(|token| self.verify(principal, token, method, path, now))
         {
             Ok(actor) => actor,
             Err(reason) => {
@@ -259,23 +301,32 @@ impl Trust {
                 )
             }
         };
-        if mutation && actor.role != Role::Admin && !viewer_may(method, matched) {
+        if mutation && actor.role != Role::Admin {
             return Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into());
         }
         Verdict::Actor(actor)
     }
 
     /// Verify one assertion for one request. The signature is checked
-    /// before any claim is read, against the current key and, inside its
-    /// window, the previous one.
+    /// before any claim is read, against the key set the credential is
+    /// bound to: for the BFF the current key and, inside its window, the
+    /// previous one; for the dev pair its own key and nothing else.
     pub fn verify(
         &self,
+        principal: Principal,
         token: &str,
         method: &Method,
         path: &str,
         now: DateTime<Utc>,
     ) -> Result<VerifiedActor, String> {
-        let keys = self.keys.as_ref().ok_or("no verification key is configured")?;
+        let keys = match principal {
+            Principal::Dev => self.dev.as_ref().map(|dev| &dev.key),
+            Principal::Bff => self.keys.as_ref(),
+            // The export credential carries no actor; fail closed rather
+            // than verify against some other credential's key.
+            Principal::Export => return Err("the export credential carries no actor assertion".into()),
+        }
+        .ok_or("no verification key is configured")?;
         if token.len() > MAX_ASSERTION_LEN {
             return Err("too long".into());
         }
@@ -323,6 +374,15 @@ impl Trust {
         };
         let subject = identity(&claims.sub).ok_or("sub is empty or not printable")?;
         let username = identity(&claims.username).ok_or("username is empty or not printable")?;
+        let (subject, username) = match principal {
+            Principal::Dev => (format!("{DEV_ACTOR_PREFIX}{subject}"), format!("{DEV_ACTOR_PREFIX}{username}")),
+            // The prefix is how a record says "made through the dev pair",
+            // so no production identity may start with it.
+            _ if subject.starts_with(DEV_ACTOR_PREFIX) || username.starts_with(DEV_ACTOR_PREFIX) => {
+                return Err(format!("sub and username may not start with {DEV_ACTOR_PREFIX:?}, which marks the dev credential"))
+            }
+            _ => (subject, username),
+        };
         Ok(VerifiedActor { subject, username, role })
     }
 
@@ -338,10 +398,11 @@ impl Trust {
             }
         }
         format!(
-            "{} {} {} actor_assertion_mode={}",
+            "{} {} {} dev_credential={} actor_assertion_mode={}",
             rotation("service_token", &self.bff),
             rotation("export_token", &self.export),
             rotation("assertion_key", &self.keys),
+            if self.dev.is_some() { "set" } else { "unset" },
             self.mode.as_str(),
         )
     }
@@ -498,12 +559,6 @@ pub fn export_may(method: &Method, matched: Option<&str>) -> bool {
     *method == Method::GET && matched == Some(EXPORT_ROUTE)
 }
 
-fn viewer_may(method: &Method, matched: Option<&str>) -> bool {
-    matched.is_some_and(|path| {
-        VIEWER_MUTATIONS.iter().any(|(m, p)| *m == method.as_str() && *p == path)
-    })
-}
-
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
     headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or("")
 }
@@ -597,9 +652,11 @@ impl std::fmt::Display for TrustRefusal {
 
 impl std::error::Error for TrustRefusal {}
 
-/// `NAME` as given, or the contents of the file `NAME_FILE` names with
-/// surrounding whitespace (the trailing newline of `echo > file`) removed.
-/// An empty `NAME` counts as unset, exactly as before #3577. Setting both
+/// `NAME` or the contents of the file `NAME_FILE` names, either with
+/// surrounding whitespace removed (the trailing newline of `echo > file`, or
+/// a stray space in an env file: a client's header value is stripped of it on
+/// the wire, so a padded secret could never match). An empty or
+/// whitespace-only `NAME` counts as unset, as an empty one did before #3577. Setting both
 /// is refused rather than resolved, since either precedence rule would
 /// silently ignore something the operator wrote.
 pub fn secret(
@@ -608,7 +665,7 @@ pub fn secret(
     name: &str,
 ) -> Result<Option<String>, TrustRefusal> {
     let file_key = format!("{name}_FILE");
-    let direct = env(name).filter(|value| !value.is_empty());
+    let direct = env(name).map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
     let file = env(&file_key).filter(|value| !value.trim().is_empty());
     match (direct, file) {
         (Some(_), Some(_)) => Err(TrustRefusal(format!("both {name} and {file_key} are set; set one"))),
@@ -701,7 +758,90 @@ pub fn from_env(
             mode.as_str()
         )));
     }
-    Ok(Trust { bff, export, mode, keys })
+    let dev = dev_credential(env, read, mode, bff.as_ref(), export.as_ref(), keys.as_ref())?;
+    Ok(Trust { bff, export, mode, keys, dev })
+}
+
+/// The optional dev pair (#3866): `DEV_SERVICE_TOKEN` and
+/// `DEV_ACTOR_ASSERTION_PUBLIC_KEY` (each also as `_FILE`). Both or neither;
+/// unset is no dev access at all. The token must be its own secret, and the
+/// key must not be one the production credential is verified with: a shared
+/// key would let a production-signed assertion pass as the dev pair's, and
+/// the pair would no longer be bound. It exists only under `enforce`: under
+/// `off` or `log` the dev token would be a bearer credential whose actor is
+/// whatever the client names, unmarked, which is the one thing the pair is
+/// there to avoid. The token must also be at least [`DEV_TOKEN_MIN_LEN`]
+/// characters, so a placeholder cannot be registered.
+fn dev_credential(
+    env: &dyn Fn(&str) -> Option<String>,
+    read: &dyn Fn(&str) -> std::io::Result<String>,
+    mode: AssertionMode,
+    bff: Option<&Rotating<String>>,
+    export: Option<&Rotating<String>>,
+    keys: Option<&Rotating<[u8; 32]>>,
+) -> Result<Option<DevCredential>, TrustRefusal> {
+    let token = secret(env, read, "DEV_SERVICE_TOKEN")?;
+    let key = secret(env, read, "DEV_ACTOR_ASSERTION_PUBLIC_KEY")?;
+    let (token, key) = match (token, key) {
+        (None, None) => return Ok(None),
+        (Some(_), None) => {
+            return Err(TrustRefusal(
+                "DEV_SERVICE_TOKEN is set without DEV_ACTOR_ASSERTION_PUBLIC_KEY; the dev credential is a pair, set both or neither".into(),
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(TrustRefusal(
+                "DEV_ACTOR_ASSERTION_PUBLIC_KEY is set without DEV_SERVICE_TOKEN; the dev credential is a pair, set both or neither".into(),
+            ))
+        }
+        (Some(token), Some(key)) => (token, key),
+    };
+    if token.chars().count() < DEV_TOKEN_MIN_LEN {
+        return Err(TrustRefusal(format!(
+            "DEV_SERVICE_TOKEN is shorter than {DEV_TOKEN_MIN_LEN} characters; generate it with dev-credentials.sh (apiary-dashboard) or openssl rand"
+        )));
+    }
+    let Some(bff) = bff else {
+        return Err(TrustRefusal("DEV_SERVICE_TOKEN is set but SERVICE_TOKEN is not; the dev pair adds to the BFF credential, it does not replace it".into()));
+    };
+    if bff.current_and_previous().chain(export.into_iter().flat_map(Rotating::current_and_previous)).any(|value| *value == token) {
+        return Err(TrustRefusal(
+            "DEV_SERVICE_TOKEN equals a SERVICE_TOKEN or EXPORT_TOKEN value (or a _PREVIOUS of one); the dev credential must be its own secret".into(),
+        ));
+    }
+    let key = parse_public_key(&key).map_err(|e| TrustRefusal(format!("DEV_ACTOR_ASSERTION_PUBLIC_KEY: {e}")))?;
+    if keys.is_some_and(|keys| keys.current_and_previous().any(|value| *value == key)) {
+        return Err(TrustRefusal(
+            "DEV_ACTOR_ASSERTION_PUBLIC_KEY equals an ACTOR_ASSERTION_PUBLIC_KEY value (or its _PREVIOUS); the dev key must be its own key".into(),
+        ));
+    }
+    if mode != AssertionMode::Enforce {
+        return Err(TrustRefusal(format!(
+            "the dev credential pair needs ACTOR_ASSERTION_MODE=enforce (it is {}); under off or log its requests would be attributed to whatever the client names, unmarked",
+            mode.as_str()
+        )));
+    }
+    Ok(Some(DevCredential { token: Rotating::new(token), key: Rotating::new(key) }))
+}
+
+/// The shortest `DEV_SERVICE_TOKEN` accepted: 32 characters (the generator
+/// writes 43, 256 bits of base64url).
+pub const DEV_TOKEN_MIN_LEN: usize = 32;
+
+/// The bearer values this process holds, which `HOST_GATEWAY_TOKEN` must not
+/// equal: `SERVICE_TOKEN` (already resolved by `main`), `EXPORT_TOKEN` and
+/// `DEV_SERVICE_TOKEN`.
+pub fn bearer_values(
+    env: &dyn Fn(&str) -> Option<String>,
+    read: &dyn Fn(&str) -> std::io::Result<String>,
+    service_token: Option<&str>,
+) -> Result<Vec<String>, TrustRefusal> {
+    Ok(service_token
+        .map(str::to_string)
+        .into_iter()
+        .chain(secret(env, read, "EXPORT_TOKEN")?)
+        .chain(secret(env, read, "DEV_SERVICE_TOKEN")?)
+        .collect())
 }
 
 impl<T> Rotating<T> {
@@ -778,6 +918,17 @@ mod tests {
             export: Some(Rotating::new("export-token".into())),
             mode,
             keys: Some(Rotating::new(signer.public())),
+            dev: None,
+        }
+    }
+
+    const DEV_TOKEN: &str = "dev-token";
+
+    /// `trust_with` plus the dev pair: `DEV_TOKEN` bound to `dev`'s key.
+    fn trust_with_dev(signer: &Signer, dev: &Signer, mode: AssertionMode) -> Trust {
+        Trust {
+            dev: Some(DevCredential { token: Rotating::new(DEV_TOKEN.into()), key: Rotating::new(dev.public()) }),
+            ..trust_with(signer, mode)
         }
     }
 
@@ -836,8 +987,8 @@ mod tests {
 
     // ---- assertions ---------------------------------------------------------
 
-    fn verdict(trust: &Trust, method: Method, path: &str, matched: &str, pairs: &[(&'static str, &str)]) -> Verdict {
-        trust.evaluate(&method, path, Some(matched), &headers(pairs), at(NOW))
+    fn verdict(trust: &Trust, method: Method, path: &str, pairs: &[(&'static str, &str)]) -> Verdict {
+        trust.evaluate(Principal::Bff, &method, path, &headers(pairs), at(NOW))
     }
 
     #[test]
@@ -847,7 +998,7 @@ mod tests {
         let path = "/api/v1/services/cowrie/restart";
         let token = signer.mint("admin", "POST", path, NOW);
         assert_eq!(
-            verdict(&trust, Method::POST, path, "/api/v1/services/{name}/{action}", &[("x-actor-assertion", &token)]),
+            verdict(&trust, Method::POST, path, &[("x-actor-assertion", &token)]),
             Verdict::Actor(VerifiedActor { subject: "sub-alice".into(), username: "alice".into(), role: Role::Admin })
         );
     }
@@ -856,11 +1007,11 @@ mod tests {
     fn forged_actor_headers_without_an_assertion_are_refused() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
         let forged = [("x-actor-username", "root"), ("x-actor-role", "admin")];
-        let Verdict::Deny(status, _) = verdict(&trust, Method::GET, "/api/v1/workbench/runs", "/api/v1/workbench/runs", &forged) else {
+        let Verdict::Deny(status, _) = verdict(&trust, Method::GET, "/api/v1/workbench/runs", &forged) else {
             panic!("a read claiming an actor without proof must be refused");
         };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
-        let Verdict::Deny(status, _) = verdict(&trust, Method::POST, "/api/v1/services/x/stop", "/api/v1/services/{name}/{action}", &forged) else {
+        let Verdict::Deny(status, _) = verdict(&trust, Method::POST, "/api/v1/services/x/stop", &forged) else {
             panic!("a mutation without an assertion must be refused");
         };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -869,20 +1020,20 @@ mod tests {
     #[test]
     fn a_plain_read_needs_no_assertion() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
-        assert_eq!(verdict(&trust, Method::GET, "/api/v1/events", "/api/v1/events", &[]), Verdict::Anonymous);
+        assert_eq!(verdict(&trust, Method::GET, "/api/v1/events", &[]), Verdict::Anonymous);
     }
 
     #[test]
     fn a_missing_assertion_on_a_mutation_is_refused() {
         let trust = trust_with(&Signer::generate(), AssertionMode::Enforce);
         assert!(matches!(
-            verdict(&trust, Method::PUT, "/api/v1/preferences", "/api/v1/preferences", &[]),
+            verdict(&trust, Method::PUT, "/api/v1/preferences", &[]),
             Verdict::Deny(StatusCode::UNAUTHORIZED, _)
         ));
     }
 
     fn rejected(trust: &Trust, token: &str, method: Method, path: &str) -> String {
-        match trust.evaluate(&method, path, Some(path), &headers(&[("x-actor-assertion", token)]), at(NOW)) {
+        match trust.evaluate(Principal::Bff, &method, path, &headers(&[("x-actor-assertion", token)]), at(NOW)) {
             Verdict::Deny(StatusCode::UNAUTHORIZED, reason) => reason,
             other => panic!("expected a 401, got {other:?}"),
         }
@@ -897,7 +1048,7 @@ mod tests {
         assert!(rejected(&trust, &token, Method::GET, "/api/v1/events").contains("expired"));
         // Inside the skew it still verifies.
         let token = signer.mint("admin", "GET", "/api/v1/events", NOW - 89);
-        assert!(matches!(verdict(&trust, Method::GET, "/api/v1/events", "/api/v1/events", &[("x-actor-assertion", &token)]), Verdict::Actor(_)));
+        assert!(matches!(verdict(&trust, Method::GET, "/api/v1/events", &[("x-actor-assertion", &token)]), Verdict::Actor(_)));
     }
 
     #[test]
@@ -978,26 +1129,50 @@ mod tests {
         let path = "/api/v1/services/cowrie/stop";
         let token = signer.mint("viewer", "POST", path, NOW);
         assert_eq!(
-            verdict(&trust, Method::POST, path, "/api/v1/services/{name}/{action}",
-                &[("x-actor-assertion", &token), ("x-actor-role", "admin"), ("x-actor-username", "root")]),
+            verdict(&trust, Method::POST, path, &[("x-actor-assertion", &token), ("x-actor-role", "admin"), ("x-actor-username", "root")]),
             Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into())
         );
     }
 
+    /// Every mutation the dashboard used to let viewers make (#3857), reopen
+    /// (the ack route with `ack: false`) included: a viewer is refused, an
+    /// admin is not.
+    const FORMER_VIEWER_MUTATIONS: [(&str, &str); 7] = [
+        ("POST", "/api/v1/alerts/k1/ack"),
+        ("POST", "/api/v1/canarytokens"),
+        ("POST", "/api/v1/config/validate"),
+        ("PUT", "/api/v1/preferences"),
+        ("POST", "/api/v1/preferences/reset"),
+        ("POST", "/api/v1/problem-reports"),
+        ("POST", "/api/v1/reports/preview"),
+    ];
+
     #[test]
-    fn a_viewer_keeps_the_mutations_the_dashboard_grants_viewers() {
+    fn a_viewer_may_make_no_mutation_at_all() {
         let signer = Signer::generate();
         let trust = trust_with(&signer, AssertionMode::Enforce);
-        let token = signer.mint("viewer", "PUT", "/api/v1/preferences", NOW);
+        for (method, path) in FORMER_VIEWER_MUTATIONS {
+            let method: Method = method.parse().unwrap();
+            let token = signer.mint("viewer", method.as_str(), path, NOW);
+            assert_eq!(
+                verdict(&trust, method.clone(), path, &[("x-actor-assertion", &token)]),
+                Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into()),
+                "{method} {path}"
+            );
+            let token = signer.mint("admin", method.as_str(), path, NOW);
+            assert!(
+                matches!(
+                    verdict(&trust, method.clone(), path, &[("x-actor-assertion", &token)]),
+                    Verdict::Actor(VerifiedActor { role: Role::Admin, .. })
+                ),
+                "{method} {path}"
+            );
+        }
+        // Reads stay open to a viewer.
+        let token = signer.mint("viewer", "GET", "/api/v1/preferences", NOW);
         assert!(matches!(
-            verdict(&trust, Method::PUT, "/api/v1/preferences", "/api/v1/preferences", &[("x-actor-assertion", &token)]),
+            verdict(&trust, Method::GET, "/api/v1/preferences", &[("x-actor-assertion", &token)]),
             Verdict::Actor(VerifiedActor { role: Role::Viewer, .. })
-        ));
-        let path = "/api/v1/alerts/k1/ack";
-        let token = signer.mint("viewer", "POST", path, NOW);
-        assert!(matches!(
-            verdict(&trust, Method::POST, path, "/api/v1/alerts/{key}/ack", &[("x-actor-assertion", &token)]),
-            Verdict::Actor(_)
         ));
     }
 
@@ -1018,8 +1193,8 @@ mod tests {
             ..trust_with(&new, AssertionMode::Enforce)
         };
         let token = old.mint("admin", "GET", "/api/v1/events", NOW);
-        assert!(trust.verify(&token, &Method::GET, "/api/v1/events", at(NOW)).is_ok());
-        assert!(trust.verify(&token, &Method::GET, "/api/v1/events", at(NOW + 10)).is_err());
+        assert!(trust.verify(Principal::Bff, &token, &Method::GET, "/api/v1/events", at(NOW)).is_ok());
+        assert!(trust.verify(Principal::Bff, &token, &Method::GET, "/api/v1/events", at(NOW + 10)).is_err());
     }
 
     // ---- actors named in bodies and queries ---------------------------------
@@ -1097,7 +1272,11 @@ mod tests {
 
     fn config(pairs: &[(&str, &str)]) -> Result<Trust, TrustRefusal> {
         let env: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let files: HashMap<&str, &str> = [("/run/secrets/export", "export-from-file\n"), ("/run/secrets/empty", "\n")].into();
+        let files: HashMap<&str, &str> = [
+            ("/run/secrets/export", "export-from-file\n"),
+            ("/run/secrets/empty", "\n"),
+            ("/run/secrets/dev", "dev-token-from-a-file-0123456789abcdef\n"),
+        ].into();
         let service = env.get("SERVICE_TOKEN").cloned();
         from_env(
             &|key| env.get(key).cloned(),
@@ -1114,7 +1293,7 @@ mod tests {
     fn the_default_configuration_is_the_old_behaviour() {
         let trust = config(&[("SERVICE_TOKEN", "bff")]).unwrap();
         assert_eq!(trust.mode, AssertionMode::Off);
-        assert!(trust.export.is_none() && trust.keys.is_none());
+        assert!(trust.export.is_none() && trust.keys.is_none() && trust.dev.is_none());
         assert_eq!(trust.bff, Some(Rotating::new("bff".into())));
     }
 
@@ -1178,5 +1357,384 @@ mod tests {
         let line = trust.describe();
         assert!(!line.contains("s3cret"), "{line}");
         assert!(line.contains("export_token=set") && line.contains("actor_assertion_mode=off"), "{line}");
+        assert!(line.contains("dev_credential=unset"), "{line}");
+        let (prod, dev) = (Signer::generate().public_pem(), Signer::generate().public_pem());
+        let line = config(&[
+            ("SERVICE_TOKEN", "s3cret-bff"), ("ACTOR_ASSERTION_MODE", "enforce"), ("ACTOR_ASSERTION_PUBLIC_KEY", &prod),
+            ("DEV_SERVICE_TOKEN", "s3cret-dev-0123456789-0123456789-0123"), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &dev),
+        ]).unwrap().describe();
+        assert!(line.contains("dev_credential=set") && !line.contains("s3cret") && !line.contains(&dev), "{line}");
+    }
+
+    // ---- the dev credential pair (#3866) --------------------------------------
+
+    fn dev_headers(token: &str) -> HeaderMap {
+        headers(&[("x-service-token", token)])
+    }
+
+    #[test]
+    fn the_dev_pair_is_a_credential_of_its_own_and_unset_revokes_it() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let now = at(NOW);
+        assert_eq!(trust.principal(&dev_headers(DEV_TOKEN), now), Some(Principal::Dev));
+        assert_eq!(trust.principal(&dev_headers("bff-token"), now), Some(Principal::Bff));
+        // Only in the service-token header, and only whole.
+        assert_eq!(trust.principal(&headers(&[("x-export-token", DEV_TOKEN)]), now), None);
+        assert_eq!(trust.principal(&dev_headers("dev-token-"), now), None);
+        // Unset the pair and the same request is just an unknown token.
+        let revoked = trust_with(&prod, AssertionMode::Enforce);
+        assert_eq!(revoked.principal(&dev_headers(DEV_TOKEN), now), None);
+        assert_eq!(revoked.principal(&dev_headers("bff-token"), now), Some(Principal::Bff), "production is untouched");
+        // Neither the previous production token nor a rotation window is
+        // involved: an expired previous slot does not make a dev token.
+        let rotated = Trust {
+            bff: Some(Rotating { current: "new".into(), previous: Some(("old".into(), at(NOW - 1))) }),
+            ..revoked
+        };
+        assert_eq!(rotated.principal(&dev_headers("old"), now), None);
+    }
+
+    fn dev_verdict(trust: &Trust, principal: Principal, method: Method, path: &str, assertion: Option<&str>) -> Verdict {
+        let pairs: Vec<(&'static str, &str)> = assertion.map(|a| ("x-actor-assertion", a)).into_iter().collect();
+        trust.evaluate(principal, &method, path, &headers(&pairs), at(NOW))
+    }
+
+    #[test]
+    fn a_dev_token_is_bound_to_the_dev_key_and_otherwise_acts_like_the_production_token() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let path = "/api/v1/services/cowrie/restart";
+
+        // The pair: accepted, and the actor is marked as the dev one's.
+        let token = dev.mint("admin", "POST", path, NOW);
+        assert_eq!(
+            dev_verdict(&trust, Principal::Dev, Method::POST, path, Some(&token)),
+            Verdict::Actor(VerifiedActor { subject: "dev:sub-alice".into(), username: "dev:alice".into(), role: Role::Admin })
+        );
+
+        // A dev token with a production-signed assertion: refused.
+        let production_signed = prod.mint("admin", "POST", path, NOW);
+        let Verdict::Deny(status, reason) = dev_verdict(&trust, Principal::Dev, Method::POST, path, Some(&production_signed)) else {
+            panic!("dev token + production assertion must be refused");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(reason.contains("signature"), "{reason}");
+        // A production token with a dev-signed assertion: refused.
+        let Verdict::Deny(status, reason) = dev_verdict(&trust, Principal::Bff, Method::POST, path, Some(&token)) else {
+            panic!("production token + dev assertion must be refused");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(reason.contains("signature"), "{reason}");
+        // The production pair still works beside it, unmarked.
+        assert_eq!(
+            dev_verdict(&trust, Principal::Bff, Method::POST, path, Some(&production_signed)),
+            Verdict::Actor(VerifiedActor { subject: "sub-alice".into(), username: "alice".into(), role: Role::Admin })
+        );
+
+        // The bare token behaves exactly as the production token does: a
+        // read passes with no actor, a write or an actor claim is a 401.
+        for principal in [Principal::Dev, Principal::Bff] {
+            assert_eq!(dev_verdict(&trust, principal, Method::GET, "/api/v1/events", None), Verdict::Anonymous, "{principal:?}");
+            assert!(matches!(
+                dev_verdict(&trust, principal, Method::POST, path, None),
+                Verdict::Deny(StatusCode::UNAUTHORIZED, _)
+            ), "{principal:?}");
+            let claim = headers(&[("x-actor-username", "root")]);
+            assert!(matches!(
+                trust.evaluate(principal, &Method::GET, "/api/v1/events", &claim, at(NOW)),
+                Verdict::Deny(StatusCode::UNAUTHORIZED, _)
+            ), "{principal:?}");
+        }
+    }
+
+    #[test]
+    fn a_dev_viewer_is_read_only_and_a_dev_admin_is_not() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        for (method, path) in FORMER_VIEWER_MUTATIONS {
+            let method: Method = method.parse().unwrap();
+            let viewer = dev.mint("viewer", method.as_str(), path, NOW);
+            assert_eq!(
+                dev_verdict(&trust, Principal::Dev, method.clone(), path, Some(&viewer)),
+                Verdict::Deny(StatusCode::FORBIDDEN, "administrator role required".into()),
+                "{method} {path}"
+            );
+            let admin = dev.mint("admin", method.as_str(), path, NOW);
+            assert!(
+                matches!(
+                    dev_verdict(&trust, Principal::Dev, method.clone(), path, Some(&admin)),
+                    Verdict::Actor(VerifiedActor { role: Role::Admin, .. })
+                ),
+                "{method} {path}"
+            );
+        }
+        let viewer = dev.mint("viewer", "GET", "/api/v1/preferences", NOW);
+        assert!(matches!(
+            dev_verdict(&trust, Principal::Dev, Method::GET, "/api/v1/preferences", Some(&viewer)),
+            Verdict::Actor(VerifiedActor { role: Role::Viewer, .. })
+        ));
+    }
+
+    #[test]
+    fn the_dev_pair_has_no_previous_slot_and_no_key_of_its_own_means_no_verification() {
+        let prod = Signer::generate();
+        // Dev principal on an instance that has no dev pair (cannot happen
+        // through `principal`, but `verify` must still fail closed).
+        let trust = trust_with(&prod, AssertionMode::Enforce);
+        let token = prod.mint("admin", "GET", "/api/v1/events", NOW);
+        assert!(trust.verify(Principal::Dev, &token, &Method::GET, "/api/v1/events", at(NOW)).is_err());
+    }
+
+    /// A valid dev token: at least [`DEV_TOKEN_MIN_LEN`] characters.
+    const LONG_DEV: &str = "dev-token-0123456789-abcdefghijklmnop";
+
+    /// `config` for an instance that may carry the dev pair: enforce mode and
+    /// a production key, plus `extra`.
+    fn dev_config(prod_pem: &str, extra: &[(&str, &str)]) -> Result<Trust, TrustRefusal> {
+        let mut pairs = vec![("SERVICE_TOKEN", "bff"), ("ACTOR_ASSERTION_MODE", "enforce"), ("ACTOR_ASSERTION_PUBLIC_KEY", prod_pem)];
+        pairs.extend_from_slice(extra);
+        config(&pairs)
+    }
+
+    fn dev_refusal(prod_pem: &str, extra: &[(&str, &str)]) -> String {
+        dev_config(prod_pem, extra).expect_err("must refuse").to_string()
+    }
+
+    #[test]
+    fn the_dev_pair_configures_from_values_or_files_and_unset_means_none() {
+        let prod = Signer::generate().public_pem();
+        let key = Signer::generate();
+        let pem = key.public_pem();
+        let trust = dev_config(&prod, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).unwrap();
+        let dev = trust.dev.expect("configured");
+        assert_eq!((dev.token, dev.key), (Rotating::new(LONG_DEV.into()), Rotating::new(key.public())));
+        assert!(dev_config(&prod, &[]).unwrap().dev.is_none());
+        // Empty or whitespace-only is unset, as everywhere else (a compose
+        // `${VAR:-}` passthrough, a stray space in an env file).
+        for blank in ["", "   ", "\t\n"] {
+            let trust = dev_config(&prod, &[("DEV_SERVICE_TOKEN", blank), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", blank)]).unwrap();
+            assert!(trust.dev.is_none(), "{blank:?}");
+        }
+        // A padded value is trimmed, like the _FILE form.
+        let padded = format!("  {LONG_DEV}\n");
+        let trust = dev_config(&prod, &[("DEV_SERVICE_TOKEN", &padded), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).unwrap();
+        assert_eq!(trust.dev.unwrap().token, Rotating::new(LONG_DEV.into()));
+        let from_file = dev_config(&prod, &[("DEV_SERVICE_TOKEN_FILE", "/run/secrets/dev"), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).unwrap();
+        assert_eq!(from_file.dev.unwrap().token, Rotating::new("dev-token-from-a-file-0123456789abcdef".into()));
+        assert!(dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_SERVICE_TOKEN_FILE", "/run/secrets/dev"), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).contains("both"));
+    }
+
+    #[test]
+    fn secrets_are_trimmed_so_a_padded_value_matches_what_a_client_sends() {
+        // Behaviour shared with SERVICE_TOKEN and the rest: a header value is
+        // stripped of surrounding whitespace on the wire, so a padded value
+        // could never have matched; now it is the value it was meant to be.
+        let resolve = |value: &str| {
+            let env = |name: &str| (name == "SERVICE_TOKEN").then(|| value.to_string());
+            secret(&env, &|_| unreachable!(), "SERVICE_TOKEN").unwrap()
+        };
+        assert_eq!(resolve("  bff-padded \n"), Some("bff-padded".to_string()));
+        assert_eq!(resolve("   "), None, "whitespace only is unset");
+        assert_eq!(resolve(""), None);
+    }
+
+    #[test]
+    fn half_a_dev_pair_refuses_to_boot() {
+        let prod = Signer::generate().public_pem();
+        let pem = Signer::generate().public_pem();
+        let token_only = dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", LONG_DEV)]);
+        assert!(token_only.contains("E-TRUST-CONFIG") && token_only.contains("DEV_ACTOR_ASSERTION_PUBLIC_KEY"), "{token_only}");
+        let key_only = dev_refusal(&prod, &[("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]);
+        assert!(key_only.contains("E-TRUST-CONFIG") && key_only.contains("without DEV_SERVICE_TOKEN"), "{key_only}");
+        // Nothing is silently dropped: a bad key is an error, not no dev pair.
+        assert!(dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", "bm90IGEga2V5")]).contains("Ed25519"));
+        let private = format!("-----BEGIN {0} KEY-----\nAAAA\n-----END {0} KEY-----", "PRIVATE");
+        assert!(dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &private)]).contains("private"));
+    }
+
+    #[test]
+    fn the_dev_token_must_be_long_enough() {
+        let prod = Signer::generate().public_pem();
+        let pem = Signer::generate().public_pem();
+        let short = "x".repeat(DEV_TOKEN_MIN_LEN - 1);
+        let message = dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", &short), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]);
+        assert!(message.contains("E-TRUST-CONFIG") && message.contains("shorter than 32"), "{message}");
+        let exact = "x".repeat(DEV_TOKEN_MIN_LEN);
+        assert!(dev_config(&prod, &[("DEV_SERVICE_TOKEN", &exact), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).unwrap().dev.is_some());
+        // Padding does not count towards the length.
+        let padded = format!("{short}  ");
+        assert!(dev_refusal(&prod, &[("DEV_SERVICE_TOKEN", &padded), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]).contains("shorter"));
+    }
+
+    #[test]
+    fn the_dev_pair_refuses_to_boot_unless_the_mode_is_enforce() {
+        let prod = Signer::generate().public_pem();
+        let pem = Signer::generate().public_pem();
+        let pair = [("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", pem.as_str())];
+        for mode in [None, Some("off"), Some("log")] {
+            let mut pairs = vec![("SERVICE_TOKEN", "bff"), ("ACTOR_ASSERTION_PUBLIC_KEY", prod.as_str())];
+            if let Some(mode) = mode {
+                pairs.push(("ACTOR_ASSERTION_MODE", mode));
+            }
+            pairs.extend(pair);
+            let message = refusal(&pairs);
+            assert!(message.contains("E-TRUST-CONFIG") && message.contains("ACTOR_ASSERTION_MODE=enforce"), "{mode:?}: {message}");
+        }
+        // Without the pair, off and log are exactly as before.
+        for mode in ["off", "log"] {
+            assert!(config(&[("SERVICE_TOKEN", "bff"), ("ACTOR_ASSERTION_MODE", mode), ("ACTOR_ASSERTION_PUBLIC_KEY", &prod)]).is_ok(), "{mode}");
+        }
+        assert!(config(&[("SERVICE_TOKEN", "bff"), ("ACTOR_ASSERTION_MODE", "enforce"), ("ACTOR_ASSERTION_PUBLIC_KEY", &prod),
+            pair[0], pair[1]]).unwrap().dev.is_some());
+    }
+
+    #[test]
+    fn the_dev_token_must_be_its_own_secret() {
+        let prod = Signer::generate().public_pem();
+        let pem = Signer::generate().public_pem();
+        let with = |service: &[(&str, &str)], dev: &str| {
+            let mut pairs = service.to_vec();
+            pairs.extend([("DEV_SERVICE_TOKEN", dev), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", pem.as_str())]);
+            dev_refusal(&prod, &pairs)
+        };
+        let until = ("SERVICE_TOKEN_PREVIOUS_UNTIL", "2030-01-01T00:00:00Z");
+        for message in [
+            // dev_config already sets SERVICE_TOKEN=bff, so these override it
+            // through a different channel: the previous slots and the export token.
+            with(&[("SERVICE_TOKEN_PREVIOUS", LONG_DEV), until], LONG_DEV),
+            with(&[("EXPORT_TOKEN", LONG_DEV)], LONG_DEV),
+            // EXPORT_TOKEN_PREVIOUS, even though it has not expired.
+            with(&[("EXPORT_TOKEN", "export-current-0123456789-0123456789"), ("EXPORT_TOKEN_PREVIOUS", LONG_DEV), ("EXPORT_TOKEN_PREVIOUS_UNTIL", "2030-01-01T00:00:00Z")], LONG_DEV),
+        ] {
+            assert!(message.contains("E-TRUST-CONFIG") && message.contains("own secret"), "{message}");
+        }
+        // The current service token, spelled out (a long one).
+        let message = refusal(&[
+            ("SERVICE_TOKEN", LONG_DEV), ("ACTOR_ASSERTION_MODE", "enforce"), ("ACTOR_ASSERTION_PUBLIC_KEY", &prod),
+            ("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem),
+        ]);
+        assert!(message.contains("own secret"), "{message}");
+        // And without a production token there is nothing for the pair to add to.
+        let dev_only = refusal(&[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]);
+        assert!(dev_only.contains("SERVICE_TOKEN is not"), "{dev_only}");
+    }
+
+    #[test]
+    fn the_host_gateway_token_must_not_be_the_dev_token() {
+        // The bearer values `main` hands the host-gateway client check.
+        let configure = |gateway: &str| {
+            let pairs: Vec<(String, String)> = [
+                ("SERVICE_TOKEN", "bff"), ("DEV_SERVICE_TOKEN", LONG_DEV), ("HOST_GATEWAY_URL", "http://gateway.invalid:8083"),
+                ("HOST_GATEWAY_TOKEN", gateway),
+            ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let env = |key: &str| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+            let read = |_: &str| -> std::io::Result<String> { Err(std::io::Error::other("no files")) };
+            let others = bearer_values(&env, &read, Some("bff")).expect("values");
+            let refs: Vec<&str> = others.iter().map(String::as_str).collect();
+            crate::host_fs::configure_from_env(&env, &read, &refs).map(|_| ())
+        };
+        let error = configure(LONG_DEV).expect_err("the dev token is not the gateway's");
+        assert!(error.to_string().contains("own secret"), "{error}");
+        configure("gateway-token-of-its-own-0123456789").expect("a distinct gateway token is fine");
+    }
+
+    #[test]
+    fn the_dev_key_must_not_be_a_production_key() {
+        let prod = Signer::generate();
+        let pem = prod.public_pem();
+        let reused = dev_refusal(&pem, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &pem)]);
+        assert!(reused.contains("own key"), "{reused}");
+        let old = Signer::generate();
+        let previous = dev_refusal(&pem, &[
+            ("ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS", &old.public_pem()), ("ACTOR_ASSERTION_PUBLIC_KEY_PREVIOUS_UNTIL", "2030-01-01T00:00:00Z"),
+            ("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &old.public_pem()),
+        ]);
+        assert!(previous.contains("own key"), "{previous}");
+        // A different key is fine under enforce.
+        let dev = Signer::generate().public_pem();
+        assert!(dev_config(&pem, &[("DEV_SERVICE_TOKEN", LONG_DEV), ("DEV_ACTOR_ASSERTION_PUBLIC_KEY", &dev)]).unwrap().dev.is_some());
+    }
+
+    // ---- what the dev pair's assertions may and may not be ------------------
+
+    #[test]
+    fn a_dev_assertion_that_is_expired_or_for_another_request_is_refused() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let path = "/api/v1/events";
+        let reason = |token: &str, method: Method, path: &str| match dev_verdict(&trust, Principal::Dev, method, path, Some(token)) {
+            Verdict::Deny(StatusCode::UNAUTHORIZED, reason) => reason,
+            other => panic!("expected a 401, got {other:?}"),
+        };
+        assert!(reason(&dev.mint("admin", "GET", path, NOW - 91), Method::GET, path).contains("expired"));
+        assert!(reason(&dev.mint("admin", "GET", path, NOW + 120), Method::GET, path).contains("future"));
+        let token = dev.mint("admin", "GET", path, NOW);
+        assert!(reason(&token, Method::POST, path).contains("different request"), "method");
+        assert!(reason(&token, Method::GET, "/api/v1/workbench/runs").contains("different request"), "path");
+        assert!(matches!(dev_verdict(&trust, Principal::Dev, Method::GET, path, Some(&token)), Verdict::Actor(_)));
+    }
+
+    #[test]
+    fn the_production_previous_key_does_not_verify_a_dev_request() {
+        let (old, new, dev) = (Signer::generate(), Signer::generate(), Signer::generate());
+        let trust = Trust {
+            keys: Some(Rotating { current: new.public(), previous: Some((old.public(), at(NOW + 3600))) }),
+            ..trust_with_dev(&new, &dev, AssertionMode::Enforce)
+        };
+        let path = "/api/v1/events";
+        // Inside its window the previous key still verifies for the production token...
+        let token = old.mint("admin", "GET", path, NOW);
+        assert!(matches!(dev_verdict(&trust, Principal::Bff, Method::GET, path, Some(&token)), Verdict::Actor(_)));
+        // ...and not for the dev one, nor does the current production key.
+        for signer in [&old, &new] {
+            let token = signer.mint("admin", "GET", path, NOW);
+            assert!(matches!(
+                dev_verdict(&trust, Principal::Dev, Method::GET, path, Some(&token)),
+                Verdict::Deny(StatusCode::UNAUTHORIZED, _)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_dev_username_that_already_starts_with_the_prefix_is_prefixed_again() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let token = dev.sign_claims(&serde_json::json!({
+            "sub": "dev:s", "username": "dev:x", "role": "admin", "aud": AUDIENCE,
+            "iat": NOW, "exp": NOW + 60, "htm": "GET", "htu": "/api/v1/events",
+        }));
+        assert_eq!(
+            dev_verdict(&trust, Principal::Dev, Method::GET, "/api/v1/events", Some(&token)),
+            Verdict::Actor(VerifiedActor { subject: "dev:dev:s".into(), username: "dev:dev:x".into(), role: Role::Admin })
+        );
+    }
+
+    #[test]
+    fn a_production_identity_may_not_look_like_a_dev_actor() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let path = "/api/v1/events";
+        for (sub, username) in [("dev:s", "alice"), ("sub-alice", "dev:alice"), ("DEV", "alice")] {
+            let token = prod.sign_claims(&serde_json::json!({
+                "sub": sub, "username": username, "role": "admin", "aud": AUDIENCE,
+                "iat": NOW, "exp": NOW + 60, "htm": "GET", "htu": path,
+            }));
+            let outcome = dev_verdict(&trust, Principal::Bff, Method::GET, path, Some(&token));
+            if sub == "DEV" {
+                assert!(matches!(outcome, Verdict::Actor(_)), "only the exact prefix is reserved: {outcome:?}");
+            } else {
+                let Verdict::Deny(StatusCode::UNAUTHORIZED, reason) = outcome else { panic!("{sub}/{username}: {outcome:?}") };
+                assert!(reason.contains("dev:"), "{reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_export_credential_verifies_no_assertion() {
+        let (prod, dev) = (Signer::generate(), Signer::generate());
+        let trust = trust_with_dev(&prod, &dev, AssertionMode::Enforce);
+        let token = prod.mint("admin", "GET", "/api/v1/events", NOW);
+        assert!(trust.verify(Principal::Export, &token, &Method::GET, "/api/v1/events", at(NOW)).is_err());
     }
 }

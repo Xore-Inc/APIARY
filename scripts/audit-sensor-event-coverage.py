@@ -17,7 +17,7 @@ So the question moves from "does the classifier handle this kind" to "does
 this sensor label its events at all", and that can only be answered from the
 data. `honeypot.category` is the field that matters: backend-service's
 events.rs reads it (falling back to suricata's alert category) and
-frontend-next renders and filters on it. `event.category` is set by the
+the dashboard (Xore-Inc/apiary-dashboard) renders and filters on it. `event.category` is set by the
 pipeline but no consumer reads it, so it is reported separately and only as
 context.
 

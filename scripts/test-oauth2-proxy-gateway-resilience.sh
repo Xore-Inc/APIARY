@@ -168,7 +168,7 @@ docker run -d --name "${kc}" --network "${network}" \
   -e KC_DB_USERNAME=keycloak -e KC_DB_PASSWORD=test-only-not-real \
   -e "KC_HOSTNAME=http://${kc}:8080" -e KC_HTTP_ENABLED=true -e KC_HEALTH_ENABLED=true \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=test-admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=test-only-not-real \
-  quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b \
+  quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b \
   start --http-port=8080 >/dev/null
 
 printf 'Waiting for the disposable Keycloak...\n'

@@ -11,16 +11,20 @@
 # arguments on purpose, so the grant cannot aim the token at another host.
 set -euo pipefail
 
-env_file=/var/dockge/stacks/honeypot-dashboard/.env
+# #3749: this used to go through dashboard-next's /bff passthrough on 19090.
+# That frontend is gone, so the helper asks the backend itself: the token comes
+# from the backend stack's own .env, and the request runs inside the backend
+# container (it publishes no port), with the header on curl's stdin.
+env_file=/var/dockge/stacks/honeypot-dashboard-backend/.env
+container=hp-apiary-backend
 token=$(sed -n 's/^DASHBOARD_SERVICE_TOKEN=//p' "$env_file" 2>/dev/null | head -1)
 if [ -z "$token" ]; then
   echo "no DASHBOARD_SERVICE_TOKEN in $env_file" >&2
   exit 2
 fi
-bind=$(sed -n 's/^HP_BIND=//p' "$env_file" | head -1)
-bind=${bind:-10.8.0.2}
 
 # Header via curl's stdin config, not -H, so the token is not visible in
-# the process list while the request runs.
+# the process list (host or container) while the request runs.
 printf 'header = "X-Service-Token: %s"\n' "$token" \
-  | curl -fsS --max-time 15 -K - "http://$bind:19090/bff/api/v1/source-health"
+  | docker exec -i "$container" sh -c \
+      'curl -fsS --max-time 15 -K - "http://127.0.0.1:${LISTEN_ADDR##*:}/api/v1/source-health"'

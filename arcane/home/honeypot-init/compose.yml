@@ -68,7 +68,7 @@ services:
   # Dionaea's FTP/TFTP/UPnP/printer files are copied into its persistent volume.
   persona-apply:
     <<: *runtime-defaults
-    image: python:3.15-alpine@sha256:d44b1254cb92329418d164b22b20d86bbd3869d48e80e09e476531a409a728bb
+    image: python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd
     container_name: hp-persona-apply
     restart: no
     working_dir: /stack
@@ -100,7 +100,7 @@ services:
   # ===================== Log dir ownership bootstrap =====================
   log-init:
     <<: *runtime-defaults
-    image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    image: busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     container_name: hp-log-init
     restart: no
     depends_on:
@@ -164,8 +164,8 @@ services:
         chown -R 998:998 /logs/arkime-raw
         # #1972 serving-tier app logs. backend-service and
         # backend-service-mounted run as `USER nobody` (uid 65534, their
-        # Dockerfile's final stage); dashboard-next runs as `USER node`
-        # (node:22-alpine's uid 1000). Without these chowns the writers'
+        # Dockerfile's final stage); the dashboard (apiary-dashboard) runs as
+        # `bun` (uid 1000). Without these chowns the writers'
         # first append fails with EACCES -- docker auto-creates a missing
         # bind host dir root-owned before this step would ever see it.
         chown -R 65534:65534 /logs/dashboard-backend /logs/dashboard-backend-mounted
@@ -208,7 +208,7 @@ services:
 
   elasticsearch-setup:
     <<: *runtime-defaults
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5@sha256:13b4a40bb095774f5fda635e45fd5677cc6a26565e42b24997b0c72b88e75984
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6@sha256:79b4f1de4c15e6eca824723086a51e5934406d614d410cc11be77748cafac537
     container_name: hp-elasticsearch-setup
     restart: no
     entrypoint:
@@ -266,12 +266,16 @@ services:
 
   honeypot-kibana-setup:
     <<: *runtime-defaults
-    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
+    image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
     container_name: hp-honeypot-kibana-setup
     restart: no
     entrypoint: ["sh", "/usr/local/bin/honeypot-kibana-setup.sh"]
     environment:
-      - KIBANA_URL=http://kibana:5601
+      # #3596: Kibana is a swarm stack with a host-mode port; the local
+      # container reaches it on the hub address (home-swarm-host-guard lets
+      # local bridges reach 10.8.0.2). Works for the Compose rollback too,
+      # which publishes the same 10.8.0.2:19601.
+      - KIBANA_URL=http://10.8.0.2:19601
     volumes:
       - ./analysis/honeypot-kibana-setup.sh:/usr/local/bin/honeypot-kibana-setup.sh:ro
     networks: [honeynet]
@@ -292,7 +296,7 @@ services:
 
   arkime-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6-latest@sha256:6f72a8ac29bb129f98297f65e27b5aee4f5b75d1cf0fcd4b2416815db3360af0
+    image: ghcr.io/arkime/arkime/arkime:v6-latest@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
     container_name: hp-arkime-init
     restart: no
     command:
@@ -597,7 +601,7 @@ services:
   # refresh to take effect (#1659; previously geoip.go's
   # threatIntelReloadLoop, retired with the Go dashboard).
   threat-cidrs-refresh:
-    image: alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+    image: alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
     container_name: hp-threat-cidrs-refresh
     profiles: [threat-intel]
     restart: unless-stopped

@@ -223,6 +223,22 @@ fn session_starts() -> &'static Mutex<HashMap<(String, String), i64>> {
 /// which entries are swept once the map is full.
 const SESSION_TTL_SECONDS: i64 = 6 * 3600;
 
+/// mailoney's sessions are keyed by `src_port` + a counter that restarts with
+/// the container (#3815), so a remembered start is only trusted for a short
+/// while. Measured on 55 live connections, `mail-body` is written up to 34 s
+/// after the connection's first line; 15 minutes covers a slow DATA phase
+/// without letting a reused source port inherit an earlier connection's start.
+const MAILONEY_SESSION_TTL_SECONDS: i64 = 15 * 60;
+
+/// How long a remembered start for this sensor's sessions stays valid.
+fn session_ttl(persona: &str) -> i64 {
+    if persona == "mailoney" {
+        MAILONEY_SESSION_TTL_SECONDS
+    } else {
+        SESSION_TTL_SECONDS
+    }
+}
+
 /// Bounds the session map. Sessions are swept by age when it fills; if it is
 /// still full afterwards, lines simply join on their own time.
 const SESSION_CAPACITY: usize = 200_000;
@@ -235,12 +251,13 @@ fn connection_start(persona: &str, session: Option<&str>, line_at: i64) -> i64 {
         return 0;
     }
     let Ok(mut starts) = session_starts().lock() else { return line_at };
+    let ttl = session_ttl(persona);
     let key = (persona.to_string(), session.to_string());
     if let Some(&start) = starts.get(&key) {
-        if start <= line_at && line_at - start <= SESSION_TTL_SECONDS {
+        if start <= line_at && line_at - start <= ttl {
             return start;
         }
-        if start > line_at && start - line_at <= SESSION_TTL_SECONDS {
+        if start > line_at && start - line_at <= ttl {
             // An earlier line of the session arrived after a later one.
             starts.insert(key, line_at);
             return line_at;
@@ -257,9 +274,27 @@ fn connection_start(persona: &str, session: Option<&str>, line_at: i64) -> i64 {
 }
 
 /// The session identifier a sensor writes on every line of one connection,
-/// where it writes one that is unique. mailoney's `session_id` is a counter
-/// that restarts with the container, so it is deliberately not used.
-fn session_key<'a>(persona: &str, e: &'a Value) -> Option<&'a str> {
+/// where it writes one that is unique.
+///
+/// mailoney's `session_id` is a counter that restarts with the container, so
+/// on its own it is not unique. Paired with the connection's source port it
+/// names one connection (#3815): a later source-port reuse gets a new counter
+/// value, and `MAILONEY_SESSION_TTL_SECONDS` bounds a counter that repeats
+/// after a restart. Without it a `mail-body` line, written seconds after the
+/// envelope lines, was joined on its own late timestamp and missed the dial.
+fn session_key(persona: &str, e: &Value) -> Option<String> {
+    let text = |field: &str| match e.get(field) {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    };
+    if persona == "mailoney" {
+        let port = extract_src_port(e);
+        if port == 0 {
+            return None;
+        }
+        return Some(format!("{port}/{}", text("session_id")?));
+    }
     let field = if persona == "cowrie" {
         "session"
     } else if persona == "conpot" || persona.starts_with("conpot-") {
@@ -267,7 +302,7 @@ fn session_key<'a>(persona: &str, e: &'a Value) -> Option<&'a str> {
     } else {
         return None;
     };
-    e.get(field).and_then(Value::as_str)
+    text(field)
 }
 
 /// The transport a generic sensor line was carried over, where the line says.
@@ -301,6 +336,8 @@ fn line_transport(persona: &str, e: &Value) -> Transport {
 
 /// The port portbridge dialled, for sensors whose own listen port is the
 /// same number (checked against the live portbridge RULES, 2026-10-09).
+/// elasticpot is the exception since its Compose `9201:9200` mapping:
+/// portbridge dials 10.8.0.2:9201 while the line says 9200 (#3811).
 ///
 /// A wrong value here can only ever cost a match, never produce a wrong one:
 /// two TCP connections to the same target cannot share a source port at the
@@ -315,7 +352,11 @@ fn want_port(persona: &str, e: &Value) -> i64 {
         _ => 0,
     };
     match persona {
-        "dionaea" | "elasticpot" | "mailoney" => number("dst_port"),
+        "dionaea" | "mailoney" => number("dst_port"),
+        "elasticpot" => match number("dst_port") {
+            9200 => 9201,
+            _ => 0,
+        },
         "dns-honeypot" | "cisco-asa-honeypot" => number("port"),
         "cowrie" => match number("dst_port") {
             2222 => 19022,
@@ -373,7 +414,7 @@ pub fn enrich_line(line: &[u8], vm: &ViaMap, tftp_vm: &ViaMap, persona: &str) ->
     // client that fits. Anything else is reported, not guessed.
     let query = JoinQuery {
         via_port: port,
-        at: connection_start(persona, session_key(persona, &e), line_at),
+        at: connection_start(persona, session_key(persona, &e).as_deref(), line_at),
         want_port: want_port(persona, &e),
         transport: line_transport(persona, &e),
     };
@@ -2147,6 +2188,119 @@ mod tests {
             enrich_line(&cowrie("3573a0000005", 48136, "2026-10-09T23:00:01Z", "cowrie.session.connect"), &vm, &ViaMap::new(), "cowrie");
         assert!(!resolved, "retried until the map has read past the window");
         assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.43"), "but the flush still carries the answer");
+    }
+
+    fn elasticpot(port: i64, timestamp: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "src_ip": TUNNEL_PEER_IP, "src_port": port, "dst_port": 9200, "dst_ip": "172.16.41.19",
+            "eventid": "elasticpot.recon", "sensor": "elasticpot", "timestamp": timestamp,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn elasticpot_is_attributed_through_the_dial_to_its_published_port() {
+        // #3811: the line says 9200 (the container port), portbridge dials the
+        // published 9201. Comparing the two dropped the one right dial.
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.50", 57906, "2026-11-09T11:22:49Z", "10.8.0.2:9201", "tcp");
+        read_past(&mut vm, "2026-11-09T11:23:30Z");
+        let (out, resolved) = enrich_line(&elasticpot(57906, "2026-11-09T11:22:50.575642Z"), &vm, &ViaMap::new(), "elasticpot");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.50"));
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("portbridge"));
+    }
+
+    #[test]
+    fn elasticpot_ignores_a_rival_dial_to_another_service() {
+        // Same source port, one second apart, but the rival went to a
+        // different honeypot: the target port rules it out instead of making
+        // the line ambiguous.
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.51", 57907, "2026-11-09T11:22:49Z", "10.8.0.2:9201", "tcp");
+        pb(&mut vm, "198.51.100.51", 57907, "2026-11-09T11:22:50Z", "10.8.0.2:445", "tcp");
+        read_past(&mut vm, "2026-11-09T11:23:30Z");
+        let (out, _) = enrich_line(&elasticpot(57907, "2026-11-09T11:22:50.5Z"), &vm, &ViaMap::new(), "elasticpot");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.51"));
+    }
+
+    #[test]
+    fn elasticpot_is_not_attributed_to_a_dial_on_another_port() {
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "198.51.100.52", 57908, "2026-11-09T11:22:49Z", "10.8.0.2:445", "tcp");
+        read_past(&mut vm, "2026-11-09T11:23:30Z");
+        let (out, _) = enrich_line(&elasticpot(57908, "2026-11-09T11:22:50Z"), &vm, &ViaMap::new(), "elasticpot");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some(TUNNEL_PEER_IP));
+    }
+
+    fn mailoney(session_id: &str, port: i64, timestamp: &str, event: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "src_ip": TUNNEL_PEER_IP, "src_port": port, "dst_port": 25, "dst_ip": "0.0.0.0",
+            "session_id": session_id, "event": event, "sensor": "mailoney", "timestamp": timestamp,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_late_mail_body_joins_on_when_its_connection_opened() {
+        // #3815: the envelope lines are written as the client sends them, the
+        // mail-body 20 s later after the DATA phase. On its own timestamp the
+        // body is outside the dial's window.
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.60", 44980, "2026-11-08T21:16:24Z", "10.8.0.2:25", "tcp");
+        read_past(&mut vm, "2026-11-08T21:20:00Z");
+        let (out, resolved) = enrich_line(&mailoney("809", 44980, "2026-11-08T21:16:25Z", "envelope"), &vm, &ViaMap::new(), "mailoney");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.60"));
+        let (out, resolved) = enrich_line(&mailoney("809", 44980, "2026-11-08T21:16:45Z", "mail-body"), &vm, &ViaMap::new(), "mailoney");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.60"));
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("portbridge"));
+    }
+
+    #[test]
+    fn a_mailoney_connection_that_reuses_a_source_port_gets_its_own_anchor() {
+        // The same source port, five minutes later, for another client. The
+        // session counter has moved on, so the second connection must not
+        // inherit the first one's start (it would then resolve to client one).
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.61", 44981, "2026-11-08T22:00:00Z", "10.8.0.2:25", "tcp");
+        pb(&mut vm, "198.51.100.61", 44981, "2026-11-08T22:05:00Z", "10.8.0.2:25", "tcp");
+        read_past(&mut vm, "2026-11-08T22:30:00Z");
+        enrich_line(&mailoney("810", 44981, "2026-11-08T22:00:01Z", "envelope"), &vm, &ViaMap::new(), "mailoney");
+        let (out, _) = enrich_line(&mailoney("811", 44981, "2026-11-08T22:05:01Z", "envelope"), &vm, &ViaMap::new(), "mailoney");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("198.51.100.61"));
+        let (out, resolved) = enrich_line(&mailoney("811", 44981, "2026-11-08T22:05:30Z", "mail-body"), &vm, &ViaMap::new(), "mailoney");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("198.51.100.61"));
+    }
+
+    #[test]
+    fn a_mailoney_anchor_does_not_outlive_its_bounded_window() {
+        // A line with the same key long after the first is not trusted to be
+        // the same connection (a counter that restarted with the container).
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.62", 44982, "2026-11-08T23:00:00Z", "10.8.0.2:25", "tcp");
+        read_past(&mut vm, "2026-11-09T01:00:00Z");
+        enrich_line(&mailoney("812", 44982, "2026-11-08T23:00:01Z", "envelope"), &vm, &ViaMap::new(), "mailoney");
+        let (out, _) = enrich_line(&mailoney("812", 44982, "2026-11-08T23:30:00Z", "mail-body"), &vm, &ViaMap::new(), "mailoney");
+        assert_eq!(field(&out, "src_ip").as_deref(), Some(TUNNEL_PEER_IP));
+        assert_eq!(field(&out, "tunnel_attribution").as_deref(), Some("unmatched"));
+    }
+
+    #[test]
+    fn a_mailoney_line_without_a_session_counter_joins_on_its_own_time() {
+        let line = serde_json::to_vec(&json!({
+            "src_ip": TUNNEL_PEER_IP, "src_port": 44983, "dst_port": 25, "event": "envelope",
+            "sensor": "mailoney", "timestamp": "2026-11-08T23:40:01Z",
+        }))
+        .unwrap();
+        let mut vm = ViaMap::new();
+        pb(&mut vm, "203.0.113.63", 44983, "2026-11-08T23:40:00Z", "10.8.0.2:25", "tcp");
+        read_past(&mut vm, "2026-11-08T23:50:00Z");
+        let (out, resolved) = enrich_line(&line, &vm, &ViaMap::new(), "mailoney");
+        assert!(resolved);
+        assert_eq!(field(&out, "src_ip").as_deref(), Some("203.0.113.63"));
     }
 
     #[test]

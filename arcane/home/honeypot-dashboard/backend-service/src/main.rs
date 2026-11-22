@@ -9,7 +9,7 @@
 //! says otherwise — see the library's `resolve_service_token`.
 
 use apiary_backend::{
-    allow_unauth_dev_from_env, audit, build_stamp, config_history, es, fleet, git_revision, host_fs,
+    allow_unauth_dev_from_env, audit, build_stamp, config_history, dashboard, es, fleet, git_revision, host_fs,
     host_gateway, obs, resolve_service_token, trust, worker, AppState,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -62,13 +62,17 @@ async fn main() -> anyhow::Result<()> {
     // #3577: the export-only credential, rotation windows, and the actor
     // assertion key and mode. Refuses to boot on anything ambiguous, same
     // posture as the service token above. Names only, never values.
-    let others: Vec<String> =
-        service_token.iter().cloned().chain(trust::secret(&env, &read, "EXPORT_TOKEN")?).collect();
+    // #3866: the dev token is one of them, so the host gateway token cannot
+    // be reused as it either.
+    let others = trust::bearer_values(&env, &read, service_token.as_deref())?;
     let trust = trust::from_env(&env, &read, service_token)?;
     tracing::info!(trust = %trust.describe(), "credentials");
     // #3582 (D1): host files and the services adapter, locally or through
     // the host gateway (HOST_GATEWAY_URL / SERVICES_ADAPTER_URL). Unset is
     // exactly the old behaviour.
+    // #3790: the fleet's own addresses (HONEYPOT_SELF_IPS or its _FILE
+    // secret), resolved before any handler or worker loop reads them.
+    dashboard::install_self_addresses(dashboard::self_addresses_from_env(&env, &read)?);
     let host = host_fs::configure_from_env(&env, &read, &others.iter().map(String::as_str).collect::<Vec<_>>())?;
     tracing::info!(host = %host.describe(), "host paths");
     host_fs::install(host);

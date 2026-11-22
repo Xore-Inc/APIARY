@@ -210,6 +210,9 @@ class BackupEssentialsTest(unittest.TestCase):
         inst = self.tmp / "libexec" / "apiary-backup-essentials.sh"
         inst.parent.mkdir(exist_ok=True)
         shutil.copy(SCRIPT, inst)
+        # install-backup-essentials.sh puts the #3596 resolver beside it.
+        shutil.copy(REPO_ROOT / "scripts" / "lib" / "task-container.sh",
+                    inst.parent / "apiary-task-container.sh")
         stamp_file = pathlib.Path(str(inst) + ".src-sha256")
         stamp_file.unlink(missing_ok=True)
         if stamp is not None:

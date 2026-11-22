@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Read-only end-to-end health gate for dashboard-next and Elasticsearch ingestion.
+"""Read-only end-to-end health gate for the backend and Elasticsearch ingestion.
 
 One command for the tail end of RECOVERY.md / BACKUP-ESSENTIALS.md /
-CGNAT-DEPLOYMENT.md: fetch source-health through dashboard-next, judge it,
-print one JSON verdict, exit nonzero when anything is wrong.
+CGNAT-DEPLOYMENT.md: fetch the backend's source-health, judge it, print one
+JSON verdict, exit nonzero when anything is wrong.
 
 This used to scrape the retired Go dashboard's ``/api/stats`` (Sensors[].State,
 ES.Sources[].Count, FilebeatState, YARA.Enabled) — a response shape deleted
 with the Go service in #1659, so the gate could only ever fail. #2086 ports it
-onto the Rust backend's ``/api/v1/source-health``, reached through
-dashboard-next's token-checked ``/bff`` passthrough (the #1608 split-host
-seam — the backend itself publishes no ports):
+onto the Rust backend's ``/api/v1/source-health``. That used to be reached
+through dashboard-next's ``/bff`` passthrough; dashboard-next left with
+#3749, so the gate now asks the backend itself. The backend publishes no
+port, so by default the request runs inside its container (``docker exec``
+into ``--backend-container``, the same seam ``scripts/verify-deploy.sh`` uses
+for /healthz). ``--backend-url`` points it at a reachable listener instead,
+e.g. over the swarm overlay:
 
-    Go api/stats                        /bff/api/v1/source-health successor
+    Go api/stats                        /api/v1/source-health successor
     ----------------------------------  -----------------------------------
     Sensors[name].State == "waiting"    name absent from sensors[] (terms
                                         agg only buckets sensors that have
@@ -26,15 +30,17 @@ seam — the backend itself publishes no ports):
     IngestState == "stale"              ingest.state == "stale"
     YARA disabled or errors             yara.enabled false, yara.errors > 0
 
-The passthrough requires the BFF's service token: pass --token or export
-DASHBOARD_SERVICE_TOKEN (the stack .env name compose maps into both
-dashboard containers). With neither set the request goes out unauthenticated
-and fails with 401 rather than pretending to verify.
+The route requires the backend's service token: pass --token or export
+DASHBOARD_SERVICE_TOKEN (the backend stack's .env name). With neither set the
+request goes out unauthenticated and fails with 401 rather than pretending to
+verify. On the docker-exec path the token reaches curl on stdin, never on a
+command line.
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -45,23 +51,71 @@ import urllib.request
 # silent, so requiring it would keep the gate permanently red).
 DEFAULT_REQUIRE = "cowrie,dionaea,multipot,http-honeypot,conpot,suricata"
 
-SOURCE_HEALTH_PATH = "/bff/api/v1/source-health"
+SOURCE_HEALTH_PATH = "/api/v1/source-health"
+
+
+class HTTPStatusError(Exception):
+    def __init__(self, code):
+        super().__init__(f"HTTP {code}")
+        self.code = code
 
 
 def get(url, token):
     request = urllib.request.Request(url)
     if token:
         request.add_header("X-Service-Token", token)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        raise HTTPStatusError(error.code) from error
+
+
+def exec_curl_command(container):
+    """argv for one source-health request inside the backend container.
+
+    The port comes from the container's own LISTEN_ADDR (the image's
+    HEALTHCHECK trick), and the header arrives on stdin as a curl config
+    line, so the token is never in this argv or the container's.
+    """
+    script = (
+        'curl -sS --max-time 30 -K - -w "\\n%{http_code}" '
+        '"http://127.0.0.1:${LISTEN_ADDR##*:}' + SOURCE_HEALTH_PATH + '"'
+    )
+    return ["docker", "exec", "-i", container, "sh", "-c", script]
+
+
+def parse_exec_output(stdout):
+    """Split curl's body from the trailing status line written by -w."""
+    body, _, code = stdout.rstrip("\n").rpartition("\n")
+    if not code.isdigit():
+        raise ValueError(f"no HTTP status in backend response: {stdout[-200:]!r}")
+    if int(code) != 200:
+        raise HTTPStatusError(int(code))
+    return json.loads(body)
+
+
+def get_via_exec(container, token):
+    config = f'header = "X-Service-Token: {token}"\n' if token else ""
+    result = subprocess.run(
+        exec_curl_command(container), input=config, capture_output=True, text=True, timeout=60
+    )
+    if result.returncode != 0 and not result.stdout:
+        raise OSError(f"docker exec {container} failed: {result.stderr.strip()[-300:]}")
+    return parse_exec_output(result.stdout)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--dashboard",
-        default="http://10.8.0.2:19090",
-        help="dashboard-next base URL (default: the home-bound published port)",
+        "--backend-container",
+        default="hp-apiary-backend",
+        help="backend container to query through docker exec (default: hp-apiary-backend)",
+    )
+    parser.add_argument(
+        "--backend-url",
+        default="",
+        help="reachable backend base URL instead of docker exec, e.g. over the overlay",
     )
     parser.add_argument(
         "--require",
@@ -71,20 +125,23 @@ def main():
     parser.add_argument(
         "--token",
         default=os.environ.get("SERVICE_TOKEN") or os.environ.get("DASHBOARD_SERVICE_TOKEN", ""),
-        help="BFF service token (default: $SERVICE_TOKEN or $DASHBOARD_SERVICE_TOKEN)",
+        help="backend service token (default: $SERVICE_TOKEN or $DASHBOARD_SERVICE_TOKEN)",
     )
     args = parser.parse_args()
 
     failures = []
     try:
-        health = get(args.dashboard.rstrip("/") + SOURCE_HEALTH_PATH, args.token)
-    except urllib.error.HTTPError as error:
+        if args.backend_url:
+            health = get(args.backend_url.rstrip("/") + SOURCE_HEALTH_PATH, args.token)
+        else:
+            health = get_via_exec(args.backend_container, args.token)
+    except HTTPStatusError as error:
         detail = f"source-health unreachable: HTTP {error.code}"
         if error.code == 401:
-            detail += " (BFF service token required: --token or $DASHBOARD_SERVICE_TOKEN)"
+            detail += " (service token required: --token or $DASHBOARD_SERVICE_TOKEN)"
         print(json.dumps({"failures": [detail]}, indent=2))
         return 1
-    except (urllib.error.URLError, OSError, ValueError) as error:
+    except (urllib.error.URLError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(json.dumps({"failures": [f"source-health unreachable: {error}"]}, indent=2))
         return 1
 

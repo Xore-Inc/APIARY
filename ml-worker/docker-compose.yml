@@ -21,9 +21,9 @@
 # problem not yet shown to exist. See #64 when that measurement happens.
 #
 # Deploy: copy this file to /opt/stacks/ml-worker/compose.yml (Dockge's
-# naming convention), and docker-compose.ml-worker.gpu.yml to
-# compose.override.yml only on a host with an nvidia container runtime --
-# see that file's own header for why this stack does not need it yet.
+# naming convention). No GPU: the worker is CPU-only (torch +cpu wheel), and
+# the inert GPU overlay was removed in #3594 (docs/gpu-ml-worker-acceleration.md
+# §4.4 has the reservation to add back with Milestone H, #67).
 #
 # #1502: migrated into arcane/home/ for Arcane directory-aware Git sync.
 # Already self-contained; only the explicit name: below and the file's own

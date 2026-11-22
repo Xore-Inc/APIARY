@@ -827,7 +827,6 @@
         "composite": true,
         "composites": {
           "client": {
-            "apiary-dashboard": ["access"],
             "apiary-dashboard-rewrite": ["access"],
             "kibana": ["access"],
             "evebox": ["access"],
@@ -845,7 +844,6 @@
           "realm": ["apiary-user"],
           "client": {
             "realm-management": ["manage-users", "view-users", "query-users"],
-            "apiary-dashboard": ["admin"],
             "apiary-dashboard-rewrite": ["admin"],
             "traefik-dashboard": ["admin"]
           }
@@ -853,24 +851,11 @@
       }
     ],
     "client": {
-      "apiary-dashboard": [
-        {"name": "access"},
-        {
-          "name": "admin",
-          "description": "#1013: composite of 'access' so an admin-only grant (kcadm, a future provisioning script, a realm edit) can't lock a user out of dashboard auth, which hard-requires 'access' before it even looks at admin/user distinction",
-          "composite": true,
-          "composites": {
-            "client": {
-              "apiary-dashboard": ["access"]
-            }
-          }
-        }
-      ],
       "apiary-dashboard-rewrite": [
-        {"name": "access"},
+        {"name": "access", "description": "Sign in to the standalone dashboard"},
         {
           "name": "admin",
-          "description": "#3578: same shape as apiary-dashboard's admin (composite of 'access'), for the rewrite dashboard, which reads resource_access.apiary-dashboard-rewrite.roles and treats anyone without 'admin' as a viewer",
+          "description": "#3578: composite of 'access' so an admin-only grant can't lock a user out of dashboard sign-in, which hard-requires 'access' (#1013); the dashboard reads resource_access.apiary-dashboard-rewrite.roles and treats anyone without 'admin' as a viewer",
           "composite": true,
           "composites": {
             "client": {
@@ -900,7 +885,6 @@
       "name": "users",
       "realmRoles": ["apiary-user"],
       "clientRoles": {
-        "apiary-dashboard": ["access"],
         "apiary-dashboard-rewrite": ["access"],
         "kibana": ["access"],
         "evebox": ["access"],
@@ -913,7 +897,6 @@
       "name": "administrators",
       "realmRoles": ["apiary-user", "apiary-admin"],
       "clientRoles": {
-        "apiary-dashboard": ["access", "admin"],
         "apiary-dashboard-rewrite": ["access", "admin"],
         "kibana": ["access"],
         "evebox": ["access"],
@@ -928,8 +911,9 @@
   ],
   "clients": [
     {
-      "clientId": "apiary-dashboard",
-      "name": "APIARY dashboard",
+      "clientId": "apiary-dashboard-rewrite",
+      "name": "APIARY dashboard (rewrite)",
+      "description": "#3578: the dashboard's client (Xore-Inc/apiary-dashboard). #3834: the legacy apiary-dashboard client (the retired in-repo dashboard) and the beta soak origin were removed.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -942,7 +926,6 @@
       "rootUrl": "https://honeypot.example.invalid",
       "baseUrl": "https://honeypot.example.invalid/",
       "redirectUris": [
-        "https://honeypot.example.invalid/oauth2/callback",
         "https://honeypot.example.invalid/auth/callback"
       ],
       "webOrigins": [
@@ -950,49 +933,9 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://honeypot.example.invalid/*"
-      },
-      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
-      "optionalClientScopes": [],
-      "protocolMappers": [
-        {
-          "name": "dashboard-self-audience",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "consentRequired": false,
-          "config": {
-            "included.client.audience": "apiary-dashboard",
-            "id.token.claim": "false",
-            "access.token.claim": "true"
-          }
-        }
-      ]
-    },
-    {
-      "clientId": "apiary-dashboard-rewrite",
-      "name": "APIARY dashboard (rewrite)",
-      "description": "#3578: the rewrite dashboard's own client, with two redirect origins (production and beta). Roles access/admin are mapped as for apiary-dashboard.",
-      "enabled": true,
-      "protocol": "openid-connect",
-      "publicClient": false,
-      "clientAuthenticatorType": "client-secret",
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "frontchannelLogout": true,
-      "rootUrl": "https://honeypot.example.invalid",
-      "baseUrl": "https://honeypot.example.invalid/",
-      "redirectUris": [
-        "https://honeypot.example.invalid/auth/callback",
-        "https://beta.honeypot.example.invalid/auth/callback"
-      ],
-      "webOrigins": [
-        "https://honeypot.example.invalid"
-      ],
-      "attributes": {
-        "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://honeypot.example.invalid/*##https://beta.honeypot.example.invalid/*"
+        "post.logout.redirect.uris": "https://honeypot.example.invalid/auth/login?signed_out=1",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
       },
       "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
       "optionalClientScopes": [],
@@ -1113,6 +1056,7 @@
     {
       "clientId": "unsloth",
       "name": "Unsloth Studio oauth2-proxy",
+      "description": "Unsloth Studio (LAN 8899 via VPS gateway)",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -1123,7 +1067,7 @@
       "serviceAccountsEnabled": false,
       "frontchannelLogout": true,
       "rootUrl": "https://unsloth.example.invalid",
-      "baseUrl": "https://unsloth.example.invalid/",
+      "baseUrl": "https://unsloth.example.invalid",
       "redirectUris": ["https://unsloth.example.invalid/oauth2/callback"],
       "webOrigins": ["https://unsloth.example.invalid"],
       "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://unsloth.example.invalid/*"},
@@ -1165,9 +1109,10 @@
       "frontchannelLogout": false,
       "rootUrl": "https://arcane.example.invalid",
       "baseUrl": "https://arcane.example.invalid/",
+      "adminUrl": "https://arcane.example.invalid",
       "redirectUris": ["https://arcane.example.invalid/auth/oidc/callback"],
       "webOrigins": ["https://arcane.example.invalid"],
-      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://arcane.example.invalid/*"},
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://arcane.example.invalid/*", "backchannel.logout.session.required": "true", "backchannel.logout.revoke.offline.tokens": "false"},
       "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email"],
       "optionalClientScopes": []
     },

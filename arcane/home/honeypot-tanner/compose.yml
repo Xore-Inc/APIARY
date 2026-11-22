@@ -71,6 +71,11 @@ services:
     <<: *runtime-defaults
     build: ./tanner/redis
     container_name: hp-tanner-redis
+    # #3596 (swarm phase 9 leg C): LEGACY, the rollback for the swarm stack
+    # tanner-redis (swarm/stacks/tanner-redis); tanner_redis_relay below now
+    # answers as tanner_redis. Kept stopped. Rollback: stop the relay, scale
+    # tanner-redis_redis to 0, then `docker start hp-tanner-redis`.
+    profiles: ['legacy']
     # Measured against the live baseline (2026-07-31): this service binds only
     # unprivileged ports and needs no capability at all, so nothing is added
     # back. Verified by recreating it and comparing its listening port against
@@ -100,6 +105,44 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
+  # #3596 (swarm phase 9 leg C): the cache is the swarm stack tanner-redis.
+  # This relay answers as `tanner_redis` on tanner_local (the host in
+  # tanner/tanner/config.yaml) and forwards over that stack's overlay, so no
+  # tanner service joins it (#3837). apiary-overlay-attach starts the relay
+  # after a dockerd restart (ops/swarm/hosts/homeserver-overlay-attach.txt).
+  # The stack uses endpoint_mode dnsrr; socat resolves the name per
+  # connection. Deploy with `docker compose up -d --no-deps
+  # tanner_redis_relay`, never an Arcane sync of this project (#3878).
+  tanner_redis_relay:
+    <<: *runtime-defaults
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+    container_name: hp-tanner-redis-relay
+    restart: unless-stopped
+    command: ['TCP4-LISTEN:6379,fork,reuseaddr', 'TCP4:tanner-redis_redis:6379,connect-timeout=5']
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # busybox nc in this image has no -z; socat probes its own listener.
+      test: ['CMD', 'socat', '-u', '/dev/null', 'TCP4:127.0.0.1:6379,connect-timeout=2']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - autoheal=true
+    read_only: true
+    networks:
+      tanner_local:
+        aliases: [tanner_redis]
+      redis_store: {}
+    deploy:
+      resources:
+        limits:
+          # One socat child per pooled connection (tanner's pool is up to 80).
+          cpus: "0.5"
+          memory: 64M
   tanner_phpox:
     <<: *runtime-defaults
     build: ./tanner/phpox
@@ -148,8 +191,11 @@ services:
     volumes:
       - ./tanner/tanner/config.yaml:/opt/tanner/data/config.yaml:ro
     depends_on:
+      # The legacy rollback (#3596); the relay answers as tanner_redis and
+      # tanner's pool reconnects by name.
       tanner_redis:
         condition: service_healthy
+        required: false
     read_only: true
     networks:
       - tanner_local
@@ -180,8 +226,11 @@ services:
     ports:
       - ${HP_BIND:-10.8.0.2}:19091:8091
     depends_on:
+      # The legacy rollback (#3596); the relay answers as tanner_redis and
+      # tanner's pool reconnects by name.
       tanner_redis:
         condition: service_healthy
+        required: false
     read_only: true
     networks:
       - tanner_local
@@ -223,8 +272,11 @@ services:
       - /opt/stacks/apiary/logs/tanner:/var/log/tanner
       - /opt/stacks/apiary/state/init-markers:/markers:ro
     depends_on:
+      # The legacy rollback (#3596); the relay answers as tanner_redis and
+      # tanner's pool reconnects by name.
       tanner_redis:
         condition: service_healthy
+        required: false
       tanner_api:
         condition: service_started
       tanner_web:
@@ -234,8 +286,13 @@ services:
       tanner_docker:
         condition: service_healthy
     read_only: true
+    # #3593 option 1: snare runs as the swarm stack sensor-snare and posts to
+    # http://tanner:8090 over that stack's attachable overlay; Compose aliases
+    # this container `tanner` there too. tanner_local stays first and keeps
+    # the default route, so the overlay adds no egress path.
     networks:
       - tanner_local
+      - snare_decoy
     deploy:
       resources:
         limits:
@@ -339,6 +396,18 @@ networks:
   tanner_local:
     driver: bridge
     internal: ${TANNER_AIR_GAPPED:-false}
+  # #3593 option 1: the overlay the swarm stack sensor-snare owns
+  # (10.200.29.0/24). Only tanner joins it (hp-tanner-docker and the other
+  # tanner services do not). Exists once
+  # `ops/swarm/stackctl.py ensure sensor-snare` has run.
+  snare_decoy:
+    name: sensor-snare_decoy
+    external: true
+  # #3596: swarm/stacks/tanner-redis (internal, encrypted, attachable).
+  # Only tanner_redis_relay joins it.
+  redis_store:
+    name: tanner-redis_store
+    external: true
 
 volumes:
   # #124: opposite direction from dionaea-lib/yara-results in the other

@@ -36,19 +36,6 @@ updates:
         group-by: dependency-name
     labels: [dependencies, go]
 
-  - package-ecosystem: npm
-    directory: /arcane/home/honeypot-dashboard/frontend-next  # #1659: repointed off the retired Go dashboard's frontend
-    schedule:
-      interval: weekly
-      day: monday
-      time: "04:30"
-      timezone: Europe/Berlin
-    groups:
-      frontend-compatible:
-        patterns: ["*"]
-        update-types: [minor, patch]
-    labels: [dependencies, frontend]
-
   - package-ecosystem: cargo
     directory: /arcane/home/honeypot-dashboard/backend-service
     schedule:
@@ -94,7 +81,6 @@ updates:
       - /arcane/home/honeypot-dns-honeypot/dns-honeypot
       - /arcane/home/honeypot-endlessh/endlessh-honeypot
       - /arcane/home/honeypot-http/http-honeypot
-      - /arcane/home/honeypot-dashboard/frontend-next
       - /arcane/home/honeypot-dashboard/backend-service
       - /llm-worker
       - /ml-worker

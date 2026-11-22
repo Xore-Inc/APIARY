@@ -17,7 +17,7 @@
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::AppState;
@@ -93,7 +93,7 @@ async fn technique_counts(state: &AppState) -> anyhow::Result<HashMap<String, u6
             "techs": {"terms": {"field": "honeypot.canonical_attck_techniques", "size": 40}}
         }
     });
-    let result = state.es.search(body).await?;
+    let result = state.es.search_agg(body).await?;
     let aggs = &result["aggregations"];
     let mut counts: HashMap<String, u64> = HashMap::new();
     for bucket in aggs["techs"]["buckets"].as_array().into_iter().flatten() {
@@ -194,6 +194,12 @@ pub struct SankeyData {
     pub links: Vec<SankeyLink>,
 }
 
+/// Whether the sankey may be served from the hourly `link`/`touch` docs. Off
+/// since #3929: those sums count a group once per hour it was active, the live
+/// grouping once over the whole window, so the two never agreed. The docs are
+/// still written, for the day the rollup carries a distinct count.
+const ROLLED_SANKEY: bool = false;
+
 /// #2046: the sankey rebuilt from the rollup's hourly `link`/`touch` docs.
 /// Summing per-hour link counts reproduces the live group-flow totals
 /// except at hour boundaries, where a group (session or IP burst)
@@ -244,18 +250,32 @@ async fn sankey_from_rollup(state: &AppState) -> Option<SankeyData> {
     security(("serviceToken" = [])),
 )]
 pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (StatusCode, String)> {
-    // #2046: rolled links/touches are the primary path; the two-level
-    // grouping aggregation below remains the fall-through while coverage
-    // is missing. Node/link assembly is identical either way.
-    if crate::rollups::window_covered(&state, 48).await {
+    // #3910: the worker's snapshot of the live grouping below (`page_rollup`)
+    // answers first while recent: one document read, where the rolled
+    // hours (#2046) are two searches and the live grouping is 1-2 s.
+    if let Some(snapshot) = crate::page_rollup::read(&state, crate::page_rollup::KILL_CHAIN_SANKEY).await {
+        return Ok(Json(sankey_from_groups(&snapshot)));
+    }
+    // #2046: rolled links/touches would be the next path, but they do not
+    // answer the same question (#3929: on production the hourly sums were 3x
+    // to 30x the live flows, because a session or address active over many
+    // hours is one group live and one per hour in the rollup), so the
+    // two-level grouping aggregation below is the only fall-through.
+    if ROLLED_SANKEY && crate::rollups::window_covered(&state, 48).await {
         if let Some(data) = sankey_from_rollup(&state).await {
             return Ok(Json(data));
         }
     }
-    // Per-session (or per-IP for sessionless sensors) technique sets, each
-    // group flowing one unit between consecutive touched tactics — same
-    // grouping fallback as buildKillChainSankey.
-    let body = json!({
+    let result = state.es.search_agg(sankey_body()).await.map_err(bad_gateway)?;
+    Ok(Json(sankey_from_groups(&result)))
+}
+
+/// The live request behind `/api/v1/charts/kill-chain-sankey`, shared with
+/// its snapshot: per-session (or per-IP for sessionless sensors) technique
+/// sets, each group flowing one unit between consecutive touched tactics --
+/// same grouping fallback as buildKillChainSankey.
+pub(crate) fn sankey_body() -> Value {
+    json!({
         "size": 0,
         // #2145: conpot healthchecks arrive tagged T0886, so unfiltered
         // the fleet's own probes would count as technique usage in both
@@ -274,8 +294,11 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
                 "aggs": {"techs": {"terms": {"field": "honeypot.canonical_attck_techniques", "size": 12}}}
             }
         }
-    });
-    let result = state.es.search(body).await.map_err(bad_gateway)?;
+    })
+}
+
+/// Nodes and links from an answer to [`sankey_body`] (or its snapshot).
+fn sankey_from_groups(result: &Value) -> SankeyData {
     let aggs = &result["aggregations"];
     let mut flows: HashMap<(String, String), u64> = HashMap::new();
     let mut touched: HashMap<String, bool> = HashMap::new();
@@ -307,7 +330,7 @@ pub async fn sankey(State(state): State<AppState>) -> Result<Json<SankeyData>, (
         .map(|((source, target), value)| SankeyLink { source, target, value })
         .collect();
     links.sort_by_key(|link| (tactic_index(&link.source), tactic_index(&link.target)));
-    Ok(Json(SankeyData { nodes, links }))
+    SankeyData { nodes, links }
 }
 
 // --- Campaign timeline (Go: timelineRow) ---

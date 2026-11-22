@@ -67,7 +67,7 @@ FICTIONAL_LABELS = [
 
 # Ports the fixed script now treats as "always expected up" -- see the
 # corresponding `probe $WG <port>` calls in vps/debug-backends.sh.
-ALWAYS_UP_PORTS = [19090, 19092, 19636, 19601, 19091, 19080, 18080, 3552]
+ALWAYS_UP_PORTS = [19092, 19636, 19601, 19091, 19080, 18080, 3552]  # #3749: 19090 retired
 
 
 def _script_text():
@@ -95,7 +95,7 @@ def test_dynamic_yml_socat_hp_table_still_parses():
     names = {name for name, _ in _socat_hp_home_ports()}
     # Sanity check that the table format hasn't changed out from under the
     # regex above -- if this starts failing, re-check SOCAT_HP_ROW_RE first.
-    assert "socat-hp-dashboard" in names
+    assert "socat-hp-dashboard-next" in names  # the dashboard bridge since #3749
     assert "socat-hp-arcane" in names
     assert "socat-hp-wordpot" not in names, "retired row should be skipped"
 
