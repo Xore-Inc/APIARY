@@ -85,6 +85,6 @@ USER 65534
 ENV LOG_FILE=/var/log/honeypot/dicompot.json
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD nc -z 127.0.0.1 11112 || exit 1
+  CMD ["sh", "-c", "nc -z 127.0.0.1 11112 || exit 1"]
 
 ENTRYPOINT ["/usr/local/bin/dicompot"]

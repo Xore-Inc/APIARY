@@ -162,8 +162,9 @@ def is_scannable(ref: str) -> bool:
 #
 # Prose reasons do not retire a stale entry and no test can check them, so
 # the count that accompanied each reason is recorded here next to it: it is
-# trivy 0.74.0's own `--severity CRITICAL,HIGH --ignore-unfixed` tally for
-# that ref on 2026-10-04, read out of the run logged in REPORT.md. An image
+# trivy 0.76.2's own `--severity CRITICAL,HIGH --ignore-unfixed` tally for
+# that ref on 2026-11-22 (the version scan-image-sbom and the image scan pin;
+# B3 of #3941 re-measured every entry touched below), read out of the run logged in REPORT.md. An image
 # whose scan did not complete is UNVERIFIED and stays failing on purpose --
 # an unmeasured image is a coverage gap, not a finding, and must not be
 # quietly written off.
@@ -196,16 +197,37 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "remainder is not reachable in any running image, and the key is "
         "digest-keyed so the next pin move retires it."
     ),
+    "rust:1-slim-trixie": (
+        "sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe",
+        "#3941 B3: moved to the current rust:1-slim-trixie digest, which ships "
+        "Rust 1.100.0 (the same toolchain as rust-toolchain.toml). Measured "
+        "2026-11-22 at 31 fixable CRITICAL/HIGH (1 CRITICAL linux-libc-dev "
+        "CVE-2026-99362, 30 HIGH, all Debian trixie packages the image has not "
+        "rebuilt yet). Build stage only: arcane/home/honeypot-dashboard/"
+        "backend-service names it `AS build`, and the final stage is "
+        "debian:trixie-slim, which this stage does not feed. The previous "
+        "pin, ea0999ff, measured 33 with the same tool on the same day."
+    ),
     "rust:1-trixie": (
-        "sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc",
-        "#3720: moved to trixie; re-measured 2026-10-24 at 2 fixable HIGH, "
-        "both libbrotli1/libbrotli-dev 1.1.0-2+b7 (CVE-2026-111497, no trixie"
-        " rebuild carries the fix yet), build stage only for the same reason "
-        "as before. Previous measurement, carried over: "
-        "build stage only -- vps/huginn-sidecar names it `AS build` and ships "
-        "a separate debian:bookworm-slim final image; measured 18 fixable "
-        "CRITICAL/HIGH after the pin moved to the tag's current digest, down "
-        "from 147"
+        "sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8",
+        "#3941 B3: moved to the current rust:1-trixie digest (Rust 1.100.0). "
+        "Measured 2026-11-22 at 188 fixable CRITICAL/HIGH (13 CRITICAL, 175 "
+        "HIGH), all Debian trixie packages in the full build image that no "
+        "trixie rebuild has picked up yet. Build stage only: "
+        "vps/huginn-sidecar names it `AS build`, and the final stage is "
+        "debian:trixie-slim (which this stage does not feed). The previous pin "
+        "931c2c05 measured 490 with the same tool on the same day."
+    ),
+    "debian:trixie-slim": (
+        "sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2",
+        "#3941 B3: moved the backend-service and vps/huginn-sidecar runtime "
+        "stages to the current trixie-slim digest. Measured 2026-11-22 at 1 "
+        "fixable HIGH: zlib1g CVE-2026-85091, which Debian has fixed but the "
+        "trixie-slim image has not been rebuilt with yet. The previous pin "
+        "62bd423a measured 3 HIGH with the same tool on the same day. "
+        "Re-measure and retire this entry at the next digest move. This is a "
+        "running base, so the reason is recorded in full rather than hidden "
+        "behind build-stage wording."
     ),
     "mcr.microsoft.com/dotnet/sdk:10.0.101": (
         None,
@@ -335,19 +357,18 @@ ACCEPTED_CVES: dict[str, tuple[str | None, str]] = {
         "are in the alpine base it was built on, so the fix is an upstream "
         "rebase onto a current alpine."
     ),
-    "docker:29.9.2-dind": (
-        "sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977",
-        "#3720: moved to 29.9.2-dind (newest 29.x); re-measured 2026-10-24 at"
-        " 8 fixable: golang.org/x/net v0.55-0.59 (CVE-2026-46600, "
-        "CVE-2026-78669), moby/go-archive v0.2.0 (CVE-2026-17106) and brotli-"
-        "libs (CVE-2026-111497), all compiled into docker's binaries or the "
-        "alpine base. Previous measurement, carried over: "
-        "measured 27 fixable CRITICAL/HIGH, all Go modules compiled into the "
-        "dockerd binary (grpc, golang.org/x/net, x/mod, x/text). No 29.x tag "
-        "is clean: 29.8.2-dind and 29.9.0-dind were both scanned and neither "
-        "is the image this pin holds, and the next line (29.9.0-rc.1) is a "
-        "release candidate, which a sandbox base has no business taking. The "
-        "fix is an upstream moby rebuild against patched modules."
+    "docker:29.9.3-dind": (
+        "sha256:7bf70dcb85c822e3fa6f2d332143e474b99147b9d7b39102b0cfe8b04a7dd61b",
+        "#3941 B3: the entry followed the pin. arcane/home/honeypot-tanner/"
+        "tanner/sandbox pins docker:29.9.3-dind, and the old 29.9.2-dind key "
+        "matched nothing (test_every_key_is_a_reference_the_script_emits). "
+        "Measured 2026-11-22 with trivy 0.76.2: 9 fixable HIGH in 5 Go "
+        "binaries of the image (dockerd's containerd-shim, runc, ctr, "
+        "buildx, compose), 4 distinct CVEs (CVE-2026-17106, CVE-2026-46600, "
+        "CVE-2026-78661, CVE-2026-78669), all compiled into docker's own "
+        "binaries. This is the tanner DinD sandbox image, not a honeypot "
+        "image. B7a of #3941 moves it to 29.10.0-dind (#3944 superseded), "
+        "which retires this entry."
     ),
     "nicolaka/netshoot:latest": (
         "sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70",

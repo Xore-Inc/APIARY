@@ -235,7 +235,7 @@ class ScanImageSbom(unittest.TestCase):
         return _write_exec(
             self.tmp / f"trivy-{kind}",
             f"""#!/usr/bin/env bash
-if [ "${{1:-}}" = "--version" ]; then echo "Version: 0.74.0"; exit 0; fi
+if [ "${{1:-}}" = "--version" ]; then echo "Version: 0.76.2"; exit 0; fi
 cat >&2 <<'ERR'
 {err.decode()}
 ERR
@@ -301,7 +301,7 @@ exit {rc}
         _write_exec(
             recorder,
             """#!/usr/bin/env bash
-if [ "${1:-}" = "--version" ]; then echo "Version: 0.74.0"; exit 0; fi
+if [ "${1:-}" = "--version" ]; then echo "Version: 0.76.2"; exit 0; fi
 printf '%s\\n' "$@" >"$ARGS_FILE"
 printf '{}'
 """,
@@ -382,7 +382,7 @@ class InstallTrivy(unittest.TestCase):
     def test_explicit_binary_is_used_verbatim(self) -> None:
         """scan-image-sbom.sh depends on this, and a test depends on that."""
         stub = _write_exec(
-            self._tmp_path() / "trivy", '#!/usr/bin/env bash\necho "Version: 0.74.0"\n'
+            self._tmp_path() / "trivy", '#!/usr/bin/env bash\necho "Version: 0.76.2"\n'
         )
         res = run(INSTALL_TRIVY, "--print-path", env={"TRIVY_BIN": str(stub)})
         self.assertEqual(res.returncode, 0, res.stderr)

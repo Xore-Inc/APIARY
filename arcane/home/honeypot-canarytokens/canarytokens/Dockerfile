@@ -35,6 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libz-dev locales lsof net-tools unzip wget zlib1g && \
     rm -rf /var/lib/apt/lists/*
 
+# DL3064 false positive: the ARG name contains "TOKENS" (the upstream project name).
+# The value is a public git commit SHA, not a secret.
+# hadolint ignore=DL3064
 ARG CANARYTOKENS_REF=dd92bf29bd0f6d1b446fb41e3b8114c6fc7a6205
 RUN wget -O archive.zip "https://github.com/thinkst/canarytokens/archive/${CANARYTOKENS_REF}.zip" && \
     unzip -q archive.zip && \
