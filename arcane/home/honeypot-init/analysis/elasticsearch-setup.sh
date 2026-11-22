@@ -468,11 +468,27 @@ curl -fsS -X PUT "$es_url/_index_template/suricata-events" \
         "geo": { "properties": { "location": { "type": "geo_point" }, "country_iso_code": { "type": "keyword" }, "city_name": { "type": "keyword" } } }
       } },
       "network": { "properties": { "transport": { "type": "keyword" }, "protocol": { "type": "keyword" }, "community_id": { "type": "keyword" } } },
-      "fingerprint": { "properties": { "kind": { "type": "keyword" }, "value": { "type": "keyword", "ignore_above": 1024 } } }
+      "fingerprint": { "properties": { "kind": { "type": "keyword" }, "value": { "type": "keyword", "ignore_above": 1024 } } },
+      "suricata": { "properties": { "eve": { "properties": { "alert": { "properties": {
+        "signature": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
+        "category": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } }
+      } } } } } }
     } }
   }
 }
 JSON
+
+# #3918: the alert signature and category were never declared, so every
+# suricata-v2-alert index got Elasticsearch's dynamic default for a string: text
+# with a `.keyword` sub-field. That is what the dashboard's readers rely on
+# (facets, events, search, reports, entity details all use
+# `suricata.eve.alert.signature.keyword`); only the IP profile aggregated on the
+# bare field, which is not aggregatable, and every alert shard failed under it.
+# The mapping is pinned here exactly as the default gave it, so it can no
+# longer drift unnoticed (a keyword-only mapping would drop `.keyword` from new
+# indices and blind six readers; a test in investigate_partial_tests.rs holds
+# this declaration). Existing indices are unchanged: the template applies to
+# indices created after it.
 
 # #166: destination.geo.location was previously left to dynamic mapping here
 # (unlike source.geo.location just above), so it came in as a plain

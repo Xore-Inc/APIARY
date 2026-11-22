@@ -564,8 +564,6 @@ pub async fn dashboard(
             }
         },
     )?;
-    crate::es::warn_on_failed_shards("dashboard main aggregations", &main);
-    crate::es::warn_on_failed_shards("dashboard behavior aggregations", &behavior);
 
     // ASN rows: "AS<number> <org>", same label shape as the Go tier.
     let asns = main["aggregations"]["asns"]["buckets"]
