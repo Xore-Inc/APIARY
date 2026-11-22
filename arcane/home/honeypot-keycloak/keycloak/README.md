@@ -4,6 +4,12 @@ For the complete installation and operations procedure, use
 [`docs/KEYCLOAK-OPERATIONS.md`](../../../../docs/KEYCLOAK-OPERATIONS.md). This file is a
 short component summary.
 
+Since swarm phase 9 (#3596) Keycloak and PostgreSQL run as the swarm stack
+[`swarm/stacks/keycloak`](../../../../swarm/stacks/keycloak/README.md); both
+services of [`compose.yml`](../compose.yml) sit behind `profiles: [legacy]` as
+the rollback and as the bootstrap of a fresh install. This directory stays the
+source of the secrets, realm and theme files the stack binds read-only.
+
 The `honeypot-keycloak` Arcane stack is defined by
 [`compose.yml`](../compose.yml). Keycloak and
 PostgreSQL run on the homeserver; VPS Traefik forwards `auth.example.invalid` over
@@ -59,6 +65,12 @@ header for Bearer API calls.
 `backup.sh` streams a PostgreSQL custom dump into the encrypted Restic
 repository on `/mnt-2`, retaining seven daily and four weekly snapshots.
 `RESTIC_REPOSITORY` remains configurable in Dockge's `.env`.
+Both scripts find the Postgres container with `scripts/lib/task-container.sh`
+(#3596): the swarm task of `keycloak_postgres` first, the Compose
+`hp-keycloak-postgres` second. `restore.sh` stops whichever Keycloak runs
+(`docker service scale keycloak_keycloak=0`, or `compose stop keycloak`) and
+starts the same one again afterwards. From the deployed stack copy the helper
+is read from `/opt/stacks/apiary/scripts/lib/`; `TASK_CONTAINER_LIB` overrides.
 
 ```bash
 ./keycloak/backup.sh

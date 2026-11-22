@@ -130,7 +130,10 @@ sha256sum "$script_dir/backup-essentials.sh" | cut -d' ' -f1 \
 # Belt and braces: install(1) already gives it bin_t under /usr/local/libexec,
 # but a restorecon makes that explicit and repairs the label if the file was
 # copied in some other way first.
-command -v restorecon >/dev/null && restorecon "$libexec" 2>/dev/null || true
+# The container resolver the collector prepends to its homeserver script
+# (#3596); backup-essentials.sh looks for it beside itself.
+install -m 0644 -o root -g root "$script_dir/lib/task-container.sh" /usr/local/libexec/apiary-task-container.sh
+command -v restorecon >/dev/null && restorecon "$libexec" /usr/local/libexec/apiary-task-container.sh 2>/dev/null || true
 
 sed -e "s|^User=.*|User=$run_as|" \
     -e "s|^Group=.*|Group=$run_group|" \

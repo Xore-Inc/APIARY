@@ -182,7 +182,14 @@ fn render(document: &mut Value) {
                          lib.rs's require_service_token, #2183, #3577). \
                          Compared in constant time, and a wrong or missing \
                          value is a 401 before the route is even resolved. \
-                         Browsers never reach this service directly."
+                         Browsers never reach this service directly. An \
+                         instance may also trust a separate dev token \
+                         (DEV_SERVICE_TOKEN, #3866) in this same header; it \
+                         is a bound pair with a dev assertion key: an \
+                         actorAssertion that goes with it must be signed by \
+                         that key, and without one it is treated exactly as \
+                         the production token without one. What it does is \
+                         recorded with a dev marker."
                 },
                 "exportToken": {
                     "type": "apiKey",
@@ -215,9 +222,13 @@ fn render(document: &mut Value) {
                          valid one on every mutation and on any request that \
                          names an actor (X-Actor-Username, X-Actor-Role, or \
                          an actor field in the query or body), answers 401 \
-                         without one and 403 to a verified viewer on an \
-                         admin mutation, and replaces every client-named \
-                         actor field with the asserted identity. See \
+                         without one and 403 to a verified viewer on any \
+                         mutation (viewers are read-only), and replaces every client-named \
+                         actor field with the asserted identity. A \
+                         request on the dev token (#3866) is verified \
+                         against the dev public key only, never the \
+                         production one, and the verified subject and \
+                         username are recorded with a dev: prefix. See \
                          docs/BACKEND-TRUST-BOUNDARY.md."
                 }
             }

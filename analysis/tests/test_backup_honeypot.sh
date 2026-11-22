@@ -9,8 +9,10 @@
 #
 # Asserts what the issue asks: a partway pg_dump leaves no kept artifact and
 # matches the existing loud-failure branch, a healthy dump produces output
-# identical to gzipping that same dump directly, nothing is lost when the
-# Keycloak container is absent, and stderr carries the reason.
+# identical to gzipping that same dump directly, nothing else is lost when the
+# Keycloak container is absent (but the run exits 1 since #3596), and stderr
+# carries the reason. Cases 8-9 (#3596): the swarm task is found, and two
+# running Postgres are refused.
 #
 # Cases 5-7 cover #2025: retention prunes BEFORE an upstream failure wedges
 # the rest of the run, an aborted manual run under umask 022 leaves nothing
@@ -61,9 +63,20 @@ head -c 30000 "$HEALTHY_DUMP" > "$FAIL_DUMP"   # dies without its footer
 # COMPOSE_RC simulates failing `compose config` validation, VOLUME_UP lets
 # the named-volume loop reach `docker run`, and VOLUME_RUN_RC fails that
 # mid-archive (#2025's upstream-failure scenario).
+# #3596: the script resolves the container with `docker ps` (swarm label
+# first, Compose name second); KEYCLOAK_UP=1 answers the Compose name,
+# KEYCLOAK_SWARM=1 the swarm label.
 cat > "$FAKE_BIN/docker" <<STUB
 #!/bin/sh
 [ "\$1" = compose ] && exit \${COMPOSE_RC:-0}
+if [ "\$1" = ps ]; then
+  case "\$*" in
+    *label=com.docker.swarm.service.name=keycloak_postgres*)
+      [ "\${KEYCLOAK_SWARM:-0}" = 1 ] && echo keycloak_postgres.1.abc ;;
+    *name=*) [ "\${KEYCLOAK_UP:-0}" = 1 ] && echo hp-keycloak-postgres ;;
+  esac
+  exit 0
+fi
 if [ "\$1" = inspect ]; then
   [ "\${KEYCLOAK_UP:-0}" = 1 ]
   exit \$?
@@ -73,6 +86,7 @@ if [ "\$1" = run ]; then
   exit \${VOLUME_RUN_RC:-0}
 fi
 if [ "\$1" = exec ]; then
+  echo "\$2" >> "\${EXEC_LOG:-/dev/null}"
   shift 2
   cat "\$FAIL_DUMP"
   exit \${PG_DUMP_RC:-0}
@@ -145,14 +159,19 @@ DEST="$(cat "$TD/case3/dest.txt")"
 t "[ ! -e '$DEST/keycloak.sql.gz' ]"
 t "[ ! -e '$DEST/keycloak.sql' ]"
 
-echo "# case 4: keycloak container absent -- unchanged behavior"
+echo "# case 4: keycloak container absent -- rest written, run fails loudly (#3596)"
 
 new_case x x 4
-run 0 0 "$TD/case4"
+ERR4="$TD/case4/stderr.txt"
+run 0 0 "$TD/case4" "$ERR4"
+RC4=$?
 DEST="$(cat "$TD/case4/dest.txt")"
+t "[ $RC4 -eq 1 ]"
+t "grep -q 'NO identity dump' '$ERR4'"
 t "[ ! -e '$DEST/keycloak.sql.gz' ]"
 t "[ ! -e '$DEST/keycloak.sql' ]"
 t "[ -s '$DEST/stack-config-state.tar.gz' ]"
+t "[ -s '$DEST/SHA256SUMS' ]"
 
 echo "# case 5: a step later in the run fails -- retention already pruned (#2025)"
 
@@ -201,6 +220,28 @@ run_with "$D7" COMPOSE_RC=3
 RC7=$?
 t "[ $RC7 -ne 0 ]"
 t "[ ! -d '$D7/backups' ]"
+
+echo "# case 8: Postgres as a swarm task (#3596)"
+
+new_case x x 8
+D8="$TD/case8"
+run_with "$D8" KEYCLOAK_SWARM=1 FAIL_DUMP="$HEALTHY_DUMP" EXEC_LOG="$D8/exec.log"
+RC8=$?
+DEST="$(cat "$D8/dest.txt")"
+t "[ $RC8 -eq 0 ]"
+t "[ -s '$DEST/keycloak.sql.gz' ]"
+t "grep -qx 'keycloak_postgres.1.abc' '$D8/exec.log'"
+
+echo "# case 9: swarm task AND Compose container up -- refuse, no dump (#3596)"
+
+new_case x x 9
+D9="$TD/case9"
+run_with "$D9" KEYCLOAK_SWARM=1 KEYCLOAK_UP=1 FAIL_DUMP="$HEALTHY_DUMP" EXEC_LOG="$D9/exec.log"
+RC9=$?
+DEST="$(cat "$D9/dest.txt")"
+t "[ $RC9 -eq 1 ]"
+t "[ ! -e '$DEST/keycloak.sql.gz' ]"
+t "[ ! -e '$D9/exec.log' ]"
 
 echo "----------------------------------------"
 if [ "$fails" -eq 0 ]; then

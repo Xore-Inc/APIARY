@@ -62,8 +62,9 @@ async fn main() -> anyhow::Result<()> {
     // #3577: the export-only credential, rotation windows, and the actor
     // assertion key and mode. Refuses to boot on anything ambiguous, same
     // posture as the service token above. Names only, never values.
-    let others: Vec<String> =
-        service_token.iter().cloned().chain(trust::secret(&env, &read, "EXPORT_TOKEN")?).collect();
+    // #3866: the dev token is one of them, so the host gateway token cannot
+    // be reused as it either.
+    let others = trust::bearer_values(&env, &read, service_token.as_deref())?;
     let trust = trust::from_env(&env, &read, service_token)?;
     tracing::info!(trust = %trust.describe(), "credentials");
     // #3582 (D1): host files and the services adapter, locally or through

@@ -72,7 +72,7 @@ LIVE_PAGE = int(
 # negative test perturbs -- and it must carry BOTH halves, or the five
 # watcher-owned ledger entries read as stale and their failure lines mask the
 # rule the test is actually about.
-APPLIES = ["dependencies", "github-actions", "go", "containers", "python", "frontend"]
+APPLIES = ["dependencies", "github-actions", "go", "containers", "python"]
 WATCHES = {
     "ci-queue-watch.py": "ci-queue-stall",
     "disk-usage-watch.py": "disk-usage-alarm",
@@ -87,7 +87,7 @@ def dependabot(labels: list[str]) -> str:
     for name in labels:
         body += (
             "  - package-ecosystem: npm\n"
-            "    directory: /arcane/home/honeypot-dashboard/frontend-next\n"
+            "    directory: /arcane/home/honeypot-dashboard/backend-service\n"
             f"    labels: [dependencies, {name}]\n"
         )
     return body
@@ -130,7 +130,7 @@ def fake_gh(tmp_path: pathlib.Path, catalogue: dict[str, str] | None) -> pathlib
 def full_catalogue(overrides: dict[str, str | None] | None = None) -> dict[str, str]:
     """A catalogue where every ledger label exists and documents itself."""
     names = [
-        "dependencies", "python", "go", "github-actions", "containers", "frontend",
+        "dependencies", "python", "go", "github-actions", "containers",
         "ci-queue-stall", "disk-usage-alarm", "backup-staleness-alarm",
         "compose-drift-alarm", "main-red-alarm",
     ]
@@ -218,13 +218,14 @@ def test_live_reports_label_absent_from_catalogue(tmp_path, monkeypatch):
 
 
 def test_live_reports_empty_description(tmp_path, monkeypatch):
-    """The `frontend` defect: present, but documenting nothing."""
+    """The `frontend` defect (since retired with #3749): present, but
+    documenting nothing. Exercised on `python` now."""
     root = build_tree(tmp_path / "tree", applies=APPLIES, watches=WATCHES)
-    bindir = fake_gh(tmp_path, full_catalogue({"frontend": ""}))
+    bindir = fake_gh(tmp_path, full_catalogue({"python": ""}))
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
     proc = run(root, "--live", "--repo", REPO)
     assert proc.returncode == 1, proc.stdout
-    assert "frontend" in proc.stdout
+    assert "python" in proc.stdout
     assert "empty description" in proc.stdout
 
 
@@ -286,8 +287,8 @@ def test_block_style_label_list_is_not_a_false_pass(tmp_path):
     path = root / ".github" / "dependabot.yml"
     text = path.read_text()
     text = text.replace(
-        "    labels: [dependencies, frontend]\n",
-        "    labels:\n      - dependencies\n      - frontend\n      - block-style-ghost\n",
+        "    labels: [dependencies, python]\n",
+        "    labels:\n      - dependencies\n      - python\n      - block-style-ghost\n",
     )
     path.write_text(text)
     proc = run(root)

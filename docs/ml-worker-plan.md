@@ -17,8 +17,8 @@
 
 > **Status:** `ml-worker/` has its own Arcane-managed stack
 > ([`docker-compose.yml`](../ml-worker/docker-compose.yml), the only one the
-> manifest deploys). `docker-compose.ml-worker.gpu.yml` exists in-tree but is
-> inert and undeployed, so the worker is CPU-only in practice. It
+> manifest deploys). Its inert GPU overlay was removed on 2026-11-17
+> (#3594), so the worker is CPU-only. It
 > without crashing (#62). `extract_features()`/`featurise_temporal()` read
 > the real per-sensor schema (#62 task 33, #63). The dashboard delivers
 > scores via the backend-service's `/api/v1/store/ml-anomalies` +
@@ -730,15 +730,13 @@ been deleted, not patched. The real files:
   Elasticsearch continuously, unlike `analysis/ghidra/`'s stack, which is
   deliberately loopback-only with no honeynet access because it only ever
   receives samples over a file spool.
-- [`ml-worker/docker-compose.ml-worker.gpu.yml`](../ml-worker/docker-compose.ml-worker.gpu.yml) —
-  an inert GPU overlay in the same shape as
-  `analysis/ghidra/docker-compose.ghidra.gpu.yml` (device reservation only).
-  Isolation Forest and HBOS stay CPU-only regardless; nothing in the
-  worker's code path uses CUDA until Milestone H
-  ([#67](https://github.com/Xore/APIARY/issues/67)), which itself
-  requires a measured CPU baseline from this milestone first. Whether that
-  phase shares the ghidra stack's `ollama` instance for embeddings or gets
-  its own is #67's decision, not assumed here.
+- No GPU overlay: the inert one (device reservation only) was removed on
+  2026-11-17 (#3594, phase 7 step 4). Isolation Forest and HBOS stay
+  CPU-only regardless; nothing in the worker's code path uses CUDA until
+  Milestone H ([#67](https://github.com/Xore/APIARY/issues/67)), which itself
+  requires a measured CPU baseline from this milestone first. The reservation
+  to add back then is in
+  [`gpu-ml-worker-acceleration.md`](gpu-ml-worker-acceleration.md) §4.4.
 
 No Redis in the base stack. `ml-gpu-coordinated-roadmap.md` §1 decision 1:
 Elasticsearch is the initial dashboard transport, and Redis/SSE is added only

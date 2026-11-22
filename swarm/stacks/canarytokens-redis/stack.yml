@@ -1,0 +1,100 @@
+# #3596 (swarm phase 9 leg C): the canarytokens Redis as a stack pinned to
+# the homeserver.
+#
+# Persistent (AOF + RDB every 60 s on change): the Compose volume
+# honeypot-canarytokens_canarytokens-redis-data is reused in place as an
+# external volume. One writer only: two Redis on one AOF directory corrupt
+# it, so this landed with replicas: 0, and updates are stop-first.
+#
+# The canarytokens services (frontend, switchboard, http-router) stay on
+# Compose and do not join this overlay. Their project runs
+# `canarytokens-redis-relay`, a socat that answers as `canarytokens-redis`
+# on canarytokens_net and forwards to `canarytokens-redis_redis:6379` here,
+# so no canarytokens service depends on the swarm at boot (#3837). 6379 is
+# never published: portbridge forwards that public port to 10.8.0.2 for the
+# decoys. No password, as before: the overlay is internal and encrypted, and
+# the relay is its only other member.
+#
+# The Compose Redis stays as the rollback (profile legacy, container
+# hp-canarytokens-redis kept stopped). README.md has the cutover and rollback.
+services:
+  redis:
+    # Same digest as the Compose rollback: the same AOF is opened by the same
+    # server version either way.
+    image: redis:8.10.3-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
+    labels:
+      apiary.swarm.migration: canarytokens-redis
+    command: ["redis-server", "--appendonly", "yes", "--protected-mode", "no", "--save", "60", "1"]
+    volumes:
+      - type: volume
+        source: data
+        target: /data
+    networks: [store]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    # The entrypoint chowns /data and setpriv's to redis (999). DAC_OVERRIDE
+    # is needed to walk the existing 0700 appendonlydir (measured, #2825).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    # SIGTERM: Redis fsyncs the AOF and writes a final RDB before it exits.
+    stop_grace_period: 30s
+    deploy:
+      mode: replicated
+      # Landed at 0 and was scaled to 1 by hand after the Compose
+      # hp-canarytokens-redis saved and stopped (#3596 leg C cutover
+      # 2026-11-20, same 20 keys); this records the result.
+      replicas: 1
+      # No VIP: IPVS drops idle TCP after 900 s, which breaks the pooled
+      # connections frontend and switchboard keep.
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # Never two writers on one AOF.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 60s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "The canarytokens switchboard blocks on a paused Redis; pause with canarytokens"
+networks:
+  store:
+    driver: overlay
+    attachable: true
+    internal: true
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.35.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"
+volumes:
+  # The Compose volume, reused in place (never copied).
+  data:
+    external: true
+    name: honeypot-canarytokens_canarytokens-redis-data

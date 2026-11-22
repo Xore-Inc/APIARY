@@ -1,7 +1,10 @@
 [Unit]
 Description=Watch for honeypot CAPE sandbox requests
 Documentation=file:/opt/CAPEv2/docs/sandbox/cape/IMPLEMENTATION_PLAN.md
-After=docker.service
+# No After=docker.service here (#3742): a .path unit is ordered Before=paths.target,
+# which basic.target needs, and docker.service starts after basic.target (via
+# firewalld). The ordering made a boot cycle; on 2026-11-13 systemd broke it by
+# dropping firewalld's start. The triggered service keeps After=docker.service.
 
 [Path]
 # The dashboard writes {sha256}.request here; it never calls CAPE's own

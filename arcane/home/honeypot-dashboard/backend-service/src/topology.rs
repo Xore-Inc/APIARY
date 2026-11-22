@@ -558,11 +558,12 @@ const STACK_CONTAINERS: &[(&str, &[&str])] = &[
     ("honeypot-payload-analysis", &["hp-payload-dedupe", "hp-yara-scanner"]),
     ("honeypot-utilities", &["hp-log-maintenance", "hp-docker-socket-proxy", "hp-disk-space-monitor", "hp-autoheal", "hp-docker-hygiene", "hp-reporter"]),
     ("honeypot-keycloak", &["hp-keycloak-postgres", "hp-keycloak"]),
-    ("honeypot-dashboard", &["hp-dashboard-next", "hp-apiary-backend-mounted", "hp-dashboard-oidc-sessions"]),
+    // Only the mounted write API is left in this project (#3749).
+    ("honeypot-dashboard", &["hp-apiary-backend-mounted"]),
     // #3575: the sensor-bound workers and the local services adapter, as their
     // own homeserver project (GHCR image by digest).
     ("honeypot-backend-workers", &["hp-apiary-worker", "hp-apiary-worker-importer", "hp-apiary-worker-enrichment", "hp-apiary-worker-payload-inventory", "hp-services-adapter"]),
-    // The standalone rewrite dashboard (Xore-Inc/apiary-dashboard).
+    // The dashboard (Xore-Inc/apiary-dashboard).
     ("apiary-dashboard", &["hp-apiary-dashboard", "hp-apiary-dashboard-oidc-sessions"]),
     ("honeypot-dashboard-backend", &["hp-apiary-backend"]),
     ("honeypot-attacker-identity-worker", &["hp-attacker-identity-worker"]),

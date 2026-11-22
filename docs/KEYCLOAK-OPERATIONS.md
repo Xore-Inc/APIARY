@@ -7,9 +7,15 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 
 ## Resulting topology
 
-- `honeypot-keycloak` is an Arcane-managed stack on the homeserver.
+- Since swarm phase 9 (#3596) Keycloak and PostgreSQL run as the swarm stack
+  `swarm/stacks/keycloak` (Arcane `swarm_stack` sync, pinned to the
+  homeserver). The `honeypot-keycloak` Compose project keeps both services
+  under `profiles: [legacy]` as the rollback and as a fresh install's
+  bootstrap, and its directory stays the source of the secrets, realm and
+  theme the stack binds read-only. Cutover and rollback:
+  `swarm/stacks/keycloak/README.md`.
 - No local image is built. Both upstream images are pinned by version tag
-  *and* digest: `postgres:18.6-bookworm@sha256:…` and
+  *and* digest: `postgres:18.7-bookworm@sha256:…` (18.7 since the 2026-11-17 maintenance window) and
   `quay.io/keycloak/keycloak:26.8.2@sha256:…` (#3824). Keycloak used to name
   `:latest` (with a digest underneath it since #3501), on the theory that the
   identity provider should always be current -- it was on 26.7.1 when
@@ -18,8 +24,11 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
   which release was running. A Keycloak security release is applied by moving
   the tag and digest together (§7); the base-image CVE gate's
   `ACCEPTED_CVES` entry for the old digest retires itself when it moves.
-- PostgreSQL is reachable only on the internal `keycloak-data` network.
-- Keycloak publishes HTTP only on the homeserver WireGuard address.
+- PostgreSQL is reachable only on the internal `keycloak-data` network (the
+  stack's internal `data` overlay).
+- Keycloak publishes HTTP only on the homeserver WireGuard address. As a swarm
+  host-mode port it binds every address; `home-swarm-host-guard` drops every
+  flow except the VPS on `wg0` and local containers to that address.
 - VPS Traefik terminates TLS and forwards the issuer and administrator hosts
   through `socat-hp-keycloak` over WireGuard.
 - The administrator host uses Keycloak realm-admin login and mandatory TOTP.
@@ -27,13 +36,12 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
   Bearer API calls.
 - Each VPS-fronted application has its own Keycloak client, oauth2-proxy
   cookie, client secret, Docker network, and upstream bridge -- seven gateways
-  total (§3). `apiary-dashboard` is the exception: its oauth2-proxy
-  compatibility gateway was retired once every dashboard replica moved to
-  native OIDC (#1026), so its secret goes straight to the dashboard binary
-  instead of a VPS gateway.
+  total (§3). The dashboard's client, `apiary-dashboard-rewrite`, is the
+  exception: the dashboard does native OIDC itself (#1026), so its secret
+  goes straight to the dashboard's secrets file instead of a VPS gateway.
 - Two more confidential clients, `arcane` and `auth-events-poller`, live
   entirely on the homeserver side and never touch the VPS at all. Realm
-  total: eleven confidential clients across three surfaces (§3).
+  total: ten confidential clients across three surfaces (§3).
 - `Xore/auth-backend` supplies only the read-only `themes/apiary` directory.
 
 ## Files and host paths
@@ -44,7 +52,8 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
 | Arcane environment | `arcane/home/honeypot-keycloak/.env.example` | `/var/dockge/stacks/honeypot-keycloak/.env` |
 | Realm template | `arcane/home/honeypot-keycloak/keycloak/realm/apiary-realm.json` | `/var/dockge/stacks/honeypot-keycloak/keycloak/realm/` |
 | Theme | `Xore/auth-backend:themes/apiary` | `/var/dockge/stacks/honeypot-keycloak/theme/apiary` |
-| Keycloak secrets | none | `/var/dockge/stacks/honeypot-keycloak/secrets` |
+| Keycloak secrets | none | `/var/dockge/stacks/honeypot-keycloak/secrets` (the stack also reads `public-domain` there) |
+| Swarm stack | `swarm/stacks/keycloak/stack.yml` | Arcane sync `swarm-keycloak` |
 | VPS Compose | `vps/docker-compose.yml` | existing VPS stack directory |
 | VPS OIDC secrets | none | `vps/secrets/oidc/<client>/` on the VPS |
 
@@ -173,8 +182,8 @@ OIDC_SECRETS_DIR=./secrets/oidc
 ```
 
 For each client below, create its own directory and files. This is seven of
-the realm's eleven confidential clients -- the ones with a VPS oauth2-proxy
-gateway; see "Non-gateway confidential clients" below for the other four:
+the realm's ten confidential clients -- the ones with a VPS oauth2-proxy
+gateway; see "Non-gateway confidential clients" below for the other three:
 
 | Directory/client | Public consumer |
 |---|---|
@@ -198,7 +207,7 @@ sudo chmod 440 ./secrets/oidc/<client>/*
 ```
 
 `client-secret` is different: since `apiary-realm.json` pins no client
-`secret`, Keycloak generates a fresh random one for all 11 confidential
+`secret`, Keycloak generates a fresh random one for all 10 confidential
 clients on every `--import-realm` (including a clean rebuild, #787). Use
 [`keycloak/sync-client-secrets.sh`](../arcane/home/honeypot-keycloak/keycloak/sync-client-secrets.sh) to
 fetch and install these 7 gateway secrets in one pass instead of the manual
@@ -234,7 +243,7 @@ new client secrets; rotate all seven VPS files and restart all seven gateways.
 
 ### Non-gateway confidential clients
 
-The realm's other four confidential clients have no VPS oauth2-proxy
+The realm's other three confidential clients have no VPS oauth2-proxy
 gateway, so `sync-client-secrets.sh` and the manual procedure above do not
 cover them. Each is rotated by its own idempotent provisioner script, run on
 the homeserver alongside (not instead of) the gateway rotation -- see §7 for
@@ -242,25 +251,24 @@ the full clean-rebuild sequence:
 
 | Client | Surface | Provisioner |
 |---|---|---|
-| `apiary-dashboard` | homeserver -- native OIDC in the dashboard binary itself | [`keycloak/provision-dashboard-oidc-secret.sh`](../arcane/home/honeypot-keycloak/keycloak/provision-dashboard-oidc-secret.sh) |
-| `apiary-dashboard-rewrite` | homeserver -- the rewrite dashboard (`apiary-dashboard` Arcane project), same script with `DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets` | [`keycloak/provision-dashboard-oidc-secret.sh`](../arcane/home/honeypot-keycloak/keycloak/provision-dashboard-oidc-secret.sh) |
+| `apiary-dashboard-rewrite` | homeserver -- the dashboard (Xore-Inc/apiary-dashboard, `apiary-dashboard` Arcane project), native OIDC; the script's defaults (`DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite`, `DASHBOARD_SECRETS_DIR=/var/dockge/stacks/apiary-dashboard/secrets`) target it | [`keycloak/provision-dashboard-oidc-secret.sh`](../arcane/home/honeypot-keycloak/keycloak/provision-dashboard-oidc-secret.sh) |
 | `arcane` | homeserver -- Arcane's own OIDC login | [`keycloak/provision-arcane-oidc-secret.sh`](../arcane/home/honeypot-keycloak/keycloak/provision-arcane-oidc-secret.sh) |
 | `auth-events-poller` | homeserver -- service-account only, no login | [`keycloak/provision-events-poller.sh`](../arcane/home/honeypot-keycloak/keycloak/provision-events-poller.sh) |
 
 `apiary-dashboard-rewrite` (#3578) is in the realm export with PKCE S256, the
-production and `beta.` callback and post-logout origins (templated like every
-other host in the file), a self-audience mapper, and the same `access`/`admin`
-client roles as `apiary-dashboard`, carried by `apiary-user`, `apiary-admin`
-and the two groups. A fresh import creates it with a random secret; run the
+production callback and post-logout origin (templated like every other host in
+the file), a self-audience mapper, and the `access`/`admin` client roles,
+carried by `apiary-user`, `apiary-admin` and the two groups. A fresh import creates it with a random secret; run the
 provisioner above once to write that secret where the rewrite reads it. An
 existing realm that already has the client (it was created by hand on
 2026-10-08) is not changed by this file: `--import-realm` skips a realm that
 exists, so compare the live client with the export before relying on either.
 
-`apiary-dashboard` used to be an extra VPS gateway (`oidc-dashboard`)
-until #1026's follow-up retired that compose service in favor of native
-OIDC; its secret now goes straight to the dashboard binary's own secrets
-file instead of a VPS `client-secret` file.
+History: the legacy client `apiary-dashboard` served the retired in-repo
+dashboards (first behind a VPS gateway, `oidc-dashboard`, retired by #1026's
+follow-up, then natively). It was disabled and deleted from the live realm and
+removed from the export in #3834 (2026-11-16), together with the rewrite
+client's `beta.` soak redirect URI, web origin and post-logout URI.
 
 Deploy `vps/docker-compose.yml`, `vps/traefik/traefik.yml`, and a production-
 rendered `vps/traefik/dynamic.yml` into the existing VPS stack. Do not start a
@@ -397,7 +405,7 @@ sudo KEYCLOAK_RESTORE_CONFIRM=restore-keycloak-database \
    - `keycloak/provision-admin-client.sh`, then
      `keycloak/provision-master-realm.sh` and
      `keycloak/provision-account-console-scopes.sh` (§2);
-   - rotate all eleven confidential clients' secrets in two steps -- both
+   - rotate all ten confidential clients' secrets in two steps -- both
      required, either order:
      - `keycloak/sync-client-secrets.sh` (§3): the seven VPS gateway secrets,
        restarting every gateway.

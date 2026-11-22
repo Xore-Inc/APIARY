@@ -2,8 +2,8 @@
 
 > **Status:** Proposed implementation sequence — **intent, not shipped state.**
 > Re-measured 2026-09-27: `ml-worker` and `llm-worker` now ship as their own
-> Arcane-managed stacks; the ML worker's GPU overlay
-> (`docker-compose.ml-worker.gpu.yml`) is still inert scaffolding, so the ML
+> Arcane-managed stacks; the ML worker's inert GPU overlay
+> was removed on 2026-11-17 (#3594, phase 7 step 4), so the ML
 > worker remains CPU-only; retrain slots are `03:00,09:00,15:00,21:00`
 > (`ml-worker/worker.py:59`), not §4-I's `01:00,07:00,13:00,19:00`; the
 > default alert threshold did land at `0.75` (`worker.py:174`); and §1

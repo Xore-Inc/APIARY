@@ -50,16 +50,19 @@ export {
     ## not only the relayed attacker sessions. The dashboard, its API and the
     ## internal health traffic all cross it, and "extract everything" happily
     ## carves those too. Measured in the first five minutes after enabling
-    ## extraction: 11 of 11 indexed files came from port 19090, the dashboard.
-    ## Not one was attacker-delivered.
+    ## extraction: 11 of 11 indexed files came from the dashboard's port.
+    ## Not one was attacker-delivered. The port moved from 19090 (the retired
+    ## in-repo dashboard) to 19092 (hp-apiary-dashboard) in #3834, after the
+    ## stale exclusion let the new dashboard through: 32,036 of the 40,124
+    ## files carved on 2026-11-15/16 came from 19092.
     ##
     ## Excluded by destination port because that is what actually separates
     ## the two here -- both ends of every flow on this interface are our own
     ## addresses, so a source/destination address filter cannot tell relayed
     ## attacker traffic from our own service traffic.
     const skip_dest_ports: set[port] = {
-        19090/tcp,   # dashboard
-        18080/tcp,   # dashboard API
+        19092/tcp,   # dashboard (hp-apiary-dashboard)
+        18080/tcp,   # keycloak (was labelled "dashboard API")
         9200/tcp,    # elasticsearch
         5601/tcp,    # kibana
         3552/tcp,    # arcane
@@ -71,7 +74,8 @@ event file_over_new_connection(f: fa_file, c: connection, is_orig: bool)
     # Decided here rather than in file_sniff because file_sniff fires before
     # the file is reliably associated with a connection: f$conns was empty for
     # roughly half the files, so a port filter there let our own dashboard
-    # traffic through anyway (measured: 3 of 6 still landed from port 19090).
+    # traffic through anyway (measured: 3 of 6 still landed from the dashboard
+    # port).
     # file_over_new_connection hands us the connection directly, and fires
     # early enough that no payload has been missed.
     if ( ! f?$id || f$id == "" )

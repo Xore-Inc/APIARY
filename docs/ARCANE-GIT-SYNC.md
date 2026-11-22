@@ -197,13 +197,13 @@ alone. Re-verify against whatever Arcane version is pinned in
 happened and the re-verification has not:** every item below was confirmed
 against `v2.8.0`–`v2.9.0` (including the no-`profiles:`-support finding,
 which cites the upstream issue as still open at `v2.8.1`), while
-`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.0`
-by digest (2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
+`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.3`
+by digest (2026-11-17 maintenance window; `v2.17.0` from 2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
 before that `v2.11.1`). The edge agents on precision and the VPS run the
-matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.0`, digest-pinned in
+matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.3`, digest-pinned in
 their host-local compose files; the template is
 `ops/arcane-agent/compose.yml`.
-Nothing here is claimed to be false of `v2.17.0` — it is claimed to be
+Nothing here is claimed to be false of `v2.17.3` — it is claimed to be
 unconfirmed against it, and eight minor versions of upstream is exactly the
 gap that re-verification is for.
 
@@ -356,7 +356,8 @@ gap that re-verification is for.
   arrays, which merely echo what a compose file declared and are omitted
   from a plain project GET. `honeypot-dashboard`'s project record reports
   `serviceCount: 8` — exactly the eight services its
-  `arcane/home/honeypot-dashboard/compose.yml` defines today
+  `arcane/home/honeypot-dashboard/compose.yml` defined at the time (since
+  #3575 and #3749 it defines only `backend-service-mounted`)
   (`oidc-sessions`, `backend-service-mounted`, `backend-worker`,
   `dashboard-next`, `backend-worker-importer`,
   `backend-worker-enrichment`, `backend-worker-payload-inventory`,
@@ -584,8 +585,8 @@ The failure this section exists for is quoted above: a content-change
 redeploy leaves the dashboard *"green, healthy, running the old code."*
 Everything else about that state is a lie by omission — a fresh container
 id, a passing healthcheck and a recent image build all say the machinery
-ran, not that this code is what is running. So both dashboard images now
-carry the git revision they were built from, in three places, and
+ran, not that this code is what is running. So the backend image now
+carries the git revision it was built from, in three places, and
 `scripts/verify-deploy.sh` compares them.
 
 **Where the stamp is.**
@@ -601,13 +602,12 @@ carry the git revision they were built from, in three places, and
   `cargo:rerun-if-env-changed=GIT_SHA`, which is load-bearing: without it
   cargo reuses a cached build and the second build of an identical tree
   keeps the *first* revision, producing the exact failure this fixes.
-- **Frontend** — a static `public/build.json` (`{"revision":…,"built":…,
-  "source":…}`), written by `frontend-next/scripts/write-build-info.mjs`
-  into the build stage before `npm run build` so vite copies it into the
-  output. Served by Nitro from `public/`, the same mechanism the image
-  healthcheck already uses for `/static/theme.css`. It is gitignored: a
-  committed `build.json` would be a revision claim about nobody's build.
-- **Both** — `org.opencontainers.image.revision` (plus `.source` and
+- **Dashboard** — not built here. The dashboard is
+  Xore-Inc/apiary-dashboard, a GHCR image pinned by tag and digest in its
+  Arcane project's `.env`; its revision is that repository's commit, on the
+  image's `org.opencontainers.image.revision` label. (The in-repo frontend's
+  `public/build.json` stamp left with it in #3749.)
+- **Labels** — `org.opencontainers.image.revision` (plus `.source` and
   `.created`) as image labels, readable without running anything:
   `docker image inspect apiary-backend:latest --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'`.
 
@@ -667,7 +667,8 @@ scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
 ```
 
-`--healthz-url http://host:19090/build.json` is the frontend form. Exit
+`--healthz-url URL` reads the same JSON over HTTP when the endpoint is
+reachable. Exit
 codes are the point: **0** the deployed revision matches, **1** a finding
 (missing, unstamped, malformed, or stale past `--behind-days`), **2**
 "could not tell" — deliberately distinct, so an unreadable body or an image

@@ -3,8 +3,8 @@
 #
 # Fetches yara-rules/*.yar and yara-rules/auto/*.yar from Xore/Honeypot,
 # compiles them before adopting them, and pins the upstream commit in
-# rules/upstream.lock. Mirrors scripts/sync-theme.sh: vendor, pin, and let CI
-# enforce that the tree still matches the pin.
+# rules/upstream.lock: vendor, pin, and let CI enforce that the tree still
+# matches the pin.
 #
 # WHY VENDOR INSTEAD OF PULLING ON A TIMER
 #

@@ -30,7 +30,7 @@
 # gevent shim parses it).
 services:
   conpot:
-    image: ghcr.io/xore-inc/honeypot-conpot@sha256:94cc0ab1a2995795bbc213dab593fb3523bbccf45c4f810c7b57ba8f76fad011
+    image: ghcr.io/xore-inc/honeypot-conpot@sha256:dc17efcff17688e81cba1a7f9335d71254e2b743025a278a7c768466dd57fb40
     command:
       - sh
       - -c

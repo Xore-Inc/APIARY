@@ -405,7 +405,6 @@ async fn fetch_campaign_aggregates(
             .es
             .search_index(&[HONEYPOT_INDEX_PATTERN], campaign_ip_page_body(since, until, after.as_ref()))
             .await?;
-        crate::es::warn_on_failed_shards("correlator campaign source listing", &result);
         let page = result["aggregations"]["ips"]["buckets"].as_array().cloned().unwrap_or_default();
         add_ip_page(&mut groups, &page);
         after = result["aggregations"]["ips"].get("after_key").cloned();
@@ -420,7 +419,6 @@ async fn fetch_campaign_aggregates(
             .es
             .search_index(&[HONEYPOT_INDEX_PATTERN], campaign_batch_body(since, until, &batch))
             .await?;
-        crate::es::warn_on_failed_shards("correlator campaign aggregations", &result);
         for agg_name in ["cidrs_v4", "cidrs_v6"] {
             for b in result["aggregations"][agg_name]["buckets"].as_array().into_iter().flatten() {
                 let Some(key) = b["key"].as_str() else { continue };
@@ -486,7 +484,6 @@ async fn fetch_cluster_aggregates(state: &AppState, since: chrono::DateTime<chro
         }
     });
     let result = state.es.search_index(&[HONEYPOT_INDEX_PATTERN], body).await?;
-    crate::es::warn_on_failed_shards("correlator cluster aggregations", &result);
     let mut out = Vec::new();
     let add = |kind: &str, buckets: &[Value], value_of: &dyn Fn(&Value) -> String, out: &mut Vec<ClusterBucket>| {
         for b in buckets {

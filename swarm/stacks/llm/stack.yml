@@ -1,0 +1,101 @@
+# #3594 (phase 7 step 3, epic #3587): Ollama as a swarm service holding the
+# homeserver GPU through the NVIDIA-GPU generic resource (docs/SWARM-GPU.md).
+#
+# Consumers reach it as `ollama` on this stack's attachable overlay
+# `llm_ollama`: the Galah broker (stack network), the backend (connected by
+# apiary-overlay-attach) and the host-side Ghidra units (through the Compose
+# forwarder ollama-loopback on 127.0.0.1:11434). The Compose Ollama in
+# analysis/ghidra stays behind the `legacy` profile as the rollback
+# (README.md).
+#
+# One owner of the GPU at a time: while the #3706 benchmark runs, this stack
+# is paused (`ops/swarm/stackctl.py pause llm`). Swarm does not see the
+# benchmark's device request, so the pause is the only guard.
+services:
+  ollama:
+    # A version bump is a re-qualification event (#2062, analysis/ghidra/
+    # models/approved-models.json). 0.40 migrates the model store
+    # (models/manifests-v2), so this service never mounts the 0.34.4
+    # benchmark volume ghidra_ollama_models (README.md).
+    image: ollama/ollama:0.40.16@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    labels:
+      apiary.swarm.migration: llm
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Same server settings as the Compose Ollama (docker-compose.ghidra.yml
+      # explains each one).
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_CONTEXT_LENGTH: "32768"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - type: volume
+        source: models
+        target: /root/.ollama
+      # The device request the NVIDIA runtime honours for an unprivileged
+      # swarm task (accept-nvidia-visible-devices-as-volume-mounts = true,
+      # docs/SWARM-GPU.md). The reservation below is the scheduler's
+      # accounting; this mount hands the card to the container.
+      - type: bind
+        source: /dev/null
+        target: /var/run/nvidia-container-devices/GPU-18a00c7e-670a-c305-a2aa-20e3a71917a3
+        read_only: true
+    networks:
+      ollama:
+        aliases: [ollama]
+    healthcheck:
+      test: [CMD, ollama, ps]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == true
+      resources:
+        reservations:
+          generic_resources:
+            - discrete_resource_spec:
+                kind: NVIDIA-GPU
+                value: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 180s
+        failure_action: rollback
+        order: stop-first      # one GPU: start-first would wait forever
+      rollback_config:
+        parallelism: 1
+        monitor: 180s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: unit
+        apiary.pause.reason: "one GPU owner at a time: paused while the #3706 benchmark (or the legacy Compose Ollama) holds the card"
+volumes:
+  models:
+    # Seeded on the homeserver from ghidra_ollama_models with reflink copies
+    # of the consumers' models (README.md); not created by the stack.
+    external: true
+    name: llm_ollama_models
+networks:
+  ollama:
+    driver: overlay
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.30.0/24
+    attachable: true
+    internal: true
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"

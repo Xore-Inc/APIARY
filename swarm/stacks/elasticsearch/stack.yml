@@ -1,0 +1,123 @@
+# #3596 (swarm phase 9 leg D, epic #3587): the one Elasticsearch node as a
+# stack pinned to the homeserver, the last and largest stateful move.
+#
+# Data: the Compose volume honeypot-elk_es-data (138 GB) is reused in place as
+# an external volume, never copied. One node per data path, ever: ES holds
+# node.lock, and a second node on the same path fails at best. So this file
+# first lands with replicas: 0, the cutover stops the Compose hp-elasticsearch
+# (kept, profile legacy) before the scale-up, and updates are stop-first.
+#
+# Network: only the D2 overlay apiary-es (10.200.101.0/24, internal, encrypted,
+# attachable, created by hand, #3582). Swarm consumers (the kibana stack,
+# later backend-api) reach it as `elasticsearch` there. The Compose consumers
+# (Filebeat, Arkime, EveBox, the backend and its workers, ml-worker, ...)
+# keep http://elasticsearch:9200 on honeynet / honeypot-llm-data: the
+# honeypot-elk service `elasticsearch-shim` answers under that name on both
+# bridges and forwards to elasticsearch_es:9200 here. Only the shim joins the
+# overlay, so no consumer depends on the swarm at boot (#3837).
+#
+# 9200 is NEVER published: portbridge forwards the public 9200 to 10.8.0.2
+# for the elasticpot decoy. Nothing here publishes a port at all.
+services:
+  es:
+    # Same digest as the Compose rollback: the same data path is opened by the
+    # same version either way, no on-disk upgrade in either direction.
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6@sha256:79b4f1de4c15e6eca824723086a51e5934406d614d410cc11be77748cafac537
+    labels:
+      apiary.swarm.migration: elasticsearch
+    # Identical to the Compose service (arcane/home/honeypot-elk/compose.yml).
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms6g -Xmx6g
+      ingest.geoip.downloader.enabled: "false"
+      path.repo: /snapshots
+      # The heap is locked in RAM (#240). A lost lock does not stop a
+      # single-node ES from starting, so check _nodes?filter_path=**.mlockall
+      # after every deploy. Swarm carries ulimits (phase 9 gate G1).
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - type: volume
+        source: data
+        target: /usr/share/elasticsearch/data
+      - type: bind
+        source: /opt/stacks/apiary/analysis/geoip
+        target: /usr/share/elasticsearch/config/ingest-geoip
+        read_only: true
+      # The fs snapshot repository honeypot-fs (location /snapshots).
+      - type: bind
+        source: /opt/stacks/apiary/state/elasticsearch-snapshots
+        target: /snapshots
+    networks:
+      es:
+        # Swarm consumers use `elasticsearch`; the Compose shim targets the
+        # service name elasticsearch_es, so it never resolves its own alias.
+        aliases: [elasticsearch]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      # Swarm replaces an unhealthy task itself. A translog replay after an
+      # unclean stop can outlast the Compose 60 s + 10 x 15 s, which would loop.
+      start_period: 300s
+    # #2339: at the 10 s default the node is SIGKILLed mid-flush.
+    stop_grace_period: 120s
+    cap_drop: [ALL]
+    cap_add: [IPC_LOCK]    # bootstrap.memory_lock
+    deploy:
+      mode: replicated
+      # Landed at 0 and scaled to 1 by hand after the Compose
+      # hp-elasticsearch had flushed and stopped (#3596 leg D cutover); this
+      # records the result.
+      replicas: 1
+      # No VIP: IPVS drops idle TCP after 900 s, which breaks the pooled
+      # client connections (backend, Filebeat, Kibana).
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          # #3913: 16 CPUs / 20G (heap stays 6g; the rest is page cache).
+          cpus: "16.0"
+          memory: 20G
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # longer than start_period + interval x retries (300 + 150 s)
+        monitor: 480s
+        # The fleet convention (lint). Same data path either way; after a
+        # version bump ES refuses older software on upgraded data, and the
+        # rollback then pauses (rollback_config) instead of looping.
+        failure_action: rollback
+        order: stop-first      # one node per data path (node.lock)
+      rollback_config:
+        parallelism: 1
+        monitor: 480s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "capture pipeline (scripts/honeypot-pause.sh NEVER, honeypot-elk): pausing it stalls every sensor's event write"
+
+networks:
+  es:
+    # The D2 overlay (#3582), created by hand once (ops/swarm/README.md),
+    # not by any stack.
+    external: true
+    name: apiary-es
+
+volumes:
+  # The Compose volume, reused in place (never copied).
+  data:
+    external: true
+    name: honeypot-elk_es-data

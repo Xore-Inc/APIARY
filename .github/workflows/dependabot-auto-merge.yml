@@ -58,67 +58,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # #2741: four times now, a dependabot frontend-next bump has resolved
-      # its lockfile with npm 11/12 (whatever dependabot's own service
-      # ships) and produced a package-lock.json that prunes optional-peer
-      # placements node:26-alpine's npm 11 -- the image the Dockerfile
-      # actually builds on -- still requires. quality.yml's own "lockfile
-      # installs under the image's npm" step (#1816) already catches this,
-      # loudly, but `main` carries no branch protection at all (checked
-      # live: `gh api repos/.../branches/main/protection` -> 404 "Branch
-      # not protected"), so nothing in the repo's actual required-checks
-      # configuration makes that loud failure block anything. The step
-      # below is the same #1816 has -- byte for byte -- run here instead,
-      # at the one choke point dependabot bumps actually go through: this
-      # job's own approve+auto-merge. `gh pr merge --auto` genuinely honors
-      # a branch's required status checks when they exist; since none are
-      # configured, this is the only gate a dependabot PR passes through
-      # before this workflow would otherwise wave it onto `main`
-      # unconditionally. Scoped to this workflow rather than turning on
-      # branch protection repo-wide, which would gate every PR (not just
-      # dependabot's) on a curated required-check list this issue was
-      # never asked to design.
-      #
-      # #2752: the pull and the install are split into their own steps with
-      # their own outcome. `docker run ... npm ci` used to fail identically
-      # whether npm ci genuinely rejected the lockfile or `docker pull
-      # node:26-alpine` itself failed first (Hub rate limit, a transient
-      # registry error, a runner network hiccup) -- so the "regenerate your
-      # lockfile" comment below fired even when the lockfile was never
-      # actually tested. Both failure classes still block auto-merge exactly
-      # as before (the gate itself is unchanged); only the human-facing
-      # message now says which one actually happened.
-      - name: Pull node:26-alpine (the Dockerfile's own image)
-        id: image-pull
-        if: >-
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          hashFiles('arcane/home/honeypot-dashboard/frontend-next/package-lock.json') != ''
-        continue-on-error: true
-        run: docker pull node:26-alpine
-
-      - name: "lockfile installs under the image's npm (#2741, mirrors #1816)"
-        id: lockfile-check
-        if: >-
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          hashFiles('arcane/home/honeypot-dashboard/frontend-next/package-lock.json') != '' &&
-          steps.image-pull.outcome == 'success'
-        continue-on-error: true
-        working-directory: arcane/home/honeypot-dashboard/frontend-next
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            -e HOME=/tmp -e npm_config_cache=/tmp/npm-cache \
-            -v "$PWD:/app" -w /app \
-            node:26-alpine npm ci --no-audit --no-fund
-
+      # #2741's npm-lockfile gate checked frontend-next's package-lock.json
+      # under node:26-alpine's npm. It left with frontend-next (#3749): this
+      # repo has no other npm project with a Dockerfile-pinned npm.
       - name: Approve patch and minor updates
         if: >-
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
            steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          steps.image-pull.outcome != 'failure' &&
-          steps.lockfile-check.outcome != 'failure' &&
           steps.zero-major.outputs.hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,8 +75,6 @@ jobs:
         if: >-
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
            steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
-          steps.image-pull.outcome != 'failure' &&
-          steps.lockfile-check.outcome != 'failure' &&
           steps.zero-major.outputs.hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -154,24 +98,6 @@ jobs:
             exit 0
           fi
           exit 1
-
-      - name: Leave the lockfile mismatch for a human
-        if: steps.lockfile-check.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          gh pr comment "$PR_URL" --body \
-            "Not auto-merging: this lockfile does not install under node:26-alpine's npm (the Dockerfile's own image), the recurring #2741 failure mode. Regenerate it under that image before merging -- see #2741's canonical command."
-
-      - name: Leave the registry pull failure for a human
-        if: steps.image-pull.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          gh pr comment "$PR_URL" --body \
-            "Not auto-merging: pulling node:26-alpine failed (registry rate limit, transient error, or a runner network hiccup) before the lockfile could even be tested. This is not a #2741 lockfile problem -- re-run this workflow (or push a new commit) to retry."
 
       - name: Leave the 0.x minor bump for a human
         if: steps.zero-major.outputs.hold == 'true'

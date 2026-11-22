@@ -1,0 +1,115 @@
+# #3596 (swarm phase 9 leg C): tanner's Redis as a stack pinned to the
+# homeserver.
+#
+# A pure LRU cache, ephemeral by design: no RDB, no AOF, no volume. A new
+# task starts empty, exactly like a restart of the Compose one. Tanner's
+# session keys are rebuilt from new traffic.
+#
+# The image is the upstream base the Compose build uses
+# (arcane/home/honeypot-tanner/tanner/redis/Dockerfile, same digest), and the
+# flags below are that build's redis.conf line by line, so nothing is built
+# for the swarm.
+#
+# Tanner (tanner, tanner_api, tanner_web) stays on Compose: its nested,
+# privileged Docker daemon cannot move (#3837 options). Those services keep
+# REDIS host `tanner_redis` (tanner/tanner/config.yaml): the Compose
+# project's `tanner_redis_relay`, a socat on tanner_local with that alias,
+# forwards to `tanner-redis_redis:6379` here. Only the relay joins this
+# overlay; apiary-overlay-attach starts it after a dockerd restart. 6379 is
+# never published: portbridge forwards that public port to 10.8.0.2 for the
+# decoys.
+#
+# The Compose tanner_redis stays as the rollback (profile legacy, container
+# hp-tanner-redis kept stopped). README.md has the cutover and the rollback,
+# and why the honeypot-tanner project is never synced by Arcane (#3878).
+services:
+  redis:
+    image: redis:8.10.3-alpine@sha256:71885d8cc6e42f2bc0aa2eb853bfc4be200b5108a46ac50e117ae1df0531fb80
+    labels:
+      apiary.swarm.migration: tanner-redis
+    # The Compose image's USER: starts as redis, so the entrypoint chowns
+    # nothing and no capability is needed.
+    user: redis
+    command:
+      - redis-server
+      - --bind
+      - 0.0.0.0
+      - --protected-mode
+      - "no"
+      - --port
+      - "6379"
+      - --timeout
+      - "0"
+      - --tcp-keepalive
+      - "300"
+      - --loglevel
+      - notice
+      - --databases
+      - "16"
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+    networks: [store]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    deploy:
+      mode: replicated
+      # Landed at 0 and was scaled to 1 by hand after the Compose
+      # hp-tanner-redis stopped (#3596 leg C cutover 2026-11-20, 9 s without
+      # a cache); this records the result.
+      replicas: 1
+      # No VIP: IPVS drops idle TCP after 900 s, which breaks tanner's
+      # pooled connections.
+      endpoint_mode: dnsrr
+      placement:
+        constraints:
+          - node.hostname == supermicro
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 5s
+        monitor: 60s
+        failure_action: rollback
+        max_failure_ratio: 0
+        # One cache; the relay would otherwise spread tanner over two.
+        order: stop-first
+      rollback_config:
+        parallelism: 1
+        delay: 0s
+        monitor: 60s
+        failure_action: pause
+        order: stop-first
+      labels:
+        apiary.pause: never
+        apiary.pause.reason: "part of the tanner group, NEVER in scripts/honeypot-pause.sh: the event sink and its cache stay up"
+networks:
+  store:
+    driver: overlay
+    attachable: true
+    internal: true
+    # Pinned inside the fleet pool (#3763); unique across stacks.
+    ipam:
+      config:
+        - subnet: 10.200.36.0/24
+    driver_opts:
+      com.docker.network.driver.overlay.encrypt: "true"
+      com.docker.network.driver.mtu: "1310"

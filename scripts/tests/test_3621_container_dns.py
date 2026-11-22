@@ -19,7 +19,7 @@ case "$1 $2" in
   'network inspect') printf 'hp-filebeat\\nhp-elasticsearch\\nbuilder\\n' ;;
   'container inspect')
     case "$3" in builder) echo '<no value>' ;; *)
-      case "$5" in *Labels*) echo app ;; *) echo 123 ;; esac ;;
+      case "$5" in *Labels*) echo app ;; *State.Running*) echo "${ES_RUNNING:-true}" ;; *) echo 123 ;; esac ;;
     esac ;;
   'restart hp-'*) echo "$2" >> "$TEST_DIR/restarted"
     grep -vx "$2" "$TEST_DIR/missing" > "$TEST_DIR/next"
@@ -43,6 +43,16 @@ if grep -Fxq "$name" "$TEST_DIR/missing"; then exit 10; fi
             self.assertEqual(rejoin.returncode, 0, rejoin.stderr)
             self.assertEqual((root / "restarted").read_text().splitlines(), ["hp-elasticsearch", "hp-filebeat"])
             self.assertEqual((root / "missing").read_text(), "")
+
+            # #3596 leg D: a stopped hp-elasticsearch is the legacy rollback of
+            # the elasticsearch stack and is never restarted by a rejoin.
+            (root / "restarted").unlink()
+            (root / "missing").write_text("hp-elasticsearch\n")
+            stopped = subprocess.run(["bash", str(SCRIPT), "rejoin"], env=dict(env, ES_RUNNING="false"),
+                                     capture_output=True, text=True)
+            # (A stopped container is no network member, so the generic loop
+            # below does not see it either; the stub lists it regardless.)
+            self.assertNotIn("rejoining hp-elasticsearch before consumers", stopped.stderr)
 
 
 if __name__ == "__main__":

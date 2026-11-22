@@ -203,7 +203,14 @@ and what was missing.
 
 The checks run on the collected tree, not on the remote side's own messages, so
 a collector that logs and carries on cannot produce a "successful" archive
-without them. A destination that is unplugged, not mounted, not writable or
+without them. The Keycloak dump is taken from whichever Postgres runs: the
+swarm task of `keycloak_postgres` (swarm phase 9, #3596) or the Compose
+`hp-keycloak-postgres`, resolved by `scripts/lib/task-container.sh` (the
+installer copies it to `/usr/local/libexec/apiary-task-container.sh`; the
+collector prepends it to its homeserver script). Neither running, both
+running, a failed `pg_dump` or a dump without its completion footer leaves no
+`keycloak.sql.gz`. The on-host `analysis/backup-honeypot.sh` uses the same
+helper and exits 1 in those cases, after writing the rest of its backup. A destination that is unplugged, not mounted, not writable or
 fails its checksum counts as a failed destination in the exit status; the
 `mountpoint -q` guard stays, and `/run`, `/run/media`, `/media` and `/mnt`
 themselves never count as a USB mount (the first is a tmpfs on every systemd
@@ -330,9 +337,9 @@ repository — `install-homeserver.conf.example` carries only placeholders.
      `admin-client-secret` -- the permanent master admin client since #3824):
      `root:root 0440`, directory `0750`
      (Postgres and Keycloak run as uid 1000).
-   - `oidc-client-secret` for `honeypot-dashboard` and `apiary-dashboard`:
+   - `oidc-client-secret` (and `actor-assertion.key`) for `apiary-dashboard`:
      `github-deploy-runner:deploy-runner 0440`, directory
-     `root:deploy-runner 0750`. dashboard-next runs as `node` and reads it
+     `root:deploy-runner 0750`. The dashboard runs unprivileged and reads them
      through `group_add`; with `0600` every sign-in fails with `EACCES`,
      which the UI reports as the identity provider not answering.
 
@@ -345,7 +352,10 @@ repository — `install-homeserver.conf.example` carries only placeholders.
    root. Reusing the original private key means the derived public key still
    matches the peer record on the far side, so **the VPS needs no WireGuard
    change at all** for the tunnel to come back.
-4. **Keycloak.** Bring up `hp-keycloak-postgres` alone, then
+4. **Keycloak.** (A rebuilt host bootstraps on Compose, `--profile legacy`;
+   where the swarm stack runs, scale `keycloak_keycloak` to 0 and use the task
+   of `keycloak_postgres` instead, see `swarm/stacks/keycloak/README.md`.)
+   Bring up `hp-keycloak-postgres` alone, then
    `gunzip -c keycloak/keycloak.sql.gz | docker exec -i hp-keycloak-postgres psql -U keycloak -d keycloak`.
    The dump is `--clean --if-exists`, so it drops and recreates. Start
    `hp-keycloak` only once the restore has finished. This is what saves the
@@ -413,8 +423,9 @@ needs (shared resources, enrichment directories, GeoIP profiles, backend ACLs,
 re-registration) are in that runbook, not here.
 
 Verify with `analysis/verify-stack.py` — `DASHBOARD_SERVICE_TOKEN` from the
-stack's `.env`; it judges source-health through dashboard-next's `/bff`
-passthrough and exits nonzero when anything is wrong.
+`honeypot-dashboard-backend` `.env`; it asks the backend's source-health
+directly (`docker exec` into `hp-apiary-backend`, or `--backend-url`) and
+exits nonzero when anything is wrong.
 
 ## The on-host copy
 

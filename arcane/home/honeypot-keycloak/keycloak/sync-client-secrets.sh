@@ -8,17 +8,13 @@
 # in docs/KEYCLOAK-OPERATIONS.md -- run this instead of copy-pasting kcadm
 # commands seven times by hand.
 #
-# The realm has 11 confidential clients total (#2368, #3578); the other 4 are NOT
+# The realm has 10 confidential clients total (#2368, #3578, #3834); the other 3 are NOT
 # handled here because none of them sit behind a VPS oauth2-proxy gateway.
 # Each of those has its own idempotent provisioner script and must be run
 # separately, alongside this one, as part of the same clean-rebuild pass --
 # see docs/KEYCLOAK-OPERATIONS.md §7:
-#   apiary-dashboard    native OIDC in the dashboard binary itself (no VPS
-#                        gateway since #1026's follow-up retired
-#                        oidc-dashboard) -- provision-dashboard-oidc-secret.sh
-#   apiary-dashboard-rewrite  the rewrite dashboard's own client (#3578), same
-#                        script with DASHBOARD_CLIENT_ID=apiary-dashboard-rewrite
-#                        -- provision-dashboard-oidc-secret.sh
+#   apiary-dashboard-rewrite  the dashboard's own client (#3578, native OIDC,
+#                        no VPS gateway) -- provision-dashboard-oidc-secret.sh
 #   arcane               Arcane's own OIDC login; reads its secret from a
 #                        homeserver .env file, not a VPS secrets file --
 #                        provision-arcane-oidc-secret.sh

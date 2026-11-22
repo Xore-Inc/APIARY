@@ -24,7 +24,7 @@
 # Reached from the VPS on public 8543 (portbridge, PROXY header).
 services:
   sonicwall-sma:
-    image: ghcr.io/xore-inc/honeypot-sonicwall-sma-honeypot@sha256:de7270b6d6acf268ff3219333bc788f9304ce66df0cc8fce274ffa7dc501acb1
+    image: ghcr.io/xore-inc/honeypot-sonicwall-sma-honeypot@sha256:fe459b97417956703e72035f89ac19f63acc30e70d6436880eef799b24ad74d7
     ports:
       - target: 8443
         published: 8543

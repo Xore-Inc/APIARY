@@ -1,6 +1,8 @@
 [Unit]
 Description=Belt-and-braces LAN-block iptables policy for the GHOSTS guest network (virbr-ghosts)
-After=libvirtd.service virtqemud.socket network-online.target
+# docker.service creates DOCKER-USER, which apply() inserts into. Without this
+# ordering the unit failed at boot once firewalld started first (#3742).
+After=libvirtd.service virtqemud.socket network-online.target docker.service
 Wants=network-online.target
 
 [Service]

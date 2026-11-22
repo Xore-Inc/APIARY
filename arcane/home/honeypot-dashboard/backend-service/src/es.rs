@@ -53,6 +53,42 @@ pub const EVENT_INDICES: &[&str] = &[
     "traefik-v1-*",
 ];
 
+/// Zeek's per-PDU Modbus log (`modbus_detailed.log`), from both Zeek
+/// instances. One document per Modbus request or response.
+///
+/// #3908: these indices held 197.6 M of the 333 M event documents on
+/// 2026-11-21 (59 %), growing by 14.5 M a day from 29 addresses that poll
+/// the ICS decoy without pause. Every fleet-wide aggregation paid for them:
+/// source-health spent 13 of its 14 s on these four shards alone.
+pub const MODBUS_DETAIL_INDICES: &[&str] = &["zeek-v1-modbus_detailed-*", "zeek-proxy-v1-modbus_detailed-*"];
+
+/// `EVENT_INDICES` without `MODBUS_DETAIL_INDICES`: what the fleet-wide
+/// aggregates read (#3908). Overview KPIs and panels, the hourly fleet,
+/// geo and ATT&CK rollups, source health, the explorer's facets and the
+/// filter-bar vocabularies count events *across the fleet*, and there the
+/// Modbus chatter of a handful of pollers drowned every other sensor and
+/// cost seconds per request.
+///
+/// Everything else keeps the full set: the event explorer, search, the ICS
+/// charts (which read their own indices), sensor pages and every per-IP,
+/// per-session or per-event read still list each PDU, so the data stays
+/// searchable. Source health reports the excluded documents separately
+/// (`modbus_pdus`), so its zeek totals stay explainable.
+///
+/// The `-` entries are Elasticsearch's index exclusion syntax and apply to
+/// the patterns listed before them, so they must stay last.
+pub const EVENT_INDICES_AGG: &[&str] = &[
+    "honeypot-v2-*",
+    "suricata-v2-*",
+    "portbridge-v2-*",
+    "zeek-v1-*",
+    "zeek-proxy-v1-*",
+    "huginn-v1-*",
+    "traefik-v1-*",
+    "-zeek-v1-modbus_detailed-*",
+    "-zeek-proxy-v1-modbus_detailed-*",
+];
+
 /// Every index family THIS TIER WRITES TO, as the index expressions
 /// `/readyz` asks Elasticsearch about (`Es::write_blocked`, #3317).
 ///
@@ -615,13 +651,34 @@ impl Es {
         self.search_index(EVENT_INDICES, body).await
     }
 
+    /// One `_search` against `EVENT_INDICES_AGG`: the event indices without
+    /// Zeek's per-PDU Modbus log (#3908). For fleet-wide aggregations only;
+    /// see `EVENT_INDICES_AGG` for which reads use it.
+    pub async fn search_agg(&self, body: Value) -> anyhow::Result<Value> {
+        self.search_index(EVENT_INDICES_AGG, body).await
+    }
+
     /// `_search` against arbitrary indices — the worker/store index
     /// families (campaigns-v1, attackers-v1, dashboard-*-v1, ...).
-    pub async fn search_index(&self, indices: &[&str], body: Value) -> anyhow::Result<Value> {
+    ///
+    /// #3912: relative `now-…` dates are pinned to absolute, minute-floored
+    /// timestamps first ([`absolute_time`]), and `size: 0` requests ask for
+    /// the shard request cache. Elasticsearch never caches a request that
+    /// uses `now`, so before this no dashboard aggregation was ever cached,
+    /// and a shard that has not changed since (every past daily index, and
+    /// every index no longer written) recomputed the same answer each time.
+    /// The rewrite happens here, at send time, so the bodies callers build
+    /// (and the `page_rollup` request fingerprints made from them) stay
+    /// stable across minutes.
+    pub async fn search_index(&self, indices: &[&str], mut body: Value) -> anyhow::Result<Value> {
+        absolute_time(&mut body, chrono::Utc::now());
+        let aggregation_only = body.get("size").and_then(Value::as_u64) == Some(0);
+        let aggregations = aggregation_names(&body);
         let response = self
             .client
             .search(SearchParts::Index(indices))
             .ignore_unavailable(true)
+            .request_cache(aggregation_only)
             .body(body)
             .send()
             .await?;
@@ -630,6 +687,9 @@ impl Es {
         if !status.is_success() {
             anyhow::bail!("elasticsearch {}: {}", status, json);
         }
+        // #3918: a 200 can still be a partial answer. Every search passes
+        // through here, so the one place that notices says which search it was.
+        warn_on_failed_shards(&format!("search over {} (aggs: {aggregations})", indices.join(",")), &json);
         Ok(json)
     }
 
@@ -812,12 +872,29 @@ impl Es {
     }
 }
 
+/// The names of a search body's aggregations, for log lines that have to say
+/// which search was partial.
+fn aggregation_names(body: &Value) -> String {
+    match body.get("aggs").or_else(|| body.get("aggregations")).and_then(Value::as_object) {
+        Some(aggs) => aggs.keys().cloned().collect::<Vec<_>>().join(","),
+        None => "none".to_string(),
+    }
+}
+
+/// How many shards a `_search` response reports as failed (0 when it has no
+/// `_shards`, like the placeholder of a skipped search). A caller that must
+/// not present a partial answer as complete asks this; see
+/// [`warn_on_failed_shards`] for why a 2xx is not enough.
+pub fn shards_failed(response: &Value) -> u64 {
+    response["_shards"]["failed"].as_u64().unwrap_or(0)
+}
+
 /// True when a `_search` response reports failed shards. ES answers 200 with
 /// partial results when a shard errors (e.g. a terms agg on a field mapped
 /// `text` in one index, #3570), so a 2xx alone does not mean the aggregations
 /// are complete. Logs a warning naming `context` and the first failure reason.
 pub fn warn_on_failed_shards(context: &str, response: &Value) -> bool {
-    let failed = response["_shards"]["failed"].as_u64().unwrap_or(0);
+    let failed = shards_failed(response);
     if failed == 0 {
         return false;
     }
@@ -830,6 +907,109 @@ pub fn warn_on_failed_shards(context: &str, response: &Value) -> bool {
         "elasticsearch search returned partial results; aggregations are incomplete"
     );
     true
+}
+
+/// Pins every relative date in a search body to an absolute UTC timestamp
+/// floored to the minute (#3912), so the request is cacheable.
+///
+/// Rewritten: the bounds of `range` queries (`gte`, `gt`, `lte`, `lt`,
+/// `from`, `to`) and of a date histogram's `extended_bounds` /
+/// `hard_bounds` (`min`, `max`), when they are `now`, `now-<n><unit>` or
+/// either with a `/<unit>` rounding, for units `s m h d w`. Anything else
+/// (an absolute date, a month or year offset, a range with its own
+/// `format`) is left as it is and simply stays uncacheable.
+///
+/// Within a minute of the original: `now-7d` becomes the minute 7 days ago,
+/// floored, so a window can start up to 59 s earlier. A bare `now` as an
+/// upper bound is ceiled instead, so nothing indexed in the current minute
+/// is cut off. Paired windows (`gte now-48h`, `lt now-24h`) floor both ends
+/// alike and still meet exactly. An explicit rounding keeps Elasticsearch's
+/// semantics: down to the start of the unit, except `gt` and `lte`, which
+/// round up to the unit's last millisecond.
+///
+/// The cache only pays off where the rewritten request is identical across
+/// minutes on a shard, and Elasticsearch rewrites a range that covers every
+/// document of a shard to a plain match before it computes the cache key,
+/// so a past daily index is answered from cache whatever minute it is.
+pub fn absolute_time(body: &mut Value, now: chrono::DateTime<chrono::Utc>) {
+    match body {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                match key.as_str() {
+                    "range" => {
+                        if let Value::Object(fields) = value {
+                            for spec in fields.values_mut() {
+                                pin_bounds(spec, &["gte", "gt", "lte", "lt", "from", "to"], now);
+                            }
+                        }
+                    }
+                    "extended_bounds" | "hard_bounds" => pin_bounds(value, &["min", "max"], now),
+                    _ => {}
+                }
+                absolute_time(value, now);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| absolute_time(item, now)),
+        _ => {}
+    }
+}
+
+fn pin_bounds(spec: &mut Value, keys: &[&str], now: chrono::DateTime<chrono::Utc>) {
+    let Some(spec) = spec.as_object_mut() else { return };
+    if spec.contains_key("format") {
+        return;
+    }
+    for key in keys {
+        let Some(expr) = spec.get(*key).and_then(Value::as_str) else { continue };
+        if let Some(at) = resolve_now(expr, key, now) {
+            spec.insert(key.to_string(), Value::String(at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()));
+        }
+    }
+}
+
+/// `expr` (date math relative to `now`) as an absolute instant, or `None`
+/// when it is not a form [`absolute_time`] rewrites.
+fn resolve_now(expr: &str, bound: &str, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Duration, DurationRound};
+    let unit = |u: &str| -> Option<Duration> {
+        Some(match u {
+            "s" => Duration::seconds(1),
+            "m" => Duration::minutes(1),
+            "h" | "H" => Duration::hours(1),
+            "d" => Duration::days(1),
+            "w" => Duration::weeks(1),
+            _ => return None,
+        })
+    };
+    let rest = expr.strip_prefix("now")?;
+    let (offset, rounding) = match rest.split_once('/') {
+        Some((offset, rounding)) => (offset, Some(unit(rounding)?)),
+        None => (rest, None),
+    };
+    let mut at = now;
+    if !offset.is_empty() {
+        let digits = offset.strip_prefix('-')?;
+        let split = digits.find(|c: char| !c.is_ascii_digit())?;
+        let (n, u) = digits.split_at(split);
+        let n: i32 = n.parse().ok()?;
+        at -= unit(u)? * n;
+    }
+    let minute = Duration::minutes(1);
+    Some(match rounding {
+        Some(step) => {
+            let start = at.duration_trunc(step).ok()?;
+            if matches!(bound, "gt" | "lte") {
+                start + step - Duration::milliseconds(1)
+            } else {
+                start
+            }
+        }
+        None if offset.is_empty() && matches!(bound, "lt" | "lte" | "to" | "max") => {
+            let floor = at.duration_trunc(minute).ok()?;
+            if floor == at { floor } else { floor + minute }
+        }
+        None => at.duration_trunc(minute).ok()?,
+    })
 }
 
 #[cfg(test)]
@@ -974,6 +1154,20 @@ mod tests {
     }
 
     #[test]
+    fn shards_failed_reads_the_count_and_defaults_to_zero() {
+        assert_eq!(shards_failed(&serde_json::json!({"_shards": {"total": 5, "successful": 1, "failed": 4}})), 4);
+        assert_eq!(shards_failed(&serde_json::json!({"_shards": {"total": 5, "successful": 5, "failed": 0}})), 0);
+        assert_eq!(shards_failed(&serde_json::json!({})), 0);
+    }
+
+    #[test]
+    fn the_aggregation_names_say_which_search_was_partial() {
+        assert_eq!(aggregation_names(&serde_json::json!({"aggs": {"alerts": {}, "ports": {}}})), "alerts,ports");
+        assert_eq!(aggregation_names(&serde_json::json!({"aggregations": {"a": {}}})), "a");
+        assert_eq!(aggregation_names(&serde_json::json!({"query": {}})), "none");
+    }
+
+    #[test]
     fn failed_shards_are_detected_and_clean_responses_are_not() {
         let partial = serde_json::json!({"_shards": {"total": 5, "successful": 4, "failed": 1,
             "failures": [{"reason": {"reason": "Text fields are not optimised"}}]}});
@@ -1068,5 +1262,78 @@ mod tests {
     fn empty_keep_list_still_produces_a_valid_query() {
         let body = Es::except_query(&[]);
         assert_eq!(body["query"]["bool"]["must_not"][0]["ids"]["values"], serde_json::json!([]));
+    }
+
+    /// #3908: the aggregate list is the read list minus the per-PDU Modbus
+    /// log, nothing else. An index family added to EVENT_INDICES but not
+    /// here would vanish from every fleet-wide count silently, and an
+    /// exclusion listed before its pattern would exclude nothing.
+    #[test]
+    fn aggregate_indices_are_the_event_indices_minus_modbus_detail() {
+        let (included, excluded): (Vec<&str>, Vec<&str>) =
+            EVENT_INDICES_AGG.iter().partition(|index| !index.starts_with('-'));
+        assert_eq!(included, EVENT_INDICES.to_vec());
+        let excluded: Vec<&str> = excluded.iter().map(|index| &index[1..]).collect();
+        assert_eq!(excluded, MODBUS_DETAIL_INDICES.to_vec());
+        let first_exclusion = EVENT_INDICES_AGG.iter().position(|index| index.starts_with('-')).unwrap();
+        assert_eq!(first_exclusion, EVENT_INDICES.len(), "exclusions must follow every pattern they apply to");
+        assert!(MODBUS_DETAIL_INDICES.iter().all(|index| index.contains("modbus_detailed")));
+    }
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn absolute_time_floors_relative_bounds_to_the_minute() {
+        let now = at("2026-11-21T19:43:27.512Z");
+        let mut body = serde_json::json!({
+            "size": 0,
+            "query": {"bool": {"filter": [
+                {"range": {"@timestamp": {"gte": "now-48h", "lt": "now-24h"}}},
+                {"range": {"@timestamp": {"gte": "now-10m", "lte": "now"}}},
+                {"range": {"held_ms": {"gte": 100, "lt": 200}}},
+                {"range": {"@timestamp": {"gte": "now-7d", "format": "strict_date_optional_time"}}},
+                {"range": {"@timestamp": {"gte": "now-1M"}}},
+                {"range": {"@timestamp": {"gte": "2026-11-01T00:00:00Z"}}}
+            ]}},
+            "aggs": {
+                "hourly": {"date_histogram": {"field": "@timestamp", "fixed_interval": "1h",
+                    "extended_bounds": {"min": "now-23h/h", "max": "now/h"}}},
+                "sizes": {"range": {"field": "bytes", "ranges": [{"from": 0, "to": 10}]}}
+            }
+        });
+        absolute_time(&mut body, now);
+        let f = &body["query"]["bool"]["filter"];
+        assert_eq!(f[0]["range"]["@timestamp"], serde_json::json!({"gte": "2026-11-19T19:43:00.000Z", "lt": "2026-11-20T19:43:00.000Z"}));
+        assert_eq!(f[1]["range"]["@timestamp"], serde_json::json!({"gte": "2026-11-21T19:33:00.000Z", "lte": "2026-11-21T19:44:00.000Z"}));
+        assert_eq!(f[2]["range"]["held_ms"], serde_json::json!({"gte": 100, "lt": 200}));
+        assert_eq!(f[3]["range"]["@timestamp"]["gte"], "now-7d", "a range with its own format is left alone");
+        assert_eq!(f[4]["range"]["@timestamp"]["gte"], "now-1M", "month offsets are left alone");
+        assert_eq!(f[5]["range"]["@timestamp"]["gte"], "2026-11-01T00:00:00Z");
+        assert_eq!(body["aggs"]["hourly"]["date_histogram"]["extended_bounds"],
+            serde_json::json!({"min": "2026-11-20T20:00:00.000Z", "max": "2026-11-21T19:00:00.000Z"}));
+        assert_eq!(body["aggs"]["sizes"]["range"]["ranges"], serde_json::json!([{"from": 0, "to": 10}]));
+    }
+
+    #[test]
+    fn absolute_time_keeps_elasticsearch_rounding_semantics() {
+        let now = at("2026-11-21T19:43:27Z");
+        let mut body = serde_json::json!({"query": {"range": {"t": {"gt": "now-1d/d", "lte": "now/h", "lt": "now/d", "gte": "now-2w"}}}});
+        absolute_time(&mut body, now);
+        assert_eq!(body["query"]["range"]["t"], serde_json::json!({
+            "gt": "2026-11-20T23:59:59.999Z",
+            "lte": "2026-11-21T19:59:59.999Z",
+            "lt": "2026-11-21T00:00:00.000Z",
+            "gte": "2026-11-07T19:43:00.000Z"
+        }));
+        // An instant already on the minute is its own ceiling.
+        let mut edge = serde_json::json!({"range": {"t": {"lt": "now"}}});
+        absolute_time(&mut edge, at("2026-11-21T19:43:00Z"));
+        assert_eq!(edge["range"]["t"]["lt"], "2026-11-21T19:43:00.000Z");
+        // The same body pins to the same request all minute long.
+        let pin = |s| { let mut b = serde_json::json!({"range": {"t": {"gte": "now-7d"}}}); absolute_time(&mut b, at(s)); b };
+        assert_eq!(pin("2026-11-21T19:43:01Z"), pin("2026-11-21T19:43:59Z"));
+        assert_ne!(pin("2026-11-21T19:43:59Z"), pin("2026-11-21T19:44:00Z"));
     }
 }

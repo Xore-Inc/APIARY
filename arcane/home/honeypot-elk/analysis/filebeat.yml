@@ -202,6 +202,14 @@ filebeat.inputs:
     # content-hash window can.
     id: zeek-logs
     file_identity.native: ~
+    # #3912: close a harvester as soon as it reaches EOF. With
+    # harvester_limit (#3284) and ignore_older 72h, a restart opens 64
+    # harvesters on finished hourly rotations that are already at EOF, and
+    # they never close on inactivity because they never read a line, so the
+    # live files never get a harvester: zeek ingest stopped for good after
+    # the 2026-11-21 22:41Z restart. A finished rotation is done at EOF; the
+    # live file is reopened at its offset on the next scan.
+    close.reader.on_eof: true
     # #3284: this directory accumulates ~13,700 hourly rotation files (2026-09-03
     # onward) and nothing prunes them, so every restart made filestream open a
     # harvester per file until the Go runtime hit its 10000-thread limit. The
@@ -235,6 +243,14 @@ filebeat.inputs:
     # identity is immune to it because it never hashes file content.
     id: zeek-proxy-logs
     file_identity.native: ~
+    # #3912: close a harvester as soon as it reaches EOF. With
+    # harvester_limit (#3284) and ignore_older 72h, a restart opens 64
+    # harvesters on finished hourly rotations that are already at EOF, and
+    # they never close on inactivity because they never read a line, so the
+    # live files never get a harvester: zeek ingest stopped for good after
+    # the 2026-11-21 22:41Z restart. A finished rotation is done at EOF; the
+    # live file is reopened at its offset on the next scan.
+    close.reader.on_eof: true
     # #3284: same cap as zeek-logs, same reason -- this glob matches 834
     # accumulated hourly rotations and one harvester per file is what exhausts
     # the runtime's thread limit on restart.
@@ -413,9 +429,9 @@ filebeat.inputs:
   # The BFF tier's stream carries named outcomes (auth started/failed/
   # completed and everything else routed through recordNamedEvent), not one
   # line per request; username deliberately never appears among the fields.
-  # *.jsonl, not app.jsonl: during the standalone dashboard's cutover both
-  # frontends write here, dashboard-next to app.jsonl and Xore/apiary-dashboard
-  # to rewrite.jsonl, one file each so neither races the other's rotation.
+  # *.jsonl, not app.jsonl: Xore/apiary-dashboard writes rewrite.jsonl here.
+  # The legacy dashboard-next wrote app.jsonl until #3749 removed it; the glob
+  # still picks up that file's remainder.
   # Rotated generations (*.jsonl.1) do not match, so nothing is read twice.
   - type: filestream
     id: dashboard-bff-app
@@ -647,6 +663,30 @@ output.elasticsearch:
     # backend-service's flow_family() date-tail regex): zeek-v1-conn-2026.10.01
     # holds all of October. Retention for it is zeek-60d (see
     # elasticsearch-setup.sh), so each month is kept 30-60 days.
+    #
+    # #3912: except conn, which gets one index a DAY again. It is the
+    # largest log by far (zeek-v1-conn-2026.11.01 held 30 M documents / 20 GB
+    # three weeks in, more than every other non-Modbus zeek index together)
+    # and what the dashboard's zeek aggregations read. A shard that is
+    # written to is invalidated in Elasticsearch's request cache at every
+    # 5 s refresh, so with a monthly index the whole month-to-date was
+    # recomputed on every request; with a daily one only today is, and
+    # every earlier day is answered from cache. One shard a day x
+    # zeek-60d's delete age is the whole shard cost, which
+    # tests/docs/test_3283_shard_budget.py counts. zeek-proxy-v1-conn (a
+    # quarter of the size, and not read by the conn-only charts) stays
+    # monthly: daily for both families projects 776 primary shards at the
+    # shipped 30-day retention, over that test's 750 budget. The name keeps the
+    # yyyy.MM.dd shape, so zeek-v1-conn-* and every consumer pattern still
+    # match; the monthly conn indices written before stay as they are and
+    # age out under the same policy. This rule must stay above the
+    # monthly one: Filebeat uses the first rule that matches.
+    - index: "zeek-v1-conn-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            logset: "zeek"
+        - equals:
+            zeek_log: "conn"
     - index: "zeek-v1-%{[zeek_log]}-%{+yyyy.MM}.01"
       when.equals:
         logset: "zeek"

@@ -71,111 +71,25 @@ Suricata, and dead-letter data views plus the **XORE Honeypot — enriched
 investigation** dashboard. Panels cover recent attacks, OT personas,
 commands/credentials, payloads, enriched IDS alerts, and ingest failures.
 
-- **Dashboard** (built in) → `https://honeypot.<domain>`, authenticated via
-  its own native OIDC session against Keycloak directly (no gateway hop,
-  unlike the investigation UIs below -- #1026). Live
-  KPIs, feed-freshness states, per-sensor/protocol counts, top IPs/creds/commands,
-  payload downloads, attack chains, and 7-day `/24`/`/64` campaign correlation
-  scored across sensors, credentials, ports, IDS alerts, and payload hashes.
-  The interface is organized as an operations console rather than a shortcut
-  collection: task-based navigation separates monitoring, investigation, and the
-  Elasticsearch archive. Four top-level overview tabs group live operations,
-  the threat landscape, attacker behavior, and evidence/campaigns so only one
-  workflow is visible at a time; the selected tab survives live refreshes.
-  Every KPI and ranked value pivots directly into the relevant
-  investigation, while explanatory labels make states and metrics usable
-  without a separate legend. The responsive navigation becomes an accessible
-  menu on narrow displays, and light, dark, and automatic themes remain
-  available.
-  The frontend follows the shared [**Xore/theme**](https://github.com/Xore/theme)
-  design system (migration guide:
-  [MIGRATE-HONEYPOT-STACK.md](https://github.com/Xore/theme/blob/main/docs/MIGRATE-HONEYPOT-STACK.md)):
-  a semantic, server-rendered application shell (toolbar, sidebar, main
-  canvas, command bar) styled only by the byte-identical vendored `theme.css`.
-  APIARY does not carry a custom dashboard stylesheet; new selectors are
-  implemented in `Xore/theme` and re-vendored. The theme and Leaflet are
-  served from the dashboard binary rather than a JavaScript CDN.
-  The fixed desktop sidebar becomes a compact rail and then an off-canvas
-  navigation panel on narrow screens, while the 32px application toolbar keeps
-  activity, health, and theme controls (dark, light, system) available across
-  every investigation page.
-  The command bar also routes IP addresses, payload hashes, session IDs, ASNs,
-  HTTP paths, and free-text input directly to the appropriate investigation.
-  Event results use server-side pagination (25 rows by default; `per_page`
-  accepts 25–500).
-  Every longer table and API-fed list initially displays 25 entries, then
-  reveals the next 25 near the end of the page or through an accessible
-  **Load 25 more** control. This also covers payloads, alerts, sandbox results,
-  commands, source lists, and Elasticsearch dead letters. Payload, event, and
-  attack-source rows are fetched from the server in 25-row chunks, avoiding
-  large initial HTML responses even when an inventory contains thousands of
-  records.
-  Attacker profiles combine network enrichment, behavior aggregates, and a
-  chronological progression view. `/sessions/<id>` provides an oldest-to-newest
-  session replay, and both views add conservative MITRE ATT&CK Enterprise/ICS
-  behavior mappings with links and explicit evidence (behavior context, never
-  actor attribution). `/clusters` finds fingerprints, payloads, ASNs, and
-  provider classes shared by multiple source IPs. Campaign rows now explain
-  exactly which cross-sensor, credential, payload, alert, or fingerprint factors
-  produced their correlation score. The navbar alert badge shows unacknowledged
-  alert state, while source health uses neutral metric tiles for feeds,
-  Elasticsearch, Filebeat, and dead letters.
-  `/api/v1/campaigns` exposes the same correlation data. A balanced recent feed
-  prevents one noisy sensor from hiding lower-volume sensors. The
-  portbridge connection log is used only to recover real source IPs; it is not
-  counted as a sensor or displayed as an event.
-  The overview attack map uses the vendored Leaflet 1.9.4 client with a
-  hardcoded OpenStreetMap raster basemap and GeoLite2 City/ASN coordinates
-  from `/api/map-points`. Attack origins are geographic circles whose physical
-  radius is weighted by event count, so their displayed size changes naturally
-  with zoom. Hover shows IP/city/ASN/provider details and selecting a circle
-  opens every event for that attacker. Live refreshes retain the Leaflet map DOM
-  and update only its GeoJSON layer, preserving pan and zoom. If the map library
-  or tiles fail, the current OpenStreetMap container remains visible with an
-  availability message; there is no local basemap fallback.
-  #2425: `HONEYPOT_MAP_TILE_URL` / `HONEYPOT_MAP_ATTRIBUTION` are gone --
-  they fed the retired Go dashboard's server-side template; the Leaflet layer
-  hardcodes both values outright (`frontend-next/src/components/
-  OverviewPanels.tsx`), so there is no basemap env surface to set anymore.
-  The hourly activity chart also exposes exact counts on hover/focus. The 24-hour
-  KPI compares activity with the preceding 24 hours and labels large changes;
-  source health reports dashboard process uptime and memory (RSS + virtual)
-  as the runtime card on `/api/v1/source-health` — the Go heap/goroutine
-  figures that card used to show have no Rust equivalent and are gone.
-  Event metadata is directly pivotable: sessions, HASSH/JA3/JA4/User-Agent
-  fingerprints, exact commands and credentials, HTTP paths, IDS signatures and
-  categories, payload hashes, ASNs, organizations, and provider classes all
-  open their related events. Source-health tail counts open normalized events;
-  Elasticsearch source totals open a pre-populated historical query.
-  Management-ready A4 PDF reports are available from the overview, alert
-  center, campaign view, attacker profiles, sessions, and every filtered Event
-  Explorer result. `/export/report.pdf` applies the same filters as Event
-  Explorer, including source IP/CIDR, ASN, organization/provider, country,
-  sensor, signature/category, payload, session, protocol/port, HTTP path,
-  fingerprint, and time window. Reports contain an executive risk summary,
-  ranked sources and indicators, operational alert state, recommendations, and
-  a bounded representative-evidence appendix. Report downloads require the
-  dashboard's own Keycloak-derived `admin` role because they contain hostile-source telemetry.
-  The overview also ranks fingerprints, ASNs, and provider classes with the
-  same one-click pivots.
-  ASN/provider pivots,
-  `/commands` session-aware command analysis, and `/payload-analysis/<hash>`
-  with bounded hashes, entropy, hex, strings, PE/ELF and script classification,
-  behavior indicators, packing likelihood, extracted URL/domain/IP indicators,
-  real YARA rule matches from a networkless, read-only scanner, risk scoring, and
-  Base64/hex/URL/PowerShell UTF-16 decoding. Payload inventory scans run in the
-  background and refresh every two minutes, so walking large capture volumes
-  cannot block `/payloads`; source filters and duplicate provenance are
-  preserved. Download event rows link directly to the matching static report. `/history` adds
-  Elasticsearch search/export; `/source-health` shows Filebeat/Elasticsearch
-  diagnostics. Alerts have persistent cooldown/acknowledgment, live refresh uses
-  SSE, and events pivot directly to Kibana, EveBox, Arkime, and VirusTotal.
-  Event tables support keyboard-accessible sorting, selectable columns, and an
-  expandable normalized-row JSON view; live events on investigation pages raise
-  a transient notification. Browser API contracts live in
-  `arcane/home/honeypot-dashboard/frontend-next`
-  as strict TypeScript and compile to the committed, dependency-free production
-  bundle, so Node.js is only a development tool and never part of the container.
+- **Dashboard** → `https://honeypot.<domain>`, served since 2026-10-30 by
+  [Xore-Inc/apiary-dashboard](https://github.com/Xore-Inc/apiary-dashboard)
+  (Arcane project `apiary-dashboard`, container `hp-apiary-dashboard` on
+  `10.8.0.2:19092`). It authenticates with its own native OIDC session
+  against Keycloak directly (client `apiary-dashboard-rewrite`; no gateway
+  hop, unlike the investigation UIs below, #1026) and reads everything
+  through its server functions from `backend-service`; the browser never
+  talks to Elasticsearch. Its pages, features, themes (Astryx, in that repo's
+  `src/themes/`) and visual decisions (`DESIGN.md`, `PRODUCT.md`) are
+  documented in that repository, not here. Browser API contracts live there
+  too (`src/data/contracts`), pinned against this repo's `openapi.json`.
+  What this repo still owns for it is the API surface: server-side
+  pagination, `/api/v1/campaigns` correlation data, map points, payload
+  analysis, reports and the rest of the `backend-service` routes. Report
+  downloads, alert acknowledgements and captured-malware downloads require
+  the dashboard's own Keycloak-derived `admin` role; anyone without it is a
+  read-only viewer. (The feature tour this bullet used to carry described the
+  retired in-repo dashboards, the Go dashboard and then `frontend-next`
+  (#3749); it is in git history before #3834.)
 - **Operational APIs** — `/metrics` exposes Prometheus text metrics for event,
   sensor, ingestion, Filebeat, runtime, dead-letter, and YARA health.
   `/dead-letters` investigates rejected Elasticsearch documents, and
@@ -183,8 +97,6 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   are readable through the generic index-store route
   `/api/v1/store/intelligence` (there is no dedicated intelligence route
   in the Rust router).
-  Alert acknowledgements and captured-malware downloads require the
-  dashboard's own Keycloak-derived `admin` role.
 - **Safe payload triage** — `yara-scanner` inventories all mounted Dionaea,
   Cowrie, and script captures without network access or execution. Its results
   enrich `/payloads`, static-analysis reports, risk scores, alerts, and health.
@@ -390,10 +302,12 @@ scripts/verify-deploy.sh --healthz-exec \
 # Without one, name the expected revision yourself:
 scripts/verify-deploy.sh --behind-days 0 "$(git rev-parse origin/main)" \
   --healthz-exec 'docker exec hp-apiary-backend curl -sf http://127.0.0.1:8081/healthz'
-
-# The frontend's form:
-scripts/verify-deploy.sh --healthz-url http://host:19090/build.json
 ```
+
+The dashboard (Xore-Inc/apiary-dashboard) carries its revision in the image
+label `org.opencontainers.image.revision` (`docker inspect
+hp-apiary-dashboard`). `--healthz-url` works for any endpoint whose JSON body
+carries `revision`.
 
 Exit codes are the point, and are deliberately three-valued: **0** the
 deployed revision matches; **1** a finding (missing, unstamped, malformed, or
@@ -454,6 +368,43 @@ of leaving an operator to compare N identical percentages by hand. Shape:
 `elasticsearch-data` alerts (from `_cat/allocation`, since `es-data` is a
 stack-private volume never bind-mounted cross-stack) are unaffected --
 there is only ever one of them per check.
+
+## Stopped containers and `hp-docker-hygiene` (#3658, #3841)
+
+`hp-docker-hygiene` (`arcane/home/honeypot-utilities/analysis/docker-hygiene.sh`)
+removes stopped containers 5 minutes after it starts and weekly after that
+(plus an age-bounded dangling-image prune). A stopped container is removed
+unless it is protected by one of two labels:
+
+| Label | Set by | Effect |
+| --- | --- | --- |
+| `com.docker.compose.project` | Compose, automatically | Never removed (#3658). A stopped compose service is still part of its stack. |
+| `apiary.hygiene=keep` | You, at `docker create` / `docker run` time | Never removed (#3841). The opt-out for containers made outside Compose. |
+
+The value must be exactly `keep`; another value, or no value, does not opt
+out. Labels cannot be added to an existing container: to protect one,
+recreate it with `--label apiary.hygiene=keep`. A container made with
+`docker create` and meant to be started and stopped by hand (a benchmark
+Ollama, a rollback copy kept for a few days) needs the label, or the next
+hygiene pass deletes it together with its writable layer.
+
+```bash
+docker create --name my-benchmark --label apiary.hygiene=keep ...
+```
+
+The pass lists the stopped containers (`created`, `exited`, `dead`) and the
+two protected sets, then deletes the difference with `DELETE
+/containers/{id}` (no force, no volume removal). It does not use `POST
+/containers/prune` because prune cannot express "skip the compose label or
+the keep label": repeated `label!` values are ANDed, so
+`label!=[compose, keep]` only spares a container that carries both. If any
+of the three listing requests fails, the pass removes nothing and says so in
+the log. The log line to look for is
+`docker-hygiene: containers: N removed, K kept (apiary.hygiene=keep), M kept (compose-managed), F failed`.
+
+`HYGIENE_SCOPE_LABEL=key=value` (unset in the stack) restricts the removal
+candidates to containers that also carry that label. It exists to exercise
+the real script against throwaway containers.
 
 ## Pausing decoys to free host CPU (#3135)
 
@@ -583,20 +534,21 @@ partial set — it takes the named stacks whole, in dependency order.
 | `honeypot-cowrie` | `hp-cowrie`, `hp-honeyfs-implant` | `hp-honeyfs-implant` is the FUSE server serving cowrie's fake filesystem. Freezing the implant alone hangs every filesystem operation inside a live session. Resume implant first, cowrie second. |
 | `honeypot-dionaea` | `hp-dionaea`, `hp-tftp-relay` | The largest single decoy (~369 MiB, ~14% CPU) and the one most worth pausing. `hp-tftp-relay` is stack-internal, and dionaea holds an internal MySQL plus live sessions. Never dionaea alone. |
 | `honeypot-galah` | `hp-galah`, `hp-galah-llm-broker` | `hp-galah` proxies its LLM calls through the broker. Freezing the broker alone makes galah's own decoy paths fail in a way that looks like a *broken* decoy rather than a stand-down. |
-| `honeypot-canarytokens` | `hp-canarytokens-http-router`, `-frontend`, `-adapter`, `-switchboard`, `-redis` | Internal chain router → adapter → switchboard → redis. A partial pause leaves the switchboard blocked on a frozen redis. |
+| `honeypot-canarytokens` | `hp-canarytokens-http-router`, `-frontend`, `-adapter`, `-switchboard`, `-redis-relay` (the Redis is the swarm stack `canarytokens-redis`, `apiary.pause: unit`, #3596) | Internal chain router → adapter → switchboard → redis. A partial pause leaves the switchboard blocked on a frozen redis. |
 
 #### Never pause
 
 | Stack | Containers | Reason |
 | --- | --- | --- |
 | `honeypot-elk` | `hp-elasticsearch`, `hp-filebeat`, `hp-zeek-proxy`, `hp-arkime-capture`, `hp-arkime-viewer`, `hp-kibana`, `hp-evebox`, `hp-pcap-sync`, `hp-extracted-file-importer` | The capture pipeline. Freezing `arkime-capture`/`zeek-proxy`/`pcap-sync` stops packet capture at the point of arrival — silent data loss. Freezing `hp-elasticsearch` stalls every sensor's event write. Not a decoy; it is what makes the decoys worth running. Highest single allocation on the host (~10.6 GiB) and the least safe to interrupt. |
-| `honeypot-dashboard` | `hp-dashboard-next`, `hp-dashboard-oidc-sessions`, `hp-apiary-backend-mounted` | The operator surface. A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `apiary-dashboard` | `hp-apiary-dashboard`, `hp-apiary-dashboard-oidc-sessions-relay` (its session store is the swarm stack `dashboard-sessions`, `apiary.pause: unit`, #3596) | The operator surface (Xore-Inc/apiary-dashboard). A frozen dashboard means you cannot observe the stand-down you are performing — which defeats the point of recording it. |
+| `honeypot-dashboard` | `hp-apiary-backend-mounted` | The mounted write API (analyzer submissions, Workbench). Freezing it makes every submission hang instead of failing cleanly. |
 | `honeypot-backend-workers` | `hp-apiary-worker`, `-worker-enrichment`, `-worker-importer`, `-worker-payload-inventory`, `hp-services-adapter` | The ES write consumers and the service-control adapter (#3575). Freezing the workers buffers Elasticsearch bulk queues; a frozen adapter makes every service action hang. |
 | `honeypot-dashboard-backend` | `hp-apiary-backend` | Auth and API surface. A frozen backend fails every dashboard and CLI call with a hang, not a clean error. |
 | `honeypot-keycloak` | `hp-keycloak`, `hp-keycloak-postgres` | Identity tier. Dashboard, Arcane and the OIDC login tests all authenticate through it. |
 | `honeypot-arcane` | `hp-arcane` | GitOps control plane — the container that would *re-create* a paused decoy on its next sync, so freezing it is arguably necessary. But it is also what reconciles the fleet, and a control plane held frozen across a long leg cannot report or repair drift. Reconcile first, pause decoys, do not freeze the orchestrator. |
 | `honeypot-utilities` | `hp-docker-socket-proxy`, `hp-disk-space-monitor`, `hp-docker-hygiene`, `hp-log-maintenance`, `hp-reporter` | Host watchdogs. Freezing the disk and hygiene monitors during exactly the memory-hungry leg they exist to catch removes the guard against the failure you are creating. `hp-docker-socket-proxy` is also the socket autoheal drives. |
-| `honeypot-tanner` | `hp-tanner`, `hp-tanner-api`, `hp-tanner-web`, `hp-tanner-redis`, `hp-tanner-docker`, `hp-tanner-phpox`, `hp-snare` | Event sink, not a decoy. cowrie and dionaea POST events here, so freezing it makes live sensors error on their own event path, and `hp-tanner-redis` holds session state in flight. Analysis of collected events is exactly what a leg must not interrupt. |
+| `honeypot-tanner` | `hp-tanner`, `hp-tanner-api`, `hp-tanner-web`, `hp-tanner-redis-relay`, `hp-tanner-docker`, `hp-tanner-phpox`, `hp-snare` (the cache is the swarm stack `tanner-redis`, `apiary.pause: never`, #3596) | Event sink, not a decoy. cowrie and dionaea POST events here, so freezing it makes live sensors error on their own event path, and `hp-tanner-redis` holds session state in flight. Analysis of collected events is exactly what a leg must not interrupt. |
 | `honeypot-payload-analysis` | `hp-yara-scanner`, `hp-payload-dedupe` | Downstream payload analysis fed from Elasticsearch. Not a decoy and holds no listener, but it is a pipeline stage and freezing it mid-file leaves partial state. |
 | `honeypot-init` | `hp-geoipupdate`, `hp-threat-cidrs-refresh` | Periodic updaters. Freezing `hp-geoipupdate` mid-write can leave a truncated GeoIP database, which then fails every enrichment silently. |
 | `ml-worker` | `hp-ml-worker` | Named in the cold protocol's `LIVE_WORKERS`. The cold-run mechanism governs this container via `STOP_WORKERS=1` + trap; pausing it here would create a second, unreconciled source of truth for whether it is running. |

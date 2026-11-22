@@ -1462,11 +1462,10 @@ def _clean(text: str, limit: int, *, keep_newlines: bool = False) -> str:
     own one-shot answer and mirrored chat messages -- markdown text meant to
     keep its author's paragraph/line breaks, not raw sample content -- into
     one unbroken line before it ever reached a renderer that cares about
-    them. dashboard-next (frontend-next/src/routes/ghidra.$sha.tsx) renders
-    this as literal text with `white-space: pre-wrap`, a deliberate
-    dependency-free choice over the retired Go dashboard's marked.js+
-    DOMPurify pipeline (#1285/#1659) -- still just as dependent on real
-    \\n characters surviving to reach it.
+    them. The dashboard (Xore-Inc/apiary-dashboard, RevDeckConversation.tsx)
+    renders this text as Markdown, and every renderer it has had (the Go
+    dashboard's marked.js+DOMPurify, #1285/#1659; frontend-next's pre-wrap
+    text) depends on real \\n characters surviving to reach it.
     Genuine escape sequences (ESC and other C0/C1 control codes) are still
     stripped either way.
     """

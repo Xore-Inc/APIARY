@@ -1,0 +1,21 @@
+[Unit]
+Description=Start Compose containers on swarm overlays after dockerd starts (#3837)
+# Pulled in by docker.service (WantedBy) and ordered after it, like
+# home-swarm-host-guard. It has no Before= and nothing waits for it, and
+# Type=exec makes it active as soon as it runs, so it cannot delay dockerd,
+# swarm or boot, nor close an ordering cycle (#3742, #3839).
+Requires=docker.service
+PartOf=docker.service
+After=docker.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/apiary-overlay-attach run /etc/apiary/overlay-attach.txt
+# Takes `connect` networks off again so dockerd's next restore never sees them.
+ExecStop=/usr/bin/python3 -I /usr/local/libexec/apiary-overlay-attach detach /etc/apiary/overlay-attach.txt
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=90
+
+[Install]
+WantedBy=docker.service

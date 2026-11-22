@@ -11,7 +11,7 @@
 # replaces the per-service security_opt a stack cannot set.
 services:
   socat:
-    image: alpine/socat:latest@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+    image: alpine/socat:latest@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
     command: ["TCP4-LISTEN:5000,fork,reuseaddr", "TCP4:10.8.0.2:19500"]
     networks:
       gw:
