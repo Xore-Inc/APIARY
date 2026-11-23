@@ -46,7 +46,7 @@ flate2 = "1"
 # rule_encoded_egress_external needs base32 to try-decode a DNS query label
 # (the campaign's own DNS-transport exfil shape uses base32, not base64).
 data-encoding = "2"
-mail-parser = "0.11.6"
+mail-parser = "1.0.1"
 # #3325: the /api contract, generated from the routes rather than
 # transcribed beside them. `utoipa-axum` collects the `#[utoipa::path]`
 # annotations off the handlers into the same `Router` the process serves,
