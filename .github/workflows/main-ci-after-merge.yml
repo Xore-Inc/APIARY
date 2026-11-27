@@ -1,0 +1,40 @@
+name: Main CI after automated merges
+
+# #3964: a merge made with the workflow token (the Dependabot auto-merge path)
+# creates no push event, so Quality, Containers and CodeQL never ran on main
+# for those commits. This workflow runs when a pull request is closed and the
+# merge was made by github-actions[bot], and dispatches those three workflows
+# on main. workflow_dispatch is the one event a workflow token may trigger.
+#
+# A merge a person makes already pushes to main, so this workflow does nothing
+# for it.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Dispatch main CI after an automated merge
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.sender.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      # Dispatching a workflow needs actions: write and nothing else.
+      actions: write
+    steps:
+      - name: Dispatch Quality, Containers and CodeQL on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MERGED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "PR #$MERGED_PR was merged by github-actions[bot]; dispatching main CI"
+          for workflow in quality.yml containers.yml security.yml; do
+            gh workflow run "$workflow" --repo "$REPO" --ref main
+            echo "dispatched $workflow on main"
+          done

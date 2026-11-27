@@ -1,0 +1,25 @@
+name: Probe arm auto-merge (#3964, temporary)
+
+# Temporary experiment for #3964: arms squash auto-merge with the workflow
+# token on the probe PR only, the same call dependabot-auto-merge.yml makes.
+# Removed in the PR that follows the probe.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  arm:
+    if: github.head_ref == 'probe/3964-auto-merge'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Arm squash auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
