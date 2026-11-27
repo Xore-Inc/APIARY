@@ -125,8 +125,11 @@ RUN chown -R cowrie:cowrie /cowrie
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 ENV DEBIAN_FRONTEND=noninteractive
+# #3964: zlib1g CVE-2026-85091 (HIGH) is fixed in a Debian update that this
+# trixie-slim digest predates. Upgrade it here rather than exempting the base.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 libssl3 ca-certificates tzdata \
+    && apt-get install -y --only-upgrade --no-install-recommends zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 2000 cowrie && useradd -u 2000 -g cowrie -d /cowrie -s /sbin/nologin cowrie

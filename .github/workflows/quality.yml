@@ -1968,8 +1968,8 @@ jobs:
           # were never run by CI at all. Discovery instead, so the next
           # test_*.py dropped in scripts/tests/ is picked up without a
           # workflow edit.
-          # pytest installed inline: test_3501_base_image_cve_exemptions.py
-          # imports it, and the GitHub-hosted fallback image does not ship it
+          # pytest installed inline: a scripts/tests file imports it, and the
+          # GitHub-hosted fallback image does not ship it
           # (the self-hosted runners happen to), so the cloud twin failed at
           # import time. Not a production dependency.
           - name: scripts/tests suite
