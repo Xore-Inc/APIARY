@@ -6,7 +6,7 @@ on:
   pull_request:
   schedule:
     - cron: "23 3 * * 3"
-  # #3964: lets main-ci-after-merge.yml dispatch CodeQL on main after an
+  # #3964: lets scripts/dispatch-main-ci-after-merge.sh dispatch CodeQL on main after an
   # automated merge, which creates no push event.
   workflow_dispatch:
 
