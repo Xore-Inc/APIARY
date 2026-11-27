@@ -93,6 +93,9 @@ mislead:
   `elk` figure above covers Logstash/Filebeat/Beats only. The 6g heap is the
   floor that actually matters on a small host -- a profile cannot be sized
   below it, and #240 is why it is pinned rather than left to the JVM default.
+  Inside that heap the shard request cache is set to 5 %
+  (`indices.requests.cache.size`, about 300 MB, #3936) instead of the 1 %
+  default, in both the Compose service and `swarm/stacks/elasticsearch/stack.yml`.
 - **A stack with no declared limit contributes zero.** That is the dangerous
   case, not the small one: Docker will not stop an undeclared container from
   growing. The script lists those stacks by name under each profile, so an

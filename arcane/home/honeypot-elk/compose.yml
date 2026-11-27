@@ -65,6 +65,9 @@ services:
       # the ingest-geoip mount below and used by the geoip-honeypot pipeline.
       - ingest.geoip.downloader.enabled=false
       - path.repo=/snapshots
+      # #3936: shard request cache at 5 % of the 6g heap (default 1 % was
+      # full); same value as swarm/stacks/elasticsearch/stack.yml (parity test).
+      - indices.requests.cache.size=5%
       # #240: lock the JVM heap in physical RAM so the kernel can never swap
       # it under host memory pressure. A swapped heap causes GC pauses that
       # can run into minutes instead of milliseconds -- Elasticsearch can
@@ -355,7 +358,7 @@ services:
           memory: 1G
   # ===================== Arkime — full PCAP search & analysis =====================
   #
-  # Image: ghcr.io/arkime/arkime/arkime:v6-latest
+  # Image: ghcr.io/arkime/arkime/arkime:v6.9.2 (pinned by digest below)
   #   NOTE: three path segments (arkime/arkime/arkime) — the two-segment path
   #   ghcr.io/arkime/arkime is the repository namespace and returns 'denied'
   #   without authentication. The correct pullable image is the three-segment form.
