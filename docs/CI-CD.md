@@ -171,9 +171,12 @@ image nothing in the repository can fix. Where the repository can fix a
 finding, the same gate requires the fix.
 
 The runtime stages on `debian:trixie-slim` (backend-service,
-vps/huginn-sidecar, and the cowrie and galah runtime stages) upgrade `zlib1g`
-in their apt layer with `apt-get install --only-upgrade zlib1g`, for
-CVE-2026-85091.
+vps/huginn-sidecar, and the cowrie and galah runtime stages) run
+`apt-get upgrade -y` in their existing apt layer. The pinned digest predates
+Debian security fixes (zlib1g CVE-2026-85091, libzstd1 CVE-2026-124851 at
+the time of #3964), and those are fixes the repository can apply itself, so
+they are applied, not exempted. Verify the built image with trivy, as #3964
+did for the backend.
 
 ## Testing conventions
 
