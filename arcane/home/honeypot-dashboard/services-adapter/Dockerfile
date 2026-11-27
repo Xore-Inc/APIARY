@@ -1,4 +1,4 @@
-FROM python:3.15-slim@sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51
+FROM python:3.15-slim@sha256:63bb298d2b7b88f176f51b5189f54ce6535c997682ea70885d2132f5d473a8a5
 
 LABEL maintainer="honeypot-stack"
 LABEL description="Narrow, allowlisted Docker control adapter for the dashboard's Services pane (#197)"
