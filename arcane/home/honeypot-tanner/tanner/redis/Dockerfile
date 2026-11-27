@@ -5,7 +5,7 @@
 # is RSALv2/SSPLv1/AGPLv3; private use only, never redistributed. The 8.x
 # image bundles modules (search, json, bloom, timeseries) that load at
 # start; tanner uses none of them and sets no ACLs.
-FROM redis:8.10.3-alpine@sha256:71885d8cc6e42f2bc0aa2eb853bfc4be200b5108a46ac50e117ae1df0531fb80
+FROM redis:8.12.0-alpine3.23@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483
 
 LABEL maintainer="honeypot-stack"
 
