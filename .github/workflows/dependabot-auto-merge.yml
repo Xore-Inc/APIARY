@@ -23,6 +23,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # #3964: dispatching main's CI after the merge lands (workflow_dispatch
+      # is the one event a workflow token can trigger).
+      actions: write
     steps:
       - name: Read Dependabot update metadata
         id: metadata
@@ -116,6 +119,25 @@ jobs:
             exit 0
           fi
           exit 1
+
+      # #3964: the merge above is performed by GitHub after the required checks
+      # pass, and a merge made with this workflow token starts no push
+      # workflows. So wait here for the PR to merge, then dispatch Quality,
+      # Containers and CodeQL on main. The script comes from the base commit,
+      # like the lockfile check above, so a PR cannot change what runs here.
+      - name: Dispatch main CI once the merge lands
+        if: >-
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor') &&
+          steps.hold.outputs.hold != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/dispatch-main-ci-after-merge.sh" >"$RUNNER_TEMP/dispatch-main-ci-after-merge.sh"
+          bash "$RUNNER_TEMP/dispatch-main-ci-after-merge.sh" "$PR_NUMBER"
 
       - name: Leave the update for a human
         if: steps.hold.outputs.hold == 'true'
