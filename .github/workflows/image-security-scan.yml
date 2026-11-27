@@ -25,6 +25,7 @@ on:
       - "**/Dockerfile*"
       - "**/Containerfile*"
       - "scripts/list-docker-base-images.py"
+      - "scripts/check-base-image-gate.py"
       - ".github/workflows/image-security-scan.yml"
   # #3923: on a pull request the gate is PR-scoped (see the listing step),
   # so it also runs when a compose file changes: a compose `image:` the PR
