@@ -116,7 +116,7 @@ removes the legacy `_template` API. Arkime's own `db.pl` still calls it
 unconditionally with no version gating — if that claim were true, the
 migration would have broken Arkime outright. Instead of trusting the
 claim, the actual vendored `db.pl` source was read (`docker run --rm
---entrypoint cat ghcr.io/arkime/arkime/arkime:v6-latest /opt/arkime/db/db.pl`),
+--entrypoint cat ghcr.io/arkime/arkime/arkime:v6.9.2 /opt/arkime/db/db.pl`),
 and Arkime's real `init` command was run against a real, freshly pulled
 Elasticsearch 9.5.1 container. It worked — `GET /_template/...` still
 returns 200 with real content. The removal claim was wrong (most likely

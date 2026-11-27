@@ -14,7 +14,7 @@
 # Usage: analysis/tests/test_dionaea_incidents_index.sh
 set -euo pipefail
 
-ES_IMAGE="docker.elastic.co/elasticsearch/elasticsearch:9.5.2@sha256:9c1e1afc2bda921b35025e21c72ec6e392266995aa35ad6a47887363592718be"
+ES_IMAGE="docker.elastic.co/elasticsearch/elasticsearch:9.5.7@sha256:8aa3b18f6a26880f4c2fa1ffb37a48213e201b0b6a1a47412c66b1f5d533de91"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "SKIP: docker is not installed"

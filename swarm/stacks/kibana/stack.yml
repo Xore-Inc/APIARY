@@ -19,7 +19,7 @@ services:
   kibana:
     # Same digest as the Compose Kibana: a move is not a version change, so
     # no saved-object migration runs in either direction.
-    image: docker.elastic.co/kibana/kibana:9.5.6@sha256:c7ed45da5c3cfea020fc6c99ce027f4d21d19dab330379c5115d5eb95f6ecebc
+    image: docker.elastic.co/kibana/kibana:9.5.7@sha256:e34ecf8da9b5d858cbdff21a9049b4f21ee99e1039933b20c4fbdf8b500eabf5
     labels:
       apiary.swarm.migration: kibana
     # The saved-objects encryption key comes from the swarm secret, not the
