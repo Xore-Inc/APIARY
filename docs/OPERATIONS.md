@@ -105,7 +105,7 @@ commands/credentials, payloads, enriched IDS alerts, and ingest failures.
   procedures are in [`docs/analysis/RECOVERY.md`](analysis/RECOVERY.md).
 - **Kibana saved objects** (dashboards, visualizations, data views you build
   by hand) live only in Elasticsearch's Kibana saved-objects index — on this
-  stack's Kibana 9.5.3 that is `.kibana_<n>`, not a bare `.kibana` — so an ES
+  stack's Kibana 9.5.x that is `.kibana_<n>`, not a bare `.kibana` — so an ES
   reset, migration, or upgrade loses them with no recovery path unless you've
   exported first. Run `analysis/kibana-export.sh` before any ES-affecting
   change (matching `KIBANA_URL` to how you reach Kibana — defaults to

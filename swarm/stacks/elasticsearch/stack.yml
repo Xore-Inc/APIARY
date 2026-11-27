@@ -32,6 +32,10 @@ services:
       ES_JAVA_OPTS: -Xms6g -Xmx6g
       ingest.geoip.downloader.enabled: "false"
       path.repo: /snapshots
+      # #3936: shard request cache at 5 % of the 6g heap (~300 MB, default
+      # 1 % filled up once backend searches became cacheable, #3932). Static
+      # node setting: it takes effect on the next ES restart.
+      indices.requests.cache.size: "5%"
       # The heap is locked in RAM (#240). A lost lock does not stop a
       # single-node ES from starting, so check _nodes?filter_path=**.mlockall
       # after every deploy. Swarm carries ulimits (phase 9 gate G1).
