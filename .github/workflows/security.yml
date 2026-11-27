@@ -6,6 +6,9 @@ on:
   pull_request:
   schedule:
     - cron: "23 3 * * 3"
+  # #3964: lets main-ci-after-merge.yml dispatch CodeQL on main after an
+  # automated merge, which creates no push event.
+  workflow_dispatch:
 
 # #3313: workflow level defaults to none; each job declares what it spends.
 # security-events: write belongs to the analyze job alone -- it is what lets
