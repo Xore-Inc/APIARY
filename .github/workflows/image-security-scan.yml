@@ -25,19 +25,17 @@ on:
       - "**/Dockerfile*"
       - "**/Containerfile*"
       - "scripts/list-docker-base-images.py"
+      - "scripts/check-base-image-gate.py"
       - ".github/workflows/image-security-scan.yml"
   # #3923: on a pull request the gate is PR-scoped (see the listing step),
   # so it also runs when a compose file changes: a compose `image:` the PR
   # adds is a base image the PR adds. Push to main and the schedule keep the
   # Dockerfile-only trigger plus the full scan.
+  # #3964: no path filter here. The gate is a required check, and a required
+  # check that a path filter skips never reports, which leaves the PR pending
+  # forever. A PR that adds or changes no image reference finishes the scan
+  # job in seconds with nothing to measure.
   pull_request:
-    paths:
-      - "**/Dockerfile*"
-      - "**/Containerfile*"
-      - "**/*compose*.yml"
-      - "**/*compose*.yaml"
-      - "scripts/list-docker-base-images.py"
-      - ".github/workflows/image-security-scan.yml"
   schedule:
     # Same slot as dependabot.yml's docker section (Monday 04:45
     # Europe/Berlin) so a base-image advisory and a tag-bump proposal land
@@ -99,143 +97,61 @@ jobs:
             pip install --quiet pyyaml
           fi
 
-      # #3923: two scopes, one gate.
-      # - push to main / schedule / manual: every base image the repo pulls.
-      #   Upstream CVE drift on unchanged pins shows up here and fails here,
-      #   so it stays visible (tracked on #3923 while no fixed image exists).
-      # - pull_request: only the refs the PR adds or changes, i.e. what the
-      #   head tree pulls that the PR's merge-base did not. A PR that touches
-      #   no image ref scans nothing and passes; a PR that adds or re-pins an
-      #   image to one with fixable CRITICAL/HIGH findings still fails. Drift
-      #   on pins the PR did not touch no longer blocks unrelated PRs (#3622,
-      #   #3667, #3923).
-      - name: List the base images to scan (all of them, or the PR's additions)
+      # #3321: the pin lives in scripts/install-trivy.sh, shared with the
+      # digest-bound SBOM scan in containers.yml. The script installs into
+      # $RUNNER_TEMP, which the self-hosted honeypot-ci runner can write to.
+      # It runs before the gate step on purpose: the gate calls trivy.
+      - name: Install trivy
+        run: scripts/install-trivy.sh
+
+      # #3964: one script, two scopes, no exemptions. See
+      # scripts/check-base-image-gate.py and docs/CI-CD.md ("Base-image CVE
+      # gate").
+      # - pull_request: each image reference the PR adds is scanned and must
+      #   be clean; each reference it changes (same repository, new tag or
+      #   digest) is scanned at both digests and passes only if the new one has
+      #   no more fixable CRITICAL/HIGH findings and no CRITICAL CVE the old one
+      #   lacked. A PR that touches no image reference measures nothing.
+      # - push to main / schedule / manual: every base image the repo pulls
+      #   must be clean. Upstream drift on unchanged pins turns this red (#3923).
+      # The PR head is checked out, not GitHub's synthetic merge commit, so the
+      # "added" set is what the PR itself introduces.
+      - name: Measure base images and apply the gate
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/base-image-gate"
           if [ "$EVENT_NAME" = "pull_request" ]; then
             merge_base=$(git merge-base "$PR_BASE_SHA" HEAD)
-            echo "PR-scoped scan: refs added or changed since merge-base $merge_base"
-            python3 scripts/list-docker-base-images.py --new-since "$merge_base" | tee images.txt
-            if [ ! -s images.txt ]; then
-              echo "::notice title=PR-scoped base-image scan::This PR adds or changes no base image reference; nothing to scan. The full scan runs on push to main and weekly."
-            fi
+            echo "PR gate: refs added or changed since merge-base $merge_base"
+            python3 scripts/check-base-image-gate.py --mode pr --base-rev "$merge_base" \
+              --workdir "$RUNNER_TEMP/base-image-gate" \
+              --report "$RUNNER_TEMP/base-image-gate/report.json"
           else
-            python3 scripts/list-docker-base-images.py | tee images.txt
+            python3 scripts/check-base-image-gate.py --mode full \
+              --workdir "$RUNNER_TEMP/base-image-gate" \
+              --report "$RUNNER_TEMP/base-image-gate/report.json"
           fi
 
-      # #3321: the pin lives in scripts/install-trivy.sh, shared with the
-      # digest-bound SBOM scan in containers.yml. This job used to carry the
-      # version + asset + sha256 inline; two copies of that triple is how the
-      # base-image scan and the built-image scan stop grading the same CVE the
-      # same way, which is the outcome #3321 was filed to prevent. The script
-      # keeps this job's two original properties: a pinned version verified
-      # against a hardcoded sha256 instead of the upstream contrib/install.sh
-      # curl-|-sh pattern (SAST-flagged, #3115), and an install into
-      # $RUNNER_TEMP rather than /usr/local/bin, which the self-hosted
-      # honeypot-ci runner cannot write to.
-      - name: Install trivy
-        run: scripts/install-trivy.sh
-
-      - name: Scan each image for known CRITICAL/HIGH vulnerabilities
+  # #3964: the required check. `scan` is skipped or red on its own when the
+  # runner or the router breaks, and a skipped job counts as passing for
+  # GitHub, so this aggregate fails unless every needed job succeeded.
+  scan-gate:
+    name: Base-image scan gate
+    if: always()
+    needs: [ci-target, scan]
+    runs-on: ubuntu-latest
+    # No permissions block on purpose, as in containers-gate: the job reads
+    # only the two `needs:` results.
+    steps:
+      - name: Fail unless the router and the base-image scan succeeded
+        env:
+          ROUTER: ${{ needs.ci-target.result }}
+          SCAN: ${{ needs.scan.result }}
         run: |
-          set -euo pipefail
-          flagged=0
-          unresolved=0
-          exempt=0
-          scan_failed=0
-          # #3520: one shared-infrastructure failure (rate limit, DB download
-          # failure, a runner that runs out of something) hits every image
-          # scanned after it, so per-image annotations alone would report one
-          # cause N times. Collect the distinct reasons and summarise them once
-          # at the end instead; the per-image group still shows the full log.
-          scan_failed_reasons=""
-          while IFS= read -r image; do
-            [ -z "$image" ] && continue
-            echo "::group::$image"
-            # #2763: trivy exits non-zero both for "found CRITICAL/HIGH CVEs"
-            # and for "could not pull this reference at all". Those are
-            # opposite findings -- one is a real result, the other means we
-            # measured nothing -- so classify them instead of reporting an
-            # unresolvable reference as a vulnerable image forever.
-            if trivy image --scanners vuln --severity CRITICAL,HIGH \
-                --ignore-unfixed --exit-code 1 --no-progress "$image" \
-                > scan.log 2>&1; then
-              cat scan.log
-            else
-              cat scan.log
-              if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|repository .* not found|name unknown|could not (be )?(found|resolved)|failed to (fetch|resolve|find) the image' scan.log; then
-                unresolved=$((unresolved + 1))
-                echo "::warning title=Unscannable image reference::$image could not be resolved -- NOT scanned. This is a coverage gap, not a vulnerability result. Fix the reference, or add it to UNSCANNABLE in scripts/list-docker-base-images.py with a reason."
-              # #3520: a scan that started and then aborted is the third
-              # outcome, and it is neither of the two above. `FATAL ... run
-              # error: image scan error: scan error: scan failed:` means trivy
-              # never produced a result table for this image -- it pulled the
-              # layers fine and then died analysing one (a semaphore deadline
-              # under a loaded runner, a blob missing from the tar). Nothing
-              # was measured, so counting it as a vulnerability is the exact
-              # error #2763's split exists to prevent, and it is a coverage gap
-              # rather than an exemption either, so it is counted separately
-              # and reported as one. Checked BEFORE the exemption lookup: an
-              # entry in ACCEPTED_CVES must never excuse a scan that produced
-              # no findings, only one that produced findings without a
-              # written reason.
-              elif grep -qE 'FATAL.*run error: image scan error' scan.log; then
-                scan_failed=$((scan_failed + 1))
-                echo "::warning title=Base image scan failed::$image could not be scanned -- trivy aborted before reporting a result (not a vulnerability result and not an exemption). Tracked as a coverage gap: see the summary below for the reason."
-                reason=$(grep -oE 'FATAL[[:space:]]+Fatal error[[:space:]]+run error:.*' scan.log | tail -1 \
-                  | sed -e 's/[0-9a-f]\{64\}/<sha256>/g' -e 's/[0-9a-f]\{12,\}/<hash>/g' || true)
-                [ -n "$reason" ] && case "$scan_failed_reasons" in
-                  *"$reason"*) ;;
-                  *) scan_failed_reasons="${scan_failed_reasons}${reason}"$'\n' ;;
-                esac
-              elif python3 -c 'import sys;from importlib.util import module_from_spec,spec_from_file_location;spec=spec_from_file_location("base_images","scripts/list-docker-base-images.py");mod=module_from_spec(spec);spec.loader.exec_module(mod);sys.exit(0 if mod.allow_cve_findings(sys.argv[1]) else 1)' "$image"; then
-                exempt=$((exempt + 1))
-                echo "::notice title=Exempted base image::$image has fixable CRITICAL/HIGH findings covered by a written reason in ACCEPTED_CVES (scripts/list-docker-base-images.py). The exemption is keyed to this exact digest and retires itself when the pin moves."
-              else
-                flagged=$((flagged + 1))
-                echo "::error title=Vulnerable base image::$image has fixable CRITICAL/HIGH vulnerabilities"
-              fi
-            fi
-            echo "::endgroup::"
-          done < images.txt
-          if [ "$unresolved" -gt 0 ]; then
-            echo "::warning::$unresolved image reference(s) could not be resolved and were not scanned -- see the grouped logs above."
-          fi
-          # #3520: one callout for the whole job, not one per image, because
-          # a shared cause (trivy's vuln DB download, a registry rate limit, a
-          # saturated runner) fails every image it touches. The distinct
-          # reasons are listed so an operator can tell "one image is huge"
-          # apart from "nothing could be scanned at all". This does not fail
-          # the build: the same reasoning #2763 applies to an unresolved
-          # reference applies here -- an image nobody could measure is a
-          # visible gap, and neither passing it silently nor failing on it
-          # would be honest.
-          if [ "$scan_failed" -gt 0 ]; then
-            echo "::warning::$scan_failed base image(s) could not be scanned -- their vulnerability status is UNKNOWN, not clean and not vulnerable. This is a coverage gap; re-run the job to retry."
-            while IFS= read -r reason; do
-              [ -n "$reason" ] && echo "::warning title=Base image scan failure reason::$reason"
-            done <<< "$scan_failed_reasons"
-          fi
-          # #3501: the gate is armed. A scan that found fixable CRITICAL/HIGH
-          # findings on an image with no written reason fails the build; the
-          # reasons live in ACCEPTED_CVES, keyed to a digest so a Dependabot
-          # bump retires them on its own. See docs/CI-CD.md, "Base-image CVE
-          # gate (#3501)", for the decision and how to add an entry.
-          #
-          # Unresolved references do NOT fail the build. They are reported
-          # above as a coverage gap, which #2763's classification separates
-          # from a vulnerability result on purpose: an image nobody could
-          # measure is not a finding, and neither exempting it nor failing
-          # on it would be honest. That keeps it a visible gap rather than
-          # either a permanent false alarm or a silent pass.
-          if [ "$exempt" -gt 0 ]; then
-            echo "::notice::$exempt image(s) matched a written exemption in ACCEPTED_CVES."
-          fi
-          if [ "$flagged" -gt 0 ]; then
-            echo "::error::$flagged base image(s) have fixable CRITICAL/HIGH vulnerabilities and no written reason -- see the grouped logs above. Fix the finding (bump the pin), or add a reasoned entry to ACCEPTED_CVES in scripts/list-docker-base-images.py."
+          if [ "$ROUTER" != "success" ] || [ "$SCAN" != "success" ]; then
+            echo "::error::ci-target=$ROUTER scan=$SCAN"
             exit 1
           fi
-          echo "All scanned base images are clean of unexempted fixable CRITICAL/HIGH vulnerabilities."

@@ -99,7 +99,7 @@ sandbox/ghosts/install-host.sh --skip-enroll-test   # containers only
 
 ### Postgres major upgrade (16 -> 18, #3720)
 
-`ghosts-postgres` runs `postgres:18.6-bookworm` (Keycloak's database moved to 18.7 on 2026-11-17; this sandbox pin follows separately, its digest carries an `ACCEPTED_CVES` entry).
+`ghosts-postgres` runs `postgres:18.6-bookworm` (Keycloak's database moved to 18.7 on 2026-11-17; this sandbox pin follows separately, its findings are tracked on #3923, with no exemption).
 18's image mounts the parent `/var/lib/postgresql` and keeps
 `PGDATA` at `/var/lib/postgresql/18/docker`, and 16's on-disk format cannot be
 opened by 18, so the stack uses a new volume, `ghosts_ghosts-postgres18-data`.
