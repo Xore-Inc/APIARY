@@ -7,8 +7,10 @@ footers, no assistant session links. It was enforced by convention only, and
 the convention did not hold: between 2026-08-01 and 2026-09-26 main collected
 hundreds of `Co-authored-by: Claude ... <noreply@anthropic.com>` trailers and
 `Claude-Session:` links from automated sessions. Squash merges copy every
-commit's trailers into the landed commit, so checking the PR's own commits
-plus its title and body catches it before it reaches main.
+commit's trailers into the landed commit, and every non-merging commit author
+into a Co-authored-by trailer, so checking the PR's own commits (messages and
+author/committer identities) plus its title and body catches it before it
+reaches main.
 
 What counts is deliberately narrow -- attribution *shapes*, not mentions.
 Prose that talks about an assistant or an LLM product (an issue about the
@@ -16,6 +18,9 @@ Claude API, the theme's "claude" palette) must pass. Matched:
 
 - a Co-authored-by trailer whose name or address is an AI assistant;
 - any *@anthropic.com / *@openai.com noreply address;
+- a commit whose author or committer is an AI assistant (#3784: the
+  squash merge turned a commit's author into a Co-authored-by trailer on
+  main, while the commit message itself was clean);
 - assistant session trailers or links (Claude-Session:, claude.ai/code/session_);
 - "Generated with/by <coding assistant>" footers, with or without the robot emoji.
 
@@ -55,6 +60,10 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\b[\w.+-]+@(?:[\w-]+\.)*(?:anthropic|openai)\.com\b", re.IGNORECASE),
     ),
     (
+        "assistant commit identity",
+        re.compile(rf"^\s*(?:author|committer):.*\b{ASSISTANTS}\b", re.IGNORECASE | re.MULTILINE),
+    ),
+    (
         "assistant session trailer",
         re.compile(r"^\s*(?:claude|codex|copilot|cursor)-session:", re.IGNORECASE | re.MULTILINE),
     ),
@@ -87,6 +96,21 @@ def _api(url: str, token: str) -> Any:
         return json.load(resp)
 
 
+def commit_text(commit: dict) -> str:
+    """A commit's message with its author and committer identities as lines.
+
+    Squash merges add a Co-authored-by trailer for every commit author other
+    than the merger, so an assistant identity has to be caught here even when
+    the message is clean.
+    """
+    body = commit.get("commit") or {}
+    lines = []
+    for role in ("author", "committer"):
+        who = body.get(role) or {}
+        lines.append(f"{role}: {who.get('name') or ''} <{who.get('email') or ''}>")
+    return "\n".join(lines) + "\n\n" + (body.get("message") or "")
+
+
 def check_pull_request(event: dict, token: str, api: str) -> dict[str, list[str]]:
     pr = event["pull_request"]
     report: dict[str, list[str]] = {}
@@ -98,7 +122,7 @@ def check_pull_request(event: dict, token: str, api: str) -> dict[str, list[str]
     while True:
         commits = _api(f"{api}/repos/{repo}/pulls/{pr['number']}/commits?per_page=100&page={page}", token)
         for commit in commits:
-            if hits := findings(commit["commit"]["message"]):
+            if hits := findings(commit_text(commit)):
                 report[f"commit {commit['sha'][:10]}"] = hits
         if len(commits) < 100:
             return report

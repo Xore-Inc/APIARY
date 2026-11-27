@@ -34,7 +34,7 @@
 #   install-trivy.sh --print-path  install, then print the binary path
 #
 # Overrides (all three must move together; see the guard below):
-#   TRIVY_VERSION  release tag, e.g. 0.74.0
+#   TRIVY_VERSION  release tag, e.g. 0.76.2
 #   TRIVY_SHA256   sha256 of the release tarball for that version
 #   TRIVY_BIN_DIR  where to unpack (default $RUNNER_TEMP/trivy-bin)
 #   TRIVY_BIN      use this trivy verbatim and skip the fetch (trusted as
@@ -43,8 +43,8 @@ set -euo pipefail
 
 # The pin. Bump these together, after checking the release's own checksum
 # file: TRIVY_SHA256 is the sha256 of the asset named below.
-readonly PINNED_TRIVY_VERSION=0.74.0
-readonly PINNED_TRIVY_SHA256=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+readonly PINNED_TRIVY_VERSION=0.76.2
+readonly PINNED_TRIVY_SHA256=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
 
 print_path=0
 case "${1:-}" in

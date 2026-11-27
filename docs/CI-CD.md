@@ -112,115 +112,71 @@ requests need the repository variable `CI_HOMESERVER_PRS=true`, and fork
 PRs are excluded regardless of that variable — defense-in-depth against a
 compromised contributor account, not just fork-origin PRs.
 
-## Base-image CVE gate (#3501)
+## Base-image CVE gate (#3501, #3964)
 
-`.github/workflows/image-security-scan.yml` is a **blocking** gate: it runs
-`trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed` over
-the base images `scripts/list-docker-base-images.py` emits, and **fails the
-build** if any image with fixable CRITICAL/HIGH findings has no written
-exemption. Which images it scans depends on the event (#3923, next section).
+`.github/workflows/image-security-scan.yml` runs
+`scripts/check-base-image-gate.py` over the base images the repository pulls.
+The gate is a **no-regression gate with no exemption list**. There is no
+exemption table, no ignore file and no skip list. A finding that upstream has
+not fixed is tracked on #3923, not written off in the repository. A fix the
+repository can make itself (a package update in one of its own stages) is
+required by the same gate.
 
-It was report-only from introduction until #3501, which is the decision this
-section records.
+It runs `trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed
+--format json` (trivy 0.76.2, pinned in `scripts/install-trivy.sh`) and counts
+only **fixable** CRITICAL/HIGH rows. Findings are compared by CVE ID.
 
-### Two scopes: pull requests vs main (#3923)
+### Two scopes, one gate (#3923, #3964)
 
-| event | scanned | fails on |
+| event | what is measured | what fails the gate |
 |---|---|---|
-| `push` to `main` (Dockerfile/Containerfile change), weekly `schedule` | every image the repo pulls | any unexempted fixable finding, drift on unchanged pins included |
-| `pull_request` (Dockerfile, Containerfile or compose change) | only refs the PR **adds or changes**: `list-docker-base-images.py --new-since <merge-base>`, i.e. what the PR head's tree pulls that the merge-base tree did not | findings on those refs only |
+| `pull_request` | only the references the PR adds or changes: what the head tree pulls that the merge-base tree (`git merge-base` of the PR base and head) did not | the rules below |
+| `push` to `main` (Dockerfile/Containerfile change), weekly `schedule` | every base image the repo pulls | any fixable CRITICAL/HIGH, drift on unchanged pins included |
 
-Why: CVE feeds move daily, so unchanged pins go red without any commit. With
-a repo-wide gate on every PR, each upstream advisory blocked every unrelated
-PR until someone re-pinned the whole tree. That happened three times
-(#3622, #3667, #3923), and the last time no fixed image existed upstream for
-16 of the 17 flagged refs. A PR is now answerable only for the images it
-introduces. Drift stays visible: the push and scheduled runs still scan
-everything and still fail, and #3923 tracks it until fixed images ship.
+Changed or added, per reference. A reference is **changed** when the
+merge-base tree pulled the same repository (the tag or the digest may differ).
+If several base references share the repository, the one with the same tag is
+the one replaced. Failing that, the repository must have exactly one base
+reference to pair with. Anything still ambiguous counts as **added**.
 
-Consequences worth knowing:
-
-- A PR that touches no image ref scans nothing and passes, with a
-  `::notice` saying so.
-- Re-pinning to a new digest is a changed ref and is scanned. Re-pin PRs
-  therefore still prove the new digest clean, and one that moves to a worse
-  digest fails.
-- Moving an existing ref to another file, or deleting one, is not new and is
-  not scanned.
-- Both trees go through the same parser (the head's copy of the script, the
-  base tree read with `git show`), so a change to the lister's own rules
-  cannot fake an "added" image.
-- The PR check runs on the PR head commit, not on GitHub's synthetic merge
-  commit, whose tree would also count everything `main` gained since the
-  branch point as "added".
-- The merge to `main` runs the full scan. While drift is open (#3923), that
-  push run is red even though the PR was green. That is the intended signal,
-  not a regression from the PR.
-
-### Three outcomes, deliberately not two
-
-trivy exits non-zero both for "found CVEs" and for "could not pull this
-reference at all". Those are opposite findings, so the workflow classifies
-them rather than merging them, and each lands somewhere different:
-
-| outcome | gate | why |
+| reference | passes when | fails when |
 |---|---|---|
-| fixable CRITICAL/HIGH, **no** reason | **fails** | this is the backlog |
-| fixable CRITICAL/HIGH, reason in `ACCEPTED_CVES` | passes, `::notice` | an argued, reviewed exception |
-| reference would not resolve | `::warning`, **does not fail** | we measured nothing, which is a coverage gap (#2763) |
+| **added** | 0 fixable CRITICAL/HIGH | any fixable CRITICAL/HIGH |
+| **changed** (same repository, new tag or digest) | the new digest has no more fixable CRITICAL/HIGH rows than the old one, and no CRITICAL CVE ID that the old digest lacked | a higher count, or a new CRITICAL CVE ID |
+| either side not measured | never: a regression cannot be ruled out without numbers | trivy cannot resolve the reference, or aborts on it |
 
-The third row is the one most likely to be "fixed" into the wrong shape. An
-unresolvable image is neither vulnerable nor exempt — we did not scan it — so
-failing on it trains operators to ignore the gate, and exempting it silently
-is the dishonest direction. It stays visible as a gap, and it is the reason
-`UNSCANNABLE` in `list-docker-base-images.py` exists: an image that can never
-resolve is withheld from stdout with a written reason and reported on stderr.
+Both digests of a changed reference are scanned with the same trivy flags.
+A PR that changes no image reference measures nothing and passes. The check
+runs on every PR (no path filter), because a required check that a path
+filter skips never reports and leaves the PR pending.
 
-### What an exemption has to be
+On push to `main` and on the schedule, an unresolvable reference, or one trivy
+aborts on, is a **coverage gap** and a `::warning` (#2763, #3520). It is not a
+finding and it is not counted as clean.
 
-An exemption is a claim that **this repo cannot fix the finding**. If a
-patched artifact exists, the fix is to bump the pin — not to write an
-exemption. So `ACCEPTED_CVES` reasons state the constraint that makes an
-image immovable *despite* a published fix: a build stage nothing inherits, a
-pinned on-disk format, a vendor with no rebuild.
+### The required check
 
-"No patched build is published" does not belong there unless a scan showed no
-`FixedVersion`. trivy reporting a `FixedVersion` is upstream saying a patch
-exists, and a reason that contradicts it is a fabricated exemption. An image
-whose scan could not run is **UNVERIFIED** and is left failing; that is the
-honest state, and guessing a count is worse than a red gate.
+The `main` ruleset requires **`Base-image scan gate`**. That job (`scan-gate`
+in the workflow) aggregates the router and the `scan` job, and fails unless
+both succeeded. A skipped job counts as passing for GitHub, so the gate reads
+the results itself.
 
-### Why the keys are digest-pinned
+### Why there is no exemption list
 
-A key is a reference the script actually emits, matched exactly. Both halves
-matter, and the earlier attempt at this gate broke both:
+The exemption table was the bypass. #3958 added four entries to it and the gate
+passed on them. One entry hid a zlib1g fix the repository could apply itself,
+so the deployed backend carried a known HIGH. The no-regression rule asks
+"did this change make the image worse?", which has an honest answer for an
+image nothing in the repository can fix. Where the repository can fix a
+finding, the same gate requires the fix.
 
-- **Bare tags cannot match.** `main()` emits digest-pinned refs for 58 of the
-  67 images it walks. A key spelled `python:3.12-slim` compared against
-  `python:3.12-slim@sha256:60deed…` never fires. 30 of that attempt's 40
-  keys were inert like this — entries that read like exemptions somebody had
-  argued for while covering no image at all.
-- **Exact matching is what makes them expire.** Each reason describes the
-  artifact that was measured. When a Dependabot bump moves the digest, the key
-  stops matching and the gate re-applies to whatever now sits at that tag. A
-  bare-tag key would survive every bump forever, carrying a stale judgement
-  onto images nobody looked at.
-
-`scripts/tests/test_3501_base_image_cve_exemptions.py` holds this: every key
-must be a reference the script emits *now* (so deleting a Dockerfile cannot
-leave an entry exempting nothing), and the match must not widen to a
-neighbouring ref.
-
-### Adding an entry
-
-1. Scan it and read the actual numbers:
-   `trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed <ref>`
-2. Try to move it. If a patched tag exists, bump the pin — that is the fix.
-3. Only if it genuinely cannot move, add a key spelled exactly as
-   `list-docker-base-images.py` prints it, with a reason that names the
-   constraint and cites the scan.
-4. `python3 scripts/tests/test_3501_base_image_cve_exemptions.py` will reject
-   a dead or over-broad key.
+The runtime stages on `debian:trixie-slim` (backend-service,
+vps/huginn-sidecar, and the cowrie and galah runtime stages) run
+`apt-get upgrade -y` in their existing apt layer. The pinned digest predates
+Debian security fixes (zlib1g CVE-2026-85091, libzstd1 CVE-2026-124851 at
+the time of #3964), and those are fixes the repository can apply itself, so
+they are applied, not exempted. Verify the built image with trivy, as #3964
+did for the backend.
 
 ## Testing conventions
 
@@ -280,6 +236,7 @@ enabled for this workflow.
 | `Containers gate` | `containers.yml` | the router and every image build row |
 | `Go formatting and tests` | `quality.yml` | Go fmt + tests, either executor |
 | `Scripts and Compose` | `quality.yml` | the `scripts-and-compose` job matrix |
+| `Base-image scan gate` | `image-security-scan.yml` | the router and the base-image scan (PR-scoped, see the base-image gate section) |
 
 Individual jobs are never required directly: their names change with the
 executor (`… (GitHub-hosted)` on fallback days), and a required context that
@@ -1683,7 +1640,7 @@ where the pushed image digest exists.
 
 **The digest is stamped into the document, not just the filename.** syft's
 CycloneDX output records the image's name and tag and no digest at all
-(verified against syft 1.52.0), so `scripts/generate-image-sbom.sh` adds
+(verified against syft 1.52.0 and re-checked on 1.57.2), so `scripts/generate-image-sbom.sh` adds
 CycloneDX properties to `metadata.component` afterwards:
 `apiary:image-digest`, `apiary:image-reference`, and `apiary:image-name`,
 plus `component.version` set to the digest for viewers that show only

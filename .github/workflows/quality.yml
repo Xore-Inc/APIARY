@@ -125,7 +125,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: python scripts/check-public-leaks.py
@@ -144,7 +144,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: python scripts/check-public-leaks.py
@@ -164,12 +164,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # dicompot's vendored github.com/nsmfoo/dicompot (#413) declares go
           # 1.26.2 in its own go.mod -- the module graph forces that as the
           # floor for every module in this repo, not just dicompot's.
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           # The homeserver runners keep GOMODCACHE/GOCACHE on disk at
           # /opt/github-ci-runner (shared by all four runner instances), so
           # setup-go's default module cache is pure loss here -- and worse
@@ -202,10 +202,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # Same floor as the homeserver twin above -- see its comment.
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache-dependency-path: "**/go.sum"
       - name: Check formatting
         shell: bash
@@ -234,9 +234,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           # The homeserver runners keep GOMODCACHE/GOCACHE on disk at
           # /opt/github-ci-runner (shared by all four runner instances), so
           # setup-go's default module cache is pure loss here -- and worse
@@ -303,9 +303,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache-dependency-path: "${{ matrix.module }}/go.sum"
       - run: go test ./...
         working-directory: ${{ matrix.module }}
@@ -626,7 +626,7 @@ jobs:
       # collide with another run or attempt.
       - name: Upload test log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-service-cargo-test-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/cargo-test.log
@@ -723,7 +723,7 @@ jobs:
       # same named-file path, no `overwrite: true`.
       - name: Upload test log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-service-cargo-test-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/cargo-test.log
@@ -1408,14 +1408,14 @@ jobs:
           # #3314: .github/actionlint.yaml existed but nothing ran actionlint.
           # Blocking. SHELLCHECK_OPTS matches the repo's "high-severity
           # ShellCheck" policy: info-level notes in run: blocks do not fail.
-          # Archive checksum is upstream's (actionlint_1.7.7_checksums.txt).
+          # Archive checksum is upstream's (actionlint_1.7.12_checksums.txt).
           - name: "Workflow lint (actionlint, #3314)"
             home: true
             run: |
               set -euo pipefail
               tgz="$RUNNER_TEMP/actionlint.tgz"
-              curl -fsSL -o "$tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
-              echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $tgz" | sha256sum -c -
+              curl -fsSL -o "$tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+              echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tgz" | sha256sum -c -
               tar -xzf "$tgz" -C "$RUNNER_TEMP" actionlint
               SHELLCHECK_OPTS="-S warning" "$RUNNER_TEMP/actionlint" -color
               # A plain-scalar `name: Foo (bar, #123)` is valid YAML that silently
@@ -1448,14 +1448,14 @@ jobs:
           # and artipacked) across the whole tree, so they are now dropped
           # from ADVISORY and a regression in any of them is blocking. zizmor
           # publishes no checksum file; the pin below was recorded on first
-          # download (2026-09-26).
+          # download (2026-11-22).
           - name: "Workflow security audit (zizmor, #3314)"
             home: true
             run: |
               set -euo pipefail
               tgz="$RUNNER_TEMP/zizmor.tgz"
-              curl -fsSL -o "$tgz" https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
-              echo "e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a  $tgz" | sha256sum -c -
+              curl -fsSL -o "$tgz" https://github.com/zizmorcore/zizmor/releases/download/v1.33.0/zizmor-x86_64-unknown-linux-gnu.tar.gz
+              echo "d38ea7058985610f989e1798dba346962dbec479858d14306e1f2202116563ad  $tgz" | sha256sum -c -
               tar -xzf "$tgz" -C "$RUNNER_TEMP" zizmor
               "$RUNNER_TEMP/zizmor" --offline --min-severity medium --format json .github/workflows > "$RUNNER_TEMP/zizmor.json" || true
               python3 - "$RUNNER_TEMP/zizmor.json" <<'PY'
@@ -1501,8 +1501,8 @@ jobs:
             run: |
               set -euo pipefail
               bin="$RUNNER_TEMP/hadolint"
-              curl -fsSL -o "$bin" https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-linux-x86_64
-              echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  $bin" | sha256sum -c -
+              curl -fsSL -o "$bin" https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64
+              echo "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507  $bin" | sha256sum -c -
               chmod +x "$bin"
               git ls-files -z | grep -zE '(^|/)Dockerfile[^/]*$' | xargs -0 "$bin" --config .hadolint.yaml
 
@@ -1968,8 +1968,8 @@ jobs:
           # were never run by CI at all. Discovery instead, so the next
           # test_*.py dropped in scripts/tests/ is picked up without a
           # workflow edit.
-          # pytest installed inline: test_3501_base_image_cve_exemptions.py
-          # imports it, and the GitHub-hosted fallback image does not ship it
+          # pytest installed inline: a scripts/tests file imports it, and the
+          # GitHub-hosted fallback image does not ship it
           # (the self-hosted runners happen to), so the cloud twin failed at
           # import time. Not a production dependency.
           - name: scripts/tests suite
@@ -1984,7 +1984,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       # Needed below by the two dashboard-binary Keycloak integration tests
@@ -1993,9 +1993,9 @@ jobs:
       # entry pays this setup cost even though only two of them use it --
       # simpler and more robust than threading a per-entry needs-go flag
       # through the matrix, and setup-go is fast.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache-dependency-path: "**/go.sum"
           # Cache only on the GitHub-hosted path -- mirror of this job's
           # own runs-on expression. On the homeserver runners the module
@@ -2042,7 +2042,7 @@ jobs:
       # sanitise a free-text field, so fixing that means renaming the row.
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scripts-${{ matrix.name }}-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

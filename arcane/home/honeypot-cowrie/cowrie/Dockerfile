@@ -125,8 +125,13 @@ RUN chown -R cowrie:cowrie /cowrie
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 ENV DEBIAN_FRONTEND=noninteractive
+# #3964: upgrade the packages this layer inherits from the trixie-slim digest to
+# the Debian security fixes it predates (zlib1g CVE-2026-85091 and libzstd1
+# CVE-2026-124851 are fixable in the pinned digest). A fix we can apply
+# ourselves is applied here, not exempted.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 libssl3 ca-certificates tzdata \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 2000 cowrie && useradd -u 2000 -g cowrie -d /cowrie -s /sbin/nologin cowrie

@@ -13,4 +13,4 @@ elasticsearch==8.19.3
 # (GHSA-9hjg-9r4m-mvj7 .netrc credentials leak, GHSA-gc5v-m9x4-r6x2 insecure
 # temp file reuse in extract_zipped_paths()) on this PR's first CI run.
 requests==2.34.2
-loguru==0.7.3
+loguru==0.8.0

@@ -22,8 +22,8 @@ addresses, passwords, client secrets, cookies, and realm users out of Git.
   CVE-2026-18963 (unauthenticated account takeover via reset-credentials,
   CVSS 9.1) landed. The digest already froze it, so `:latest@sha256` only hid
   which release was running. A Keycloak security release is applied by moving
-  the tag and digest together (§7); the base-image CVE gate's
-  `ACCEPTED_CVES` entry for the old digest retires itself when it moves.
+  the tag and digest together (§7); the base-image gate measures the new
+  digest against the old one on that PR (docs/CI-CD.md, base-image gate).
 - PostgreSQL is reachable only on the internal `keycloak-data` network (the
   stack's internal `data` overlay).
 - Keycloak publishes HTTP only on the homeserver WireGuard address. As a swarm
@@ -386,9 +386,8 @@ sudo KEYCLOAK_RESTORE_CONFIRM=restore-keycloak-database \
    `arcane/home/honeypot-keycloak/compose.yml` (resolve the digest from the
    registry, e.g. quay.io's tag API, not from a local pull). For Keycloak also
    move the same pin in the four `scripts/test-*` fixtures that boot it and
-   re-measure the image with the base-image scan's trivy command; replace the
-   `ACCEPTED_CVES` entry in `scripts/list-docker-base-images.py` (or drop it
-   if the new digest is clean).
+   re-measure the image with the base-image scan's trivy command. The new
+   digest must not regress against the old one (docs/CI-CD.md).
 3. Re-test the theme against the pinned Keycloak parent theme.
 4. Validate Compose and the realm template.
 5. Deploy to a disposable stack and exercise the acceptance tests.

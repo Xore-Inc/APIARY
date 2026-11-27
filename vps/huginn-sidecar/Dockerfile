@@ -2,7 +2,7 @@
 #
 # Two stages because huginn-net pulls in a full Rust toolchain and ~200 crates
 # to build, none of which belong on a VPS that also fronts every honeypot.
-FROM rust:1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS build
+FROM rust:1-trixie@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS build
 
 # libpcap headers: huginn-net captures through libpcap, and the slim base has
 # the runtime library but not the headers.
@@ -15,12 +15,17 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked
 
-FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # libpcap0.8 for capture; ca-certificates is not needed -- this talks to
 # nothing, it only reads packets and writes stdout.
+# #3964: upgrade the packages this layer inherits from the trixie-slim digest to
+# the Debian security fixes it predates (zlib1g CVE-2026-85091 and libzstd1
+# CVE-2026-124851 are fixable in the pinned digest). A fix we can apply
+# ourselves is applied here, not exempted.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpcap0.8 && \
+    apt-get upgrade -y && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --system --no-create-home --shell /usr/sbin/nologin huginn
 

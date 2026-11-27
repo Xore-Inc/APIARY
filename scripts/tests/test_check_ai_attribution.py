@@ -48,6 +48,16 @@ class FindingsTests(unittest.TestCase):
             with self.subTest(text=text[:50]):
                 self.assertEqual(caa.findings(text), [], text)
 
+    def test_assistant_commit_identity_is_caught(self):
+        # #3784: a clean message whose author is the assistant's noreply identity.
+        text = "author: Claude <noreply@anthropic.com>\ncommitter: Claude <noreply@anthropic.com>\n\nfix: x"
+        self.assertTrue(caa.findings(text))
+        self.assertTrue(caa.findings("author: Claude <dev@example.com>\ncommitter: Xore <Xore@users.noreply.github.com>\n\nfix: x"))
+
+    def test_human_and_bot_identities_pass(self):
+        text = "author: Xore <Xore@users.noreply.github.com>\ncommitter: GitHub <noreply@github.com>\n\nfix: x"
+        self.assertEqual(caa.findings(text), [])
+
     def test_finding_quotes_the_offending_line(self):
         [hit, *_] = caa.findings("fix: x\n\nbody\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\n")
         self.assertIn("Co-Authored-By: Claude Sonnet 5", hit)
@@ -75,6 +85,28 @@ class PullRequestTests(unittest.TestCase):
     def test_attributed_commit_fails(self):
         commits = [{"sha": "b" * 40, "commit": {"message": HITS[0]}}]
         self.assertEqual(self.run_main(self.event(), commits), 1)
+
+    def test_assistant_author_fails_even_with_clean_message(self):
+        commit = {
+            "sha": "d" * 40,
+            "commit": {
+                "message": "fix: x",
+                "author": {"name": "Claude", "email": "noreply@anthropic.com"},
+                "committer": {"name": "Claude", "email": "noreply@anthropic.com"},
+            },
+        }
+        self.assertEqual(self.run_main(self.event(), [commit]), 1)
+
+    def test_human_author_with_clean_message_passes(self):
+        commit = {
+            "sha": "e" * 40,
+            "commit": {
+                "message": "fix: x",
+                "author": {"name": "Xore", "email": "Xore@users.noreply.github.com"},
+                "committer": {"name": "Xore", "email": "Xore@users.noreply.github.com"},
+            },
+        }
+        self.assertEqual(self.run_main(self.event(), [commit]), 0)
 
     def test_attributed_body_fails(self):
         self.assertEqual(self.run_main(self.event(body=HITS[4]), []), 1)

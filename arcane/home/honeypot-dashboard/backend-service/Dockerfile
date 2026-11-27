@@ -2,7 +2,7 @@
 # release build, then a slim runtime with just the binary. rustls-only
 # (no OpenSSL); ca-certificates + curl for TLS trust and the container
 # healthcheck.
-FROM rust:1-slim-trixie@sha256:ea0999ff67355d958b8799b6751c879a6d770076d26047dca66f6e51e77930d3 AS build
+FROM rust:1-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
 # #3315: which revision of the repository this binary is built from. Declared
 # in the build stage as well as the runtime one because build.rs reads it from
 # the environment to compile it in (/healthz's `revision` field) and the
@@ -29,7 +29,7 @@ COPY src ./src
 COPY assets_pdf ./assets_pdf
 RUN cargo build --release
 
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # Redeclared per stage: Docker scopes an ARG to the stage that declares it, so
 # the value the build stage compiled in is not in scope here on its own.
 ARG GIT_SHA
@@ -54,8 +54,13 @@ LABEL org.opencontainers.image.revision="${GIT_SHA:-unknown}" \
       org.opencontainers.image.title="apiary-backend" \
       org.opencontainers.image.description="APIARY dashboard backend service (Rust, axum)"
 
+# #3964: upgrade the packages this layer inherits from the trixie-slim digest to
+# the Debian security fixes it predates (zlib1g CVE-2026-85091 and libzstd1
+# CVE-2026-124851 are fixable in the pinned digest). A fix we can apply
+# ourselves is applied here, not exempted.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/apiary-backend /usr/local/bin/apiary-backend
 ENV LISTEN_ADDR=0.0.0.0:8081
@@ -79,6 +84,6 @@ EXPOSE 8081
 # not by any test -- CI never runs the image under a non-default
 # LISTEN_ADDR).
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 --start-period=20s \
-    CMD curl -sf "http://127.0.0.1:${LISTEN_ADDR##*:}/livez" || exit 1
+    CMD ["sh", "-c", "curl -sf \"http://127.0.0.1:${LISTEN_ADDR##*:}/livez\" || exit 1"]
 USER nobody
 CMD ["apiary-backend"]

@@ -868,7 +868,9 @@ class ParityWithTheDockerfiles(unittest.TestCase):
         declared = declared_backend_routes()
         healthcheck = re.search(r"--start-period=\d+s \\\n\s+CMD (.*)", self.backend)
         self.assertIsNotNone(healthcheck)
-        path = re.search(r"/(\w+)\"", healthcheck.group(1))
+        # The probe is exec form (#3941 B3): the URL sits inside a JSON string,
+        # so its closing quote is escaped as \" there.
+        path = re.search(r"/(\w+)\\?\"", healthcheck.group(1))
         self.assertIsNotNone(path, healthcheck.group(1))
         self.assertIn(
             f"/{path.group(1)}",

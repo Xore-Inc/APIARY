@@ -20,9 +20,21 @@
 #
 # Usage:  ./debug-backends.sh
 #         WG=127.0.0.1 ./debug-backends.sh   # point at a different target
+#         PORT_DASHBOARD=18000 ./debug-backends.sh   # home port override (PORT_* vars, see below)
 
 WG="${WG:-10.8.0.2}"
 PASS=0; FAIL=0; WARN=0
+
+# Home-side ports of the always-up gateways. The defaults are the live ports;
+# the env overrides exist so the regression test can bind ephemeral ports
+# instead of fighting whatever holds these on a shared CI host (#3951).
+PORT_DASHBOARD="${PORT_DASHBOARD:-19092}"  # apiary-dashboard
+PORT_EVEBOX="${PORT_EVEBOX:-19636}"
+PORT_KIBANA="${PORT_KIBANA:-19601}"
+PORT_TANNER="${PORT_TANNER:-19091}"
+PORT_ARKIME="${PORT_ARKIME:-19080}"
+PORT_KEYCLOAK="${PORT_KEYCLOAK:-18080}"
+PORT_ARCANE="${PORT_ARCANE:-3552}"
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -68,25 +80,25 @@ info "HTTP services on home server (10.8.0.2) — always expected up"
 # ============================================================
 
 # The dashboard (Xore-Inc/apiary-dashboard; #3749 retired dashboard-next on 19090)
-probe $WG 19092 "Dashboard (apiary-dashboard)"
+probe $WG $PORT_DASHBOARD "Dashboard (apiary-dashboard)"
 
 # EveBox (was 302 via Traefik — verify direct)
-probe $WG 19636 "EveBox"
+probe $WG $PORT_EVEBOX "EveBox"
 
 # Kibana
-probe $WG 19601 "Kibana"
+probe $WG $PORT_KIBANA "Kibana"
 
 # Tanner
-probe $WG 19091 "Tanner web"
+probe $WG $PORT_TANNER "Tanner web"
 
 # Arkime viewer
-probe $WG 19080 "Arkime viewer"
+probe $WG $PORT_ARKIME "Arkime viewer"
 
 # Keycloak
-probe $WG 18080 "Keycloak"
+probe $WG $PORT_KEYCLOAK "Keycloak"
 
 # Arcane (deploy control plane)
-probe $WG 3552  "Arcane"
+probe $WG $PORT_ARCANE "Arcane"
 
 # ============================================================
 info "Services expected CLOSED on home (one-shot dependency or opt-in profile)"
@@ -128,7 +140,7 @@ info "Diagnosing 502s: TCP-open-but-HTTP-broken"
 
 # One target since #3749 (dashboard-next on 19090 is gone); kept as a list so
 # another listener is one more word.
-specs=("$WG:19092:apiary-dashboard")
+specs=("$WG:$PORT_DASHBOARD:apiary-dashboard")
 for spec in "${specs[@]}"; do
   IFS=: read -r h p lbl <<< "$spec"
   if tcp_open "$h" "$p"; then

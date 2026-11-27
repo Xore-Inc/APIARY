@@ -56,8 +56,8 @@ services:
     # ":latest@sha256" reference only hid which release was running. Naming the
     # release keeps the pin honest: a Keycloak security release is applied by
     # moving this line (tag and digest together, see docs/KEYCLOAK-OPERATIONS.md
-    # section 7), and the ACCEPTED_CVES entry for this exact digest in
-    # scripts/list-docker-base-images.py retires itself when it moves.
+    # section 7). The base-image gate (scripts/check-base-image-gate.py)
+    # measures the new digest against this one on the PR that moves it.
     #
     # 26.8.2 = 26.8 = latest on quay.io as of 2026-11-05.
     image: quay.io/keycloak/keycloak:26.8.2@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0

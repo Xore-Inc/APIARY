@@ -16,7 +16,7 @@
 #     ran, which is not the thing the scan is about;
 #   * the digest is stamped into the document itself (CycloneDX properties on
 #     metadata.component). syft records only name + tag there -- verified
-#     against syft 1.52.0's own cyclonedx-json output -- so a bare syft file
+#     against syft 1.52.0's own cyclonedx-json output (re-checked on 1.57.2) -- so a bare syft file
 #     cannot be traced back to the image it describes;
 #   * the copy kept on the homeserver is named for its digest.
 #
@@ -48,9 +48,9 @@ set -euo pipefail
 # The pin, same discipline as scripts/install-trivy.sh and every other
 # tool fetch in this repo (actionlint, zizmor, hadolint, rustup): versioned
 # archive, sha256 verified before extraction, never curl|sh.
-# syft_1.52.0_linux_amd64.tar.gz, sha256 taken from the release artefact.
-readonly PINNED_SYFT_VERSION=1.52.0
-readonly PINNED_SYFT_SHA256=caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d
+# syft_1.57.2_linux_amd64.tar.gz, sha256 taken from the release artefact.
+readonly PINNED_SYFT_VERSION=1.57.2
+readonly PINNED_SYFT_SHA256=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b
 
 die() {
   echo "generate-image-sbom: $*" >&2

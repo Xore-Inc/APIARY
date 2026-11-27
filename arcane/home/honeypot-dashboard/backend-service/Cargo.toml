@@ -26,7 +26,6 @@ base64 = "0.23"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
-tokio-stream = { version = "0.1", features = ["sync"] }
 # Payload Workbench (#1612 phase 3b): idempotency-key hashing and recipe-id
 # generation. Both need to agree with the Go tier's algorithm (SHA-256 of
 # the same material; crypto/rand-strength ids) while both write
