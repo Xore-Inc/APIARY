@@ -33,7 +33,6 @@ def _load(name: str, filename: str):
 
 
 gate = _load("check_base_image_gate", "check-base-image-gate.py")
-listing = _load("list_docker_base_images", "list-docker-base-images.py")
 
 OLD = "sha256:" + "a" * 64
 NEW = "sha256:" + "b" * 64
@@ -177,11 +176,11 @@ def test_split_reference_handles_registry_port_and_digest():
 # --- guards -----------------------------------------------------------------
 
 def test_no_exemption_list_is_left_anywhere():
-    assert not hasattr(listing, "ACCEPTED_CVES")
-    assert not hasattr(listing, "allow_cve_findings")
+    # Text check, not an import: the lister needs PyYAML, which the docs job
+    # does not install, and the point is what the files say, not what loads.
     assert not hasattr(gate, "ACCEPTED_CVES")
-    for rel in (".github/workflows/image-security-scan.yml", "scripts/check-base-image-gate.py",
-                "scripts/list-docker-base-images.py", "docs/CI-CD.md"):
+    for rel in ("scripts/list-docker-base-images.py", "scripts/check-base-image-gate.py",
+                ".github/workflows/image-security-scan.yml", "docs/CI-CD.md"):
         text = (REPO / rel).read_text()
         assert "ACCEPTED_CVES" not in text, rel
         assert "allow_cve_findings" not in text, rel
