@@ -310,6 +310,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{verb} [{entry['mode']}] {entry['new']['ref']}: {entry['message']}")
         if not entry["pass"]:
             print(f"::error title=Base-image gate::{entry['new']['ref']}: {entry['message']}")
+        elif not entry["new"]["measured"]:
+            # A coverage gap, not a finding: visible on the run, not a failure.
+            print(f"::warning title=Base-image not measured::{entry['new']['ref']}: {entry['message']}")
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps({"mode": args.mode, "base_rev": args.base_rev,
