@@ -30,7 +30,7 @@ tracked on #3923, not written off here. Fixes the repository can make itself
 
 The decision logic is in pure functions (`pair_references`, `verdict`,
 `scan_from_trivy_json`) so the four cases in the #3964 "Done when" are tested
-without pulling images. scripts/tests/test_3964_base_image_no_regression_gate.py.
+without pulling images. tests/docs/test_3964_base_image_no_regression_gate.py.
 
 Usage:
   python3 scripts/check-base-image-gate.py --mode pr --base-rev <sha> [--report FILE]
