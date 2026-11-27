@@ -142,17 +142,35 @@ updates:
       - dependency-name: python
     labels: [dependencies, containers]
 
-  # #3774: python 3.14 -> 3.15 for these three. Dependabot proposed it as a
-  # minor bump inside the shared group, but pydantic-core (llm-worker,
-  # ml-worker) and python-flirt / pyo3 0.27 (ghidra statictools) publish no
-  # cp315 wheels and fail to build from source, and the 3.15-slim digest
-  # carried unexempted HIGH findings. Split out of the shared entry (a
-  # directory may sit in only one docker entry) so the ignore stays scoped
-  # to these three; 3.14 patch/digest updates still arrive. Drop the ignore
-  # once those dependencies ship 3.15 wheels.
+  # #3774: python 3.14 -> 3.15 for ghidra statictools was held back while
+  # python-flirt / pyo3 0.27 (pulled in by flare-capa) had no cp315 wheel
+  # and could not build on 3.15. B5a (#3941) re-verified this on 2026-11-27:
+  # still failing, so statictools stays on 3.14 and this ignore stays until
+  # python-flirt ships a cp315 wheel. Drop it then.
   - package-ecosystem: docker
     directories:
       - /analysis/ghidra/statictools
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:45"
+      timezone: Europe/Berlin
+    groups:
+      container-compatible:
+        patterns: ["*"]
+        update-types: [minor, patch]
+        group-by: dependency-name
+    ignore:
+      - dependency-name: python
+        versions: [">=3.15"]
+    labels: [dependencies, containers]
+
+  # B5a (#3941), 2026-11-27: llm-worker and ml-worker run python:3.15-slim
+  # (pydantic-core and the ml stack have cp315 wheels, and both worker suites
+  # and image builds passed on 3.15). 3.15.x patch and digest updates arrive
+  # here; 3.16+ stays ignored until a 3.16 build is verified.
+  - package-ecosystem: docker
+    directories:
       - /llm-worker
       - /ml-worker
     schedule:
@@ -167,7 +185,7 @@ updates:
         group-by: dependency-name
     ignore:
       - dependency-name: python
-        versions: [">=3.15"]
+        versions: [">=3.16"]
     labels: [dependencies, containers]
 
   - package-ecosystem: pip

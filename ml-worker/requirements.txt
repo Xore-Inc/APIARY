@@ -36,48 +36,23 @@ elasticsearch==8.19.3
 # ML core
 scikit-learn==1.9.1
 joblib==1.6.0
-# 2.4.6. This rationale was re-derived 2026-08-27 against the interpreter
-# ml-worker/Dockerfile actually ships -- python:3.14-slim, digest-pinned.
-# Treat the Dockerfile's FROM, not any interpreter number in a comment, as
-# the thing these pins are verified against: the base image moved 3.12 ->
-# 3.14 under a dependabot digest bump (#1070) without this comment being
-# revisited, and the text below went on arguing about a Python this image
-# no longer runs. The deployed container has been Python 3.14.7 running
-# exactly these pins since that retag.
+# numpy 2.5.5, verified 2026-11-27 (B5a, #3941) against the interpreter
+# ml-worker/Dockerfile ships: python:3.15-slim, digest-pinned. Treat the
+# Dockerfile's FROM, not any interpreter number in a comment, as the thing
+# these pins are verified against.
 #
-# What holds 2.4.6 today is verification discipline, not a solver wall:
-# the numba/llvmlite/pyod pins below no longer force it. numba 0.67.0's own
-# metadata allows numpy<2.6 and declares Python 3.14 support (checked on
-# PyPI, 2026-08-27), and with numpy left unpinned pip resolves numpy 2.5.2
-# on 3.14 and this whole file still installs -- so a numpy bump past 2.5 is
-# NOT the ResolutionImpossible it was in the #593/#174 era below, when
-# numba was still 0.66.0 with its numpy<2.5 cap. It stays 2.4.6 anyway,
-# deliberately: this exact quartet (numpy 2.4.6 / numba 0.67.0 /
-# llvmlite 0.49.0 / pyod 3.6.5) is the set verified to install together,
-# re-run live on 2026-08-27 (clean `pip install` of this file on
-# python:3.14.7, then import + numba njit smoke test), and numpy is in
-# .github/dependabot.yml's ignore list for this directory precisely so it
-# moves only with a fresh recorded joint verification, in lockstep with
-# the numba/llvmlite pins below -- never numpy alone. See #61/#62 for the
-# original verification; #593/#174 for what skipping that discipline costs.
+# The joint set that installs together and was smoke-tested on
+# python:3.15-slim is numpy 2.5.5 / numba 0.68.1 / llvmlite 0.50.0 /
+# pyod 3.6.8 (numba 0.68.1 declares numpy<2.6, so numpy 2.5.x needs no numba
+# bump). numpy is in .github/dependabot.yml's ignore list for this directory:
+# it moves only with a fresh recorded joint verification, in lockstep with the
+# numba/llvmlite pins below, never numpy alone.
 #
-# #593: a Dependabot PR (build(deps): bump numpy from 1.26.4 to 2.5.1)
-# bumped this to 2.5.1 anyway, directly contradicting this comment, and
-# broke the build exactly as predicted -- `numba 0.66.0 depends on
-# numpy<2.5 and >=1.22`, ResolutionImpossible. Reverted back to 2.4.6.
-# If numpy needs bumping again, the numba/llvmlite pins below need to move
-# in lockstep (verify a clean joint install first), not numpy alone.
-#
-# #174: happened a second time -- PR #850 ("bump the python-compatible
-# group across 1 directory with 2 updates") re-bumped this to 2.5.1 again,
-# same contradiction, same break. Found live: `docker compose up -d
-# --build` for an unrelated ml-worker fix failed outright with the exact
-# ResolutionImpossible this comment already describes (numba 0.66.0 still
-# pinned below, never independently bumped -- only numpy drifted).
-# Reverted to 2.4.6 again. See .github/dependabot.yml's ignore rule for
-# this directory -- added alongside this revert so Dependabot stops
-# proposing it a third time instead of just fixing it again by hand later.
-numpy==2.4.6
+# History (kept short): Dependabot re-bumped numpy alone twice before this
+# (#593 -> 2.5.1 against numba 0.66.0's numpy<2.5 cap, #174 -> 2.5.1 again;
+# both reverted). Those breaks were a joint-pin problem, which is why the
+# ignore rule exists. See #61/#62 for the original verification.
+numpy==2.5.5
 pandas==3.1.1
 
 # Deep learning (CPU-only PyTorch)
@@ -85,7 +60,7 @@ torch==2.15.0+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Outlier detection (HBOS). Pulls in numba+llvmlite -- see the numpy pin
-# above; this is the version set actually verified to install together.
+# above; this is the version set verified to install together on 3.15.
 pyod==3.6.8
 numba==0.68.1
 llvmlite==0.50.0
