@@ -1,25 +1,34 @@
 name: Probe arm auto-merge (#3964, temporary)
 
-# Temporary experiment for #3964: arms squash auto-merge with the workflow
-# token on the probe PR only, the same call dependabot-auto-merge.yml makes.
-# Removed in the PR that follows the probe.
+# Temporary for #3964, removed in the PR that follows this one. On this
+# branch only, it arms squash auto-merge with the workflow token, the same call
+# dependabot-auto-merge.yml makes, then runs the dispatch script the way the
+# Dependabot job does, so the arm -> merge -> dispatch path runs for real.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened]
 
 permissions: {}
 
 jobs:
   arm:
-    if: github.head_ref == 'probe/3964-auto-merge'
+    if: github.head_ref == 'fix/3964-ci-after-automerge'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
-      - name: Arm squash auto-merge
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Arm squash auto-merge, then dispatch main CI once it lands
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr merge --auto --squash "$PR_URL"
+          bash scripts/dispatch-main-ci-after-merge.sh "$PR_NUMBER"
