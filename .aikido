@@ -1,0 +1,16 @@
+# Aikido AutoFix pull request settings for this repository.
+#
+# Aikido AutoFix PRs are proposals, not merge candidates. They are never
+# merged as-is: either reimplement the fix in our own PR, or retitle and
+# clean up the body first. Dependency autofix stays enabled alongside
+# Dependabot; an Aikido dependency PR is closed when Dependabot covers the
+# same bump. Do not disable dependency autofix.
+autofix:
+  pr_config:
+    title_prefix: "fix(aikido-$AUTOFIX_TYPE): "
+    commit_prefix: "fix(aikido): "
+    branch_prefix: "fix/aikido-$AUTOFIX_TYPE-"
+    labels: "security,bug"
+    draft_pr: true
+    auto_merge: false
+    create_task_for_pr: false

@@ -22,3 +22,7 @@ deployment-specific addresses and default password this repository must never
 name. Exactly one tracked `.env` is exempt, and it is the decoy honeyfs file
 under `arcane/home/honeypot-cowrie/` that exists for attackers to find — not a
 credential, and not something to "fix" by deleting.
+
+Aikido AutoFix pull request settings live in `.aikido` at the repository root.
+AutoFix pull requests are proposals and are never merged as-is; dependency
+autofix stays enabled alongside Dependabot.
