@@ -539,6 +539,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "encodify"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab7f638cb35e10aa08efd439d11ddcbeef7d52dd987c4956a6ff2cc1061020f3"
+dependencies = [
+ "memchr",
+ "simdutf8",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -749,14 +759,13 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hashify"
-version = "0.2.9"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd1246c0e5493286aeb2dde35b1f4eb9c4ce00e628641210a5e553fc001a1f26"
+checksum = "04a037b1848eada162d6534c206770180e6bfc0eaa97292250c3e7179d8b1f73"
 dependencies = [
- "indexmap 2.14.2",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1247,11 +1256,14 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "mail-parser"
-version = "0.11.9"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ec00bda90c6e645a54506c630c2820cd6b1890cfd2b0a169b50f74b2b8c7c86"
+checksum = "2e57f7caaeb0071026b4be388c81e9c253853d9ed072a3061d425ef1c1b1b569"
 dependencies = [
+ "encodify",
  "hashify",
+ "memchr",
+ "simdutf8",
 ]
 
 [[package]]
