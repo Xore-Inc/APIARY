@@ -19,8 +19,11 @@ FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f0
 
 # libpcap0.8 for capture; ca-certificates is not needed -- this talks to
 # nothing, it only reads packets and writes stdout.
+# #3964: zlib1g CVE-2026-85091 (HIGH) is fixed in a Debian update that this
+# trixie-slim digest predates. Upgrade it here rather than exempting the base.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpcap0.8 && \
+    apt-get install -y --only-upgrade --no-install-recommends zlib1g && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --system --no-create-home --shell /usr/sbin/nologin huginn
 

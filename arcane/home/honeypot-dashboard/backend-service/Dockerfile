@@ -54,8 +54,11 @@ LABEL org.opencontainers.image.revision="${GIT_SHA:-unknown}" \
       org.opencontainers.image.title="apiary-backend" \
       org.opencontainers.image.description="APIARY dashboard backend service (Rust, axum)"
 
+# #3964: zlib1g CVE-2026-85091 (HIGH) is fixed in a Debian update that this
+# trixie-slim digest predates. Upgrade it here rather than exempting the base.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --only-upgrade --no-install-recommends zlib1g \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/apiary-backend /usr/local/bin/apiary-backend
 ENV LISTEN_ADDR=0.0.0.0:8081
