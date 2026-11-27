@@ -206,16 +206,18 @@ which copies these sources and does not depend on this stage.
 The floating `mcr.microsoft.com/dotnet/aspnet:10.0` and `runtime:10.0`
 (Ubuntu 24.04 "noble") carry apt/libapt-pkg CVE-2026-109518, which the
 base-image CVE gate flags and no noble build fixes yet. Both final stages
-now use Microsoft's Ubuntu 26.04 variant of the same 10.0.14 runtime,
-pinned by index digest, which trivy measures at 0 fixable CRITICAL/HIGH:
+now use Microsoft's Ubuntu 26.04 variant of the .NET 10.0 runtime,
+pinned by index digest, which trivy measures at 0 fixable CRITICAL/HIGH.
+The API image is 10.0.15 (the 10.0.14 aspnet pin scanned with 3 fixable
+HIGH in `Microsoft.AspNetCore.App.Runtime`; the 10.0.15 tag scans clean):
 
-- `Dockerfile-api` `prod`: `aspnet:10.0.14-resolute@sha256:cb0e8cad…`
+- `Dockerfile-api` `prod`: `aspnet:10.0.15-resolute@sha256:77de3c37…`
 - `Dockerfile-client-universal` final stage: `runtime:10.0.14-resolute@sha256:89f13dc6…`
 
 The same pins are in `sandbox/ghosts/Dockerfile.api-prep` and
 `Dockerfile.client-prep`, the builds that actually run. Nothing else in
 either vendored file changed. The variant keeps what the noble image had:
 a shell and apt, the default user root (the `app` user, uid 1654, exists
-but is not selected), and the same .NET runtime version. A future bump can
+but is not selected), and the same .NET 10.0 line. A future bump can
 return to the plain `10.0` tag once its noble build no longer carries the
 finding.
