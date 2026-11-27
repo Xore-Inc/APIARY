@@ -208,7 +208,7 @@ services:
 
   elasticsearch-setup:
     <<: *runtime-defaults
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6@sha256:79b4f1de4c15e6eca824723086a51e5934406d614d410cc11be77748cafac537
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.7@sha256:8aa3b18f6a26880f4c2fa1ffb37a48213e201b0b6a1a47412c66b1f5d533de91
     container_name: hp-elasticsearch-setup
     restart: no
     entrypoint:
@@ -296,7 +296,7 @@ services:
 
   arkime-init:
     <<: *runtime-defaults
-    image: ghcr.io/arkime/arkime/arkime:v6-latest@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
+    image: ghcr.io/arkime/arkime/arkime:v6.9.2@sha256:8994622b07ba70db426f5405bede0614a54f339117b745e2cd56ac5eeac21b75
     container_name: hp-arkime-init
     restart: no
     command:
