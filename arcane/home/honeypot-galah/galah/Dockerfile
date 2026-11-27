@@ -86,10 +86,12 @@ RUN CGO_ENABLED=1 GOOS=linux go build -trimpath \
     -o /galah ./cmd/galah
 
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
-# #3964: zlib1g CVE-2026-85091 (HIGH) is fixed in a Debian update that this
-# trixie-slim digest predates. Upgrade it here rather than exempting the base.
+# #3964: upgrade the packages this layer inherits from the trixie-slim digest to
+# the Debian security fixes it predates (zlib1g CVE-2026-85091 and libzstd1
+# CVE-2026-124851 are fixable in the pinned digest). A fix we can apply
+# ourselves is applied here, not exempted.
 RUN apt-get update && apt-get install -y --no-install-recommends netcat-openbsd \
- && apt-get install -y --only-upgrade --no-install-recommends zlib1g \
+ && apt-get upgrade -y \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /galah /usr/local/bin/galah
 COPY config.yaml /config.yaml
