@@ -41,14 +41,14 @@ arcane_api() {
   jq -nc --arg m "$method" --arg p "$path" --arg b "$body" \
     '{method:$m, path:$p, body:($b | if . == "" then null else fromjson end)}' >> "$STATE/calls.jsonl"
   case "$method $path" in
-    "GET /customize/git-repositories")
+    "GET /gitops/repositories")
       jq -c '{success:true, data:.}' "$STATE/repos.json" ;;
-    "POST /customize/git-repositories")
+    "POST /gitops/repositories")
       local id="repo-$(jq length "$STATE/repos.json")"
       jq -c --arg id "$id" --argjson r "$body" '. + [$r + {id:$id}]' "$STATE/repos.json" > "$STATE/repos.tmp"
       mv "$STATE/repos.tmp" "$STATE/repos.json"
       jq -nc --arg id "$id" '{success:true, data:{id:$id}}' ;;
-    "POST /environments/0/gitops-syncs")
+    "POST /agents/0/gitops/syncs")
       echo '{"success":true,"data":{"lastSyncStatus":"success"}}' ;;
     *) echo "unexpected call: $method $path" >&2; return 1 ;;
   esac
@@ -84,7 +84,7 @@ def run_import(existing_repos: list[dict]) -> tuple[subprocess.CompletedProcess,
 
 
 def syncs(calls: list[dict]) -> dict[str, dict]:
-    return {c["body"]["name"]: c["body"] for c in calls if c["path"] == "/environments/0/gitops-syncs"}
+    return {c["body"]["name"]: c["body"] for c in calls if c["path"] == "/agents/0/gitops/syncs"}
 
 
 class ArcaneImportManifestTest(unittest.TestCase):
@@ -123,7 +123,7 @@ class ArcaneImportManifestTest(unittest.TestCase):
         proc, calls, repos = run_import(existing)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(repos), 2)
-        self.assertFalse([c for c in calls if c["method"] == "POST" and c["path"] == "/customize/git-repositories"])
+        self.assertFalse([c for c in calls if c["method"] == "POST" and c["path"] == "/gitops/repositories"])
         self.assertEqual(syncs(calls)["apiary-dashboard"]["repositoryId"], "d")
 
     def test_registration_with_the_wrong_url_fails_closed(self) -> None:

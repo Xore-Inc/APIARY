@@ -20,8 +20,8 @@
 services:
   arcane:
     environment:
-      GPU_MONITORING_ENABLED: "true"
-      GPU_TYPE: nvidia
+      ARCANE_GPU_MONITORING_ENABLED: "true"
+      ARCANE_GPU_TYPE: nvidia
       NVIDIA_VISIBLE_DEVICES: all
     deploy:
       resources:

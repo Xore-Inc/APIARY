@@ -127,33 +127,39 @@ class Arcane:
         start = 0
         while True:
             sep = "&" if "?" in path else "?"
-            page = self.call("GET", f"{path}{sep}limit=100&start={start}")
+            page = self.call("GET", f"{path}{sep}limit=100&start={start}&includeTotal=true")
             rows = page.get("data") or []
             out += rows
-            total = (page.get("pagination") or {}).get("totalItems")
+            pagination = page.get("pagination") or {}
+            total = pagination.get("totalItems")
             start += len(rows)
-            if not rows or total is None or start >= total:
+            # Arcane v3 sends hasNextPage; totalItems is -1 on some lists
+            # unless includeTotal=true is passed (sent above).
+            if "hasNextPage" in pagination:
+                if not rows or not pagination["hasNextPage"]:
+                    return out
+            elif not rows or total is None or total < 0 or start >= total:
                 return out
 
     # -- gitops --------------------------------------------------------------
     def syncs(self) -> list[dict]:
-        return self.paged("/environments/{env}/gitops-syncs")
+        return self.paged("/agents/{env}/gitops/syncs")
 
     def repositories(self) -> list[dict]:
-        return self.paged("/customize/git-repositories")
+        return self.paged("/gitops/repositories")
 
     # -- swarm ---------------------------------------------------------------
     def stack_services(self, stack: str) -> list[dict]:
         try:
-            return self.paged(f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(stack)}/services")
+            return self.paged(f"/agents/{{env}}/swarm/stacks/{urllib.parse.quote(stack)}/services")
         except NotFound:
             return []  # the stack does not exist (yet)
 
     def service(self, sid: str) -> dict:
-        return self.call("GET", f"/environments/{{env}}/swarm/services/{sid}").get("data") or {}
+        return self.call("GET", f"/agents/{{env}}/swarm/services/{sid}").get("data") or {}
 
     def stacks(self) -> list[dict]:
-        return self.paged("/environments/{env}/swarm/stacks")
+        return self.paged("/agents/{env}/swarm/stacks")
 
 
 def find_sync(api: Arcane, stack: str, syncs: list[dict] | None = None) -> dict | None:
@@ -294,7 +300,7 @@ def stack_configs(compose_path: str, commit: str, reader: Callable[[str, str], b
 
 
 def config_list(api: Arcane) -> list[dict]:
-    return api.call("GET", "/environments/{env}/swarm/configs").get("data") or []
+    return api.call("GET", "/agents/{env}/swarm/configs").get("data") or []
 
 
 def push_configs(api: Arcane, stack: str, compose_path: str, commit: str,
@@ -316,7 +322,7 @@ def push_configs(api: Arcane, stack: str, compose_path: str, commit: str,
                 "Labels": {"apiary.stack": stack, "apiary.config.base": c["base"],
                            "apiary.config.version": c["version"], "apiary.config.sha256": c["sha256"],
                            "apiary.config.commit": commit}}
-        api.call("POST", "/environments/{env}/swarm/configs", {"spec": spec})
+        api.call("POST", "/agents/{env}/swarm/configs", {"spec": spec})
         done.append(f"{c['name']} (created from {c['path']}@{commit[:8]})")
     return done
 
@@ -432,7 +438,7 @@ def wait_rollout(api: Arcane, stack: str, before: dict[str, dict], timeout: int 
 
 
 def run_sync(api: Arcane, sync_id: str) -> None:
-    res = api.call("POST", f"/environments/{{env}}/gitops-syncs/{sync_id}/sync").get("data") or {}
+    res = api.call("POST", f"/agents/{{env}}/gitops/syncs/{sync_id}?action=sync").get("data") or {}
     if not res.get("success"):
         raise Abort(f"sync failed: {res.get('message')} {res.get('error') or ''}".strip())
     log(f"sync: {res.get('message')}")
@@ -477,14 +483,14 @@ def cmd_ensure(api: Arcane, args) -> int:
             log(f"{plan.stack}: would {plan.action} {json.dumps(plan.body, sort_keys=True)}")
             continue
         if plan.action == "update":
-            api.call("PUT", f"/environments/{{env}}/gitops-syncs/{plan.sync_id}", plan.body)
+            api.call("PATCH", f"/agents/{{env}}/gitops/syncs/{plan.sync_id}", plan.body)
             log(f"{plan.stack}: sync {plan.sync_id} updated {sorted(plan.body)}; run `deploy {plan.stack}` to apply")
             continue
         commit = fetch_ref(args.branch)
         for line in push_configs(api, plan.stack, stacks[plan.stack], commit):
             log(f"{plan.stack}: config {line}")
         log(f"{plan.stack}: creating sync (Arcane deploys it immediately)")
-        created = api.call("POST", "/environments/{env}/gitops-syncs", plan.body).get("data") or {}
+        created = api.call("POST", "/agents/{env}/gitops/syncs", plan.body).get("data") or {}
         log(f"{plan.stack}: sync {created.get('id')} status={created.get('lastSyncStatus')}")
         if created.get("lastSyncStatus") == "failed":
             log(f"{plan.stack}: initial deploy failed: {created.get('lastSyncError')}")
@@ -541,7 +547,7 @@ def cmd_rollback(api: Arcane, args) -> int:
     if not targets:
         raise Abort("no matching service")
     for sid in targets:
-        api.call("POST", f"/environments/{{env}}/swarm/services/{sid}/rollback")
+        api.call("POST", f"/agents/{{env}}/swarm/services/{sid}?action=rollback")
         log(f"rollback requested: {before[sid]['name']}")
     rc = wait_rollout(api, args.stack, before, timeout=args.timeout)
     log("Git still holds the rolled-back change. Revert it on main, then `deploy`.")
@@ -639,7 +645,7 @@ def settle_paused(api: Arcane, entries: list[dict], quiet: float = 45, timeout: 
                 raise Abort(f"{e['name']} disappeared while pausing; inventory kept for recovery")
             if cur.get("replicas") != 0:
                 log(f"  {e['name']}: a sync set replicas back to {cur.get('replicas')}; scaling to 0 again")
-                api.call("POST", f"/environments/{{env}}/swarm/services/{e['id']}/scale", {"replicas": 0})
+                api.call("PATCH", f"/agents/{{env}}/swarm/services/{e['id']}", {"replicas": 0})
                 disturbed = True
             elif cur.get("runningReplicas"):
                 disturbed = True
@@ -677,14 +683,14 @@ def cmd_pause(api: Arcane, args, runner: Callable = ssh_run) -> int:
         gate = {"stack": stack, "kind": "gate", "sync": sync["id"] if sync else None,
                 "autoSync": bool(sync and sync.get("autoSync"))}
         if gate["autoSync"]:
-            api.call("PUT", f"/environments/{{env}}/gitops-syncs/{sync['id']}", {"autoSync": False})
+            api.call("PATCH", f"/agents/{{env}}/gitops/syncs/{sync['id']}", {"autoSync": False})
             log(f"GATE: autoSync off for {sync['name']} (an auto-sync would redeploy the replicas)")
         entries.append(gate)
         write_inventory(entries)
         for s in plans[stack]:
             entry = {"stack": stack, "kind": "service", "id": s["id"], "name": s["name"],
                      "replicas": s.get("replicas"), "probe": (s.get("labels") or {}).get("apiary.probe")}
-            api.call("POST", f"/environments/{{env}}/swarm/services/{s['id']}/scale", {"replicas": 0})
+            api.call("PATCH", f"/agents/{{env}}/swarm/services/{s['id']}", {"replicas": 0})
             entries.append(entry)
             write_inventory(entries)
             ok = wait_replicas(api, stack, s["id"], 0)
@@ -706,10 +712,10 @@ def cmd_resume(api: Arcane, args, runner: Callable = ssh_run) -> int:
     for e in reversed(entries):
         if e["kind"] == "gate":
             if e.get("autoSync") and e.get("sync"):
-                api.call("PUT", f"/environments/{{env}}/gitops-syncs/{e['sync']}", {"autoSync": True})
+                api.call("PATCH", f"/agents/{{env}}/gitops/syncs/{e['sync']}", {"autoSync": True})
                 log(f"GATE: autoSync restored for {e['stack']}")
             continue
-        api.call("POST", f"/environments/{{env}}/swarm/services/{e['id']}/scale", {"replicas": e["replicas"]})
+        api.call("PATCH", f"/agents/{{env}}/swarm/services/{e['id']}", {"replicas": e["replicas"]})
         if not wait_replicas(api, e["stack"], e["id"], e["replicas"], timeout=args.timeout):
             log(f"  {e['name']}: replicas did not reach {e['replicas']}")
             problems += 1
@@ -777,7 +783,7 @@ def cmd_prune(api: Arcane, args, runner: Callable = ssh_run) -> int:
     for c in doomed:
         name = c["spec"]["Name"]
         try:
-            api.call("DELETE", f"/environments/{{env}}/swarm/configs/{c['id']}")
+            api.call("DELETE", f"/agents/{{env}}/swarm/configs/{c['id']}")
             log(f"removed config {name}")
         except Abort as exc:  # still referenced by a service: swarm refuses, which is right
             log(f"kept config {name}: {exc}")
@@ -787,7 +793,7 @@ def cmd_prune(api: Arcane, args, runner: Callable = ssh_run) -> int:
 # -- secrets -------------------------------------------------------------------
 
 def list_swarm_entries(api: Arcane) -> list[dict]:
-    return api.call("GET", "/environments/{env}/swarm/secrets").get("data") or []
+    return api.call("GET", "/agents/{env}/swarm/secrets").get("data") or []
 
 
 def cmd_secret(api: Arcane, args, stdin=None) -> int:
@@ -808,7 +814,7 @@ def cmd_secret(api: Arcane, args, stdin=None) -> int:
     if args.action == "rm":
         if args.name not in existing:
             raise Abort(f"no secret {args.name}")
-        api.call("DELETE", f"/environments/{{env}}/swarm/secrets/{existing[args.name]['id']}")
+        api.call("DELETE", f"/agents/{{env}}/swarm/secrets/{existing[args.name]['id']}")
         log(f"removed {args.name}")
         return 0
     if args.name in existing:
@@ -822,7 +828,7 @@ def cmd_secret(api: Arcane, args, stdin=None) -> int:
         raise Abort("empty secret value")
     spec = {"Name": args.name, "Data": base64.b64encode(value).decode(),
             "Labels": {"apiary.secret.base": m.group(1), "apiary.secret.version": m.group(2)}}
-    api.call("POST", "/environments/{env}/swarm/secrets", {"spec": spec})
+    api.call("POST", "/agents/{env}/swarm/secrets", {"spec": spec})
     log(f"created {args.name} ({len(value)} bytes); the value was not printed")
     return 0
 
@@ -832,7 +838,7 @@ def cmd_remove(api: Arcane, args) -> int:
         raise Abort("remove deletes the stack's sync AND its services; pass --yes")
     sync = find_sync(api, args.stack)
     if sync:
-        api.call("DELETE", f"/environments/{{env}}/gitops-syncs/{sync['id']}")
+        api.call("DELETE", f"/agents/{{env}}/gitops/syncs/{sync['id']}")
         log(f"deleted sync {sync['id']}")
     # A sync run already in flight is not cancelled by deleting its record and
     # can deploy the stack again seconds later (seen live in #3590). Keep
@@ -842,7 +848,7 @@ def cmd_remove(api: Arcane, args) -> int:
     while True:
         if any(s.get("name") == args.stack for s in api.stacks()):
             try:
-                api.call("DELETE", f"/environments/{{env}}/swarm/stacks/{urllib.parse.quote(args.stack)}")
+                api.call("DELETE", f"/agents/{{env}}/swarm/stacks/{urllib.parse.quote(args.stack)}")
                 log(f"removed stack {args.stack}")
             except NotFound:
                 pass
@@ -858,7 +864,7 @@ def cmd_remove(api: Arcane, args) -> int:
         spec = c.get("spec") or {}
         if (spec.get("Labels") or {}).get("apiary.stack") == args.stack:
             try:
-                api.call("DELETE", f"/environments/{{env}}/swarm/configs/{c['id']}")
+                api.call("DELETE", f"/agents/{{env}}/swarm/configs/{c['id']}")
                 log(f"removed config {spec.get('Name')}")
             except Abort as exc:
                 log(f"kept config {spec.get('Name')}: {exc}")

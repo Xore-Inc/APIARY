@@ -52,7 +52,7 @@ CI, and this doc all read from it rather than maintaining separate lists.
 ## Repository authentication
 
 `Xore/APIARY` is public, so the registered repository
-(`POST /customize/git-repositories`) uses `authType: "none"` — plain HTTPS
+(`POST /gitops/repositories`) uses `authType: "none"` — plain HTTPS
 clone, no deploy key or token. If this repository is ever made private,
 switch to a read-only deploy key or narrowly scoped token and set
 `sshHostKeyVerification` to strict (not `accept_new`) once the host key has
@@ -61,7 +61,7 @@ been provisioned once.
 ## Manifest import
 
 `scripts/install-homeserver.sh`'s `step_arcane_import_stacks` reads the
-manifest and creates one `POST /environments/0/gitops-syncs` per matching
+manifest and creates one `POST /agents/0/gitops/syncs` per matching
 entry (environment `0` is Arcane's single "Local Docker" environment on a
 one-host deployment). Its selection filter matches all 32 `honeypot-*`
 entries — and, since #1505, three of the seven non-`honeypot-*` entries
@@ -86,7 +86,7 @@ covered where fleet-wide operations are concerned — `docs/STACK-REBUILD.md`
 lists it in both reset loops — just not by the from-scratch import path.
 
 To import (or re-import) by hand instead, `POST` the manifest's entries to
-`/environments/0/gitops-syncs/import` — the bulk-import shape matches the
+`/agents/0/gitops/syncs/import` — the bulk-import shape matches the
 manifest's own field names exactly (`syncName`, `gitRepo`, `branch`,
 `dockerComposePath`, `autoSync`, `syncDirectory`, `syncInterval`).
 
@@ -145,7 +145,7 @@ letting Arcane's own directory check block the whole import.
    Check `stat -c "%U:%G %a"` on the original before removing anything, and
    match it exactly on restore.
 6. If step 5 restored anything the initial deploy needed,
-   `POST /environments/0/projects/{id}/up` to redeploy with it now present.
+   `POST /agents/0/projects/{id}/deploy?action=up` to redeploy with it now present.
 7. Verify health, and for anything with a network-facing port, verify
    actual reachability at the address real clients will use — not just that
    the container reports healthy. A container can be genuinely healthy and
@@ -180,7 +180,7 @@ a stack means:
    not do this for you — that flag only cleans up orphans within its own
    compose file's project, not a sibling stack entirely.
 3. For an Arcane-managed (homeserver) stack, also delete the corresponding
-   `gitops-syncs` record (`DELETE /environments/0/gitops-syncs/{id}`) and
+   gitops sync record (`DELETE /agents/0/gitops/syncs/{id}`) and
    remove the on-disk stack directory under `/var/dockge/stacks/<name>/` —
    an orphaned sync record with no matching repo directory is itself a
    confusing half-retired state.
@@ -197,14 +197,18 @@ alone. Re-verify against whatever Arcane version is pinned in
 happened and the re-verification has not:** every item below was confirmed
 against `v2.8.0`–`v2.9.0` (including the no-`profiles:`-support finding,
 which cites the upstream issue as still open at `v2.8.1`), while
-`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v2.17.3`
-by digest (2026-11-17 maintenance window; `v2.17.0` from 2026-10-24, #3720; previously `v2.16.1` from #3697, `v2.15.1`,
-before that `v2.11.1`). The edge agents on precision and the VPS run the
-matching `ghcr.io/getarcaneapp/arcane-headless:v2.17.3`, digest-pinned in
-their host-local compose files; the template is
-`ops/arcane-agent/compose.yml`.
-Nothing here is claimed to be false of `v2.17.3` — it is claimed to be
-unconfirmed against it, and eight minor versions of upstream is exactly the
+`docker-compose.arcane.yml` now pins `ghcr.io/getarcaneapp/manager:v3.2.0`
+by digest (2026-11-28, B11 / #3875; `v2.17.3` from the 2026-11-17 maintenance
+window, `v2.17.0` from 2026-10-24, #3720; previously `v2.16.1` from #3697,
+`v2.15.1`, before that `v2.11.1`). The agents on precision and the VPS run the
+matching `ghcr.io/getarcaneapp/agent:v3.2.0` (v3 dropped the
+`arcane-headless` alias), digest-pinned in their host-local compose files;
+the template is `ops/arcane-agent/compose.yml`. v3 is a major: the API moved
+(see "Arcane v3 API" below) and the sync/redeploy behaviour in this section
+has not been re-measured on it, except that a no-op Swarm sync (`canary`)
+still restarted no task.
+Nothing here is claimed to be false of `v3.2.0` — it is claimed to be
+unconfirmed against it, and a major version of upstream is exactly the
 gap that re-verification is for.
 
 - **`"project directory is not inside a mounted directory"` is a false
@@ -328,7 +332,8 @@ gap that re-verification is for.
   the blocking sync was deleted. Archiving the stale project
   (`POST .../projects/{id}/archive`) does **not** free the path either;
   only destroying it does
-  (`DELETE /environments/0/projects/{id}/destroy`). Confirmed live that
+  (`DELETE /environments/0/projects/{id}/destroy` in v2; `DELETE
+  /agents/0/projects/{id}` in v3). Confirmed live that
   `destroy` does *not* touch a named Docker volume the stack's containers
   were using — `ghosts-postgres-data` survived a `destroy` cleanly and the
   recreated Postgres container found its existing database intact. It can,
@@ -413,13 +418,57 @@ Two things worth knowing when setting an override:
   tracked branch) do not remove the directory; only the explicit
   remove-then-resync cutover sequence above does.
 
+## Arcane v3 API (#3875)
+
+Arcane v3 (live since 2026-11-28, v3.2.0) moved every `/api/environments/...`
+route to `/api/agents/...`, turned sub-resource actions into `?action=`
+query parameters, and switched updates from `PUT` to `PATCH`. The old paths
+answer 404. The `X-API-Key` header and the existing keys still work, and
+agent/environment IDs are unchanged (the homeserver is still `0`).
+
+| v2.17 | v3.2 |
+|---|---|
+| `GET /environments` | `GET /agents` |
+| `GET /environments/0/gitops-syncs?limit=100` | `GET /agents/0/gitops/syncs?limit=100` |
+| `POST /environments/0/gitops-syncs/{id}/sync` | `POST /agents/0/gitops/syncs/{id}?action=sync` |
+| `PUT /environments/0/gitops-syncs/{id}` | `PATCH /agents/0/gitops/syncs/{id}` |
+| `POST /environments/0/projects/{id}/build` | `POST /agents/0/projects/{id}/build` |
+| `POST /environments/0/projects/{id}/redeploy` | `POST /agents/0/projects/{id}/deploy?action=redeploy` |
+| `POST /environments/0/projects/{id}/up` | `POST /agents/0/projects/{id}/deploy?action=up` |
+| `POST /environments/0/projects/{id}/down` | `POST /agents/0/projects/{id}?action=down` |
+| `DELETE /environments/0/projects/{id}/destroy` | `DELETE /agents/0/projects/{id}` |
+| `/customize/git-repositories` | `/gitops/repositories` |
+| `/container-registries`, `.../{id}/test` | `/registries`, `POST /registries/{id}?action=test` |
+| `/environments/{id}/swarm/...` | `/agents/{id}/swarm/...` |
+| `POST .../swarm/services/{id}/scale` | `PATCH /agents/{id}/swarm/services/{id}` `{"replicas":N}` |
+| `POST .../swarm/services/{id}/rollback` | `POST /agents/{id}/swarm/services/{id}?action=rollback` |
+
+Behaviour notes, measured on v3.2.0:
+
+- `build` and `deploy` still stream (`application/x-json-stream`, use
+  `curl -N`). The first line is `{"type":"activity","activityId":...}`; the
+  stream then ends with exactly one of `{"done":true}` (success) or
+  `{"error":"..."}` (failure). Failures still come back as **HTTP 200**, so
+  check the frames, not the status code. The outcome is also kept as an
+  activity: `GET /agents/0/activities/{activityId}` (`activity.status`).
+- `deploy?action=redeploy` is documented upstream as pull + down + up, so it
+  recreates every container of the project. `deploy?action=up` is a plain
+  `compose up`.
+- Some list endpoints report `totalItems: -1` unless `includeTotal=true` is
+  passed; paginate on `pagination.hasNextPage`.
+- An API key is accepted only as `X-API-Key`. `Authorization: Bearer` takes a
+  session JWT, not an API key.
+- v3.2.0 skips a scheduled GitOps sync run when the remote branch has not
+  moved (upstream #4969). Every sync here is `autoSync: false`, so this only
+  matters if that changes.
+
 ## Manual sync, deploy, rollback, and failure triage
 
-- **Trigger a sync manually**: `POST /environments/0/gitops-syncs/{syncId}/sync`.
+- **Trigger a sync manually**: `POST /agents/0/gitops/syncs/{syncId}?action=sync`.
 - **Redeploy without re-syncing** (e.g. after restoring a secret):
-  `POST /environments/0/projects/{projectId}/up`.
+  `POST /agents/0/projects/{projectId}/deploy?action=up`.
 - **Check a sync's last result**:
-  `GET /environments/0/gitops-syncs/{syncId}` — look at `lastSyncStatus`
+  `GET /agents/0/gitops/syncs/{syncId}` — look at `lastSyncStatus`
   and `lastSyncError`. A `"failed"` status with a container exit-code error
   for a one-shot job (`restart: no`, e.g. `honeypot-init`'s
   `snare-clone`/`elasticsearch-setup`) can be a **false negative**: Arcane's
@@ -469,7 +518,7 @@ design branches and no `refs/heads/production`; `scripts/promote-release.sh
 `refs/heads/` onto whatever it is given (see "Arcane cannot track a tag"
 below) — so this is the one place where the manifest is currently ahead of
 reality in a way that bites: the documented bulk-import path,
-`POST /environments/0/gitops-syncs/import`, would create 39 syncs that all
+`POST /agents/0/gitops/syncs/import`, would create 39 syncs that all
 fail on their first run, on a branch that nothing creates until someone runs
 `scripts/promote-release.sh <tag>`. What actually runs today is the manual
 model below.
@@ -796,7 +845,7 @@ three-puller policy in this round either.** Reasoning:
   still names only `honeypot-init` — so the report would exit non-zero on a
   perfectly healthy fleet, which is the exact "permanently red and therefore
   ignored" failure mode its own comment says the exemption exists to
-  prevent. Worth one `GET /environments/0/gitops-syncs` before #1507's
+  prevent. Worth one `GET /agents/0/gitops/syncs` before #1507's
   activation is revisited.
 
 **What makes Arcane gitops-sync drift visible, since nothing did before:**
@@ -809,7 +858,7 @@ make). Run it by hand:
 ARCANE_API_KEY=... scripts/arcane-sync-drift-report.py [--behind-days N]
 ```
 
-It queries the same `gitops-syncs?limit=100` endpoint, computes each
+It queries the same `/agents/0/gitops/syncs?limit=100` endpoint, computes each
 project's commits-behind-`main` via `git rev-list --count
 <lastSyncCommit>..origin/main` against a real local clone (point
 `--repo-root` at one you can write to — a CI runner's own checkout is
@@ -938,35 +987,32 @@ public exposure), native OIDC/MFA gates its own login, and the registered
 Git credential (currently none needed — public repo) should stay
 least-privilege and read-only if the repository is ever made private.
 
-### Edge agent token: rotate and revoke (#3583)
+### Agent token: rotate and revoke (#3583, v3: #3875)
 
-Each remote environment (`precision`, `vps`) authenticates its edge agent
-with one environment API key, the agent's `AGENT_TOKEN`. The live agent
-composes inline it (`/home/xore/arcane-agent/compose.yml` on precision,
+Each remote agent (`precision`, `vps`) authenticates with its own agent API
+key (`arc_...`), the agent's `ARCANE_AGENT_TOKEN`. The live agent composes
+inline it (`/home/xore/arcane-agent/compose.yml` on precision,
 `/root/vps/arcane-agent/compose.yml` on the VPS, both 0600; template
-[`ops/arcane-agent/compose.yml`](../ops/arcane-agent/compose.yml)). Behaviour
-below was read from Arcane `v2.17.0`'s source
-(`backend/internal/environment/handler.go`, `UpdateEnvironment`, and
-`children/swarm/service.go`, `EnsureApiKey`).
+[`ops/arcane-agent/compose.yml`](../ops/arcane-agent/compose.yml)). The v2
+keys carried over to v3 unchanged; no re-enrollment was needed in B11.
 
-- **Rotate:** `PUT /api/environments/<id>` with `{"regenerateApiKey": true}`,
-  as a signed-in user or with a user's `X-API-Key`. Arcane creates a new
-  environment key, links it, returns it once as `data.apiKey`, and then
-  deletes the previous key: from that moment the agent's old token no longer
-  authenticates and the environment shows `pending`. Capture the response
-  into a 0600 file (never on a command line or in a log), put the new value
-  into the host's agent compose (backup alongside, edit that one line), and
-  run `docker compose up -d` there. Only `arcane-edge-agent` restarts; check
-  the environment is `online connected=true` again.
-- **Revoke:** the same call, keeping the returned key nowhere. The old token
-  is dead at once and the agent cannot reconnect. Set `{"enabled": false}`
-  as well to keep the environment out of Arcane's connection tests.
-  Revoking the precision transport is separate: remove the
-  `arcane-fibre-tunnel` key from the homeserver's `authorized_keys`
-  ([SWARM-NETWORK.md](SWARM-NETWORK.md)).
-- **If the delete of the old key fails,** Arcane logs `Failed to delete
-  previous environment API key; the old key remains valid until deleted
-  manually`. Delete it on the API Keys page.
+- **Rotate (v3):** v3 removed the v2 `PUT /api/environments/<id>`
+  `{"regenerateApiKey": true}` call. Rotation goes through an enrollment
+  token: **Agents -> <agent> -> Connection & Agent -> Generate Enrollment
+  Token** (API: `POST /api/enrollment-tokens`). Save the `arc_etkn_...` value
+  in a 0600 file (never on a command line or in a log), put it into the host's
+  agent compose as `ARCANE_AGENT_TOKEN` (backup alongside, edit that one
+  line), and run `docker compose up -d` there. On start the agent trades the
+  token for a new agent key and keeps it, encrypted, in its `arcane-data`
+  volume. Then delete the old agent key under **System -> API Keys**
+  (`DELETE /api/apikeys/{id}`). Only `arcane-edge-agent` restarts; check the
+  agent is `online` again. Not exercised live yet (B11 kept the existing
+  keys): follow the upstream agents doc and confirm on one host first.
+- **Revoke:** delete the agent's key under **System -> API Keys**. The agent
+  cannot reconnect. Disable the agent (`PATCH /api/agents/<id>`
+  `{"enabled": false}`) to keep it out of connection tests. Revoking the
+  precision transport is separate: remove the `arcane-fibre-tunnel` key from
+  the homeserver's `authorized_keys` ([SWARM-NETWORK.md](SWARM-NETWORK.md)).
 - **What it does to workloads:** nothing. An agent that is offline stops and
   recreates nothing, and reconnecting deploys nothing (outage test,
   2026-11-01, #3583). Swarm tasks keep running under the swarm managers

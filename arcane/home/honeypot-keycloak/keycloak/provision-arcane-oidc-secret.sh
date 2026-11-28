@@ -45,7 +45,7 @@ client_uuid="$(kc_client_uuid "${REALM}" arcane)"
 kc_write_secret "${REALM}" "${client_uuid}" "${kc_tmp}/arcane-secret" "root:root" 600
 
 # Rewrite the single ARCANE_OIDC_CLIENT_SECRET line in place, preserving the
-# rest of the .env (ENCRYPTION_KEY/JWT_SECRET must NOT change).
+# rest of the .env (ARCANE_ENCRYPTION_KEY must NOT change).
 python3 - "$ENV_FILE" "${kc_tmp}/arcane-secret" <<'PY'
 import os, sys
 env, secret = sys.argv[1], open(sys.argv[2]).read()

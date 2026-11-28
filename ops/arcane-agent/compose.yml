@@ -1,32 +1,41 @@
-# Arcane edge agent (#3720) -- the compose file each non-homeserver host runs
-# so the Arcane manager (hp-arcane, docker-compose.arcane.yml) can manage it
-# as a remote environment. Deployed by hand, not by Arcane itself:
+# Arcane agent (#3720, v3 since #3875) -- the compose file each
+# non-homeserver host runs so the Arcane manager (hp-arcane,
+# docker-compose.arcane.yml) can manage it as a remote agent. Deployed by
+# hand, not by Arcane itself:
 #   precision: /home/xore/arcane-agent/compose.yml  (environment "precision")
 #   VPS:       /root/vps/arcane-agent/compose.yml   (environment "vps")
 #
-# The agent dials out to the manager (edge mode, poll control plane, then a
-# gRPC tunnel), so it publishes no port. The live copies inline their values;
-# here they come from .env (see .env.example), since AGENT_TOKEN is a secret.
+# The agent dials out to the manager and holds one tunnel (gRPC, WebSocket
+# fallback), so it publishes no port. The live copies inline their values;
+# here they come from .env (see .env.example), since the agent token is a
+# secret.
 #
-# Keep the image on the same Arcane release as the manager pin in
-# docker-compose.arcane.yml. Upgrade one host at a time: back up the live
-# compose.yml alongside, edit the image line only, `docker compose up -d`,
-# then check the environment shows online in Arcane. Only the agent
-# container restarts.
+# Arcane v3 (#3875): the manager, every agent and arcane-cli must run the
+# same major, so upgrade the manager first and every agent right after it.
+# The image is ghcr.io/getarcaneapp/agent (the arcane-headless alias is gone
+# in v3); every variable carries the ARCANE_ prefix and v3 refuses to start
+# on a legacy name; the poll transport is removed (auto = gRPC tunnel). The
+# existing per-environment key (arc_...) keeps working in ARCANE_AGENT_TOKEN,
+# no re-enrollment needed. Upgrade one host at a time: back up the live
+# compose.yml alongside, edit the image line (and the variable names on a
+# major), `docker compose up -d`, then check the agent shows online in Arcane.
+# Only the agent container restarts. No healthcheck: v3.2.0's
+# `arcane-agent health` probes TCP 127.0.0.1:3552, which the agent does not
+# open, so the documented check always reports unhealthy.
 # Rotating or revoking the agent token: docs/ARCANE-GIT-SYNC.md, "Edge agent
 # token: rotate and revoke".
 services:
   arcane-edge-agent:
-    image: ghcr.io/getarcaneapp/arcane-headless:v2.17.3@sha256:3005364d5aa603a8fe8b51bee26413b473965c3c2dc6c152b0016dd1cdda1cf4
+    image: ghcr.io/getarcaneapp/agent:v3.2.0@sha256:c0a5ed4b2bfa643153f5b31a11ec4a5ca843da8a65231a9161802fd5e60ae1af
     container_name: arcane-edge-agent
     restart: unless-stopped
     environment:
-      - EDGE_AGENT=true
-      - LISTEN=127.0.0.1
-      - ANALYTICS_DISABLED=true
-      - EDGE_TRANSPORT=poll
-      - AGENT_TOKEN=${ARCANE_AGENT_TOKEN:?set ARCANE_AGENT_TOKEN in .env}
-      - MANAGER_API_URL=${ARCANE_MANAGER_API_URL:?set ARCANE_MANAGER_API_URL in .env}
+      - ARCANE_AGENT=true
+      - ARCANE_LISTEN=127.0.0.1
+      - ARCANE_ANALYTICS_ENABLED=false
+      - ARCANE_AGENT_TRANSPORT=auto
+      - ARCANE_AGENT_TOKEN=${ARCANE_AGENT_TOKEN:?set ARCANE_AGENT_TOKEN in .env}
+      - ARCANE_MANAGER_API_URL=${ARCANE_MANAGER_API_URL:?set ARCANE_MANAGER_API_URL in .env}
     network_mode: host
     security_opt: [label:disable]
     volumes:

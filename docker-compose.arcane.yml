@@ -8,7 +8,7 @@
 # its own users instead of the network-level "any authenticated role holder"
 # gate the gateway pattern gives Dockge today.
 #
-# PROJECTS_DIRECTORY is /var/dockge/stacks itself (self-referential mount,
+# ARCANE_PROJECTS_DIRECTORY is /var/dockge/stacks itself (self-referential mount,
 # same host path both sides of the bind mount) -- deliberately not moved or
 # copied. Arcane's own compose commands run against the *host* docker
 # daemon via the socket below, so any project path it passes to `docker
@@ -48,57 +48,65 @@ services:
     # this file, then redeploy the stack. Get the digest with
     #   docker pull ghcr.io/getarcaneapp/manager:<tag>
     #   docker image inspect ghcr.io/getarcaneapp/manager:<tag> --format '{{index .RepoDigests 0}}'
-    image: ghcr.io/getarcaneapp/manager:v2.17.3@sha256:2e0dc9f5ef03599181a49baf6470055d82e24d9cb15bbc62498ea642c0f882a7
+    image: ghcr.io/getarcaneapp/manager:v3.2.0@sha256:511a3f455fed51f601ff729931e12871ae1c8d098655686ec7ad6ee628897b1a
     container_name: hp-arcane
     restart: unless-stopped
+    # Arcane v3 (#3875): every Arcane variable carries the ARCANE_ prefix, and
+    # v3 refuses to start while an unprefixed legacy name is set. PUID, PGID
+    # and TZ keep their names. A settings variable set here also locks that
+    # setting in the UI ("Set by ARCANE_..."). JWT_SECRET is gone: v3 signs
+    # sessions with its own key in arcane-data, so ARCANE_JWT_SECRET in .env
+    # is no longer read.
     environment:
-      APP_URL: ${ARCANE_URL:-https://arcane.honeypot.example}
-      PORT: "3552"
+      ARCANE_APP_URL: ${ARCANE_URL:-https://arcane.honeypot.example}
+      ARCANE_PORT: "3552"
       PUID: "0"
       PGID: "0"
-      # #1185: ENCRYPTION_KEY/JWT_SECRET/OIDC_CLIENT_SECRET have no *_FILE
-      # variant Arcane supports (confirmed against its own environment-
-      # variable reference, unlike OIDC_ROLE_MAPPINGS_FILE below) -- sourced
-      # from this stack's own .env, same as every other secret this repo
-      # can't hand to a container as a mounted file.
-      ENCRYPTION_KEY: ${ARCANE_ENCRYPTION_KEY:?set ARCANE_ENCRYPTION_KEY in .env (32 raw/base64/hex bytes)}
-      JWT_SECRET: ${ARCANE_JWT_SECRET:?set ARCANE_JWT_SECRET in .env (openssl rand -hex 32)}
+      # #1185: the encryption key and the OIDC client secret come from this
+      # stack's own .env, same as every other secret this repo can't hand to
+      # a container as a mounted file. Keep the value byte-identical across
+      # upgrades: an unprefixed value is a passphrase (HKDF-derived, the same
+      # way in v2.17 and v3), so adding a base64:/hex: prefix to an existing
+      # key would change the derived key and leave stored git/registry
+      # credentials undecryptable.
+      ARCANE_ENCRYPTION_KEY: ${ARCANE_ENCRYPTION_KEY:?set ARCANE_ENCRYPTION_KEY in .env (passphrase of 32+ chars, keep the existing value)}
       # Explicitly activate vulnerability management in this environment
       # (Arcane #3914 default is true, but pin it so the env doesn't silently
       # lose the feature if upstream flips the default).
-      FEATURE_VULNERABILITY_MANAGEMENT_ENABLED: "true"
-      PROJECTS_DIRECTORY: /var/dockge/stacks
-      PROJECT_SCAN_MAX_DEPTH: "5"
+      ARCANE_FEATURE_VULNERABILITY_MANAGEMENT_ENABLED: "true"
+      ARCANE_PROJECTS_DIRECTORY: /var/dockge/stacks
+      ARCANE_PROJECT_SCAN_MAX_DEPTH: "5"
       # OIDC -- native login, see this file's own header for why there is
       # no oauth2-proxy gateway in front of this service instead.
-      OIDC_ENABLED: "true"
-      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL in .env}
-      OIDC_CLIENT_ID: arcane
-      OIDC_CLIENT_SECRET: ${ARCANE_OIDC_CLIENT_SECRET:?set ARCANE_OIDC_CLIENT_SECRET in .env}
+      ARCANE_OIDC_ENABLED: "true"
+      ARCANE_OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL in .env}
+      ARCANE_OIDC_CLIENT_ID: arcane
+      ARCANE_OIDC_CLIENT_SECRET: ${ARCANE_OIDC_CLIENT_SECRET:?set ARCANE_OIDC_CLIENT_SECRET in .env}
       # No "groups" scope -- this realm has no such clientScope defined
       # (only roles/web-origins/acr/profile/email, confirmed against
       # keycloak/realm/apiary-realm.json). Client roles already ride in the
       # standard "roles" scope's resource_access claim, which every OIDC
       # client here gets by default -- OIDC_GROUPS_CLAIM below just points
-      # OIDC_ROLE_MAPPINGS at that existing claim path instead.
-      OIDC_SCOPES: openid email profile
+      # ARCANE_OIDC_ROLE_MAPPINGS at that existing claim path instead.
+      ARCANE_OIDC_SCOPES: openid email profile
       # Keycloak's client-role claim lives under realm_access/resource_access,
-      # not a top-level "groups" claim -- OIDC_GROUPS_CLAIM points at the
-      # client-role path so OIDC_ROLE_MAPPINGS below can match against it.
+      # not a top-level "groups" claim -- ARCANE_OIDC_GROUPS_CLAIM points at the
+      # client-role path so ARCANE_OIDC_ROLE_MAPPINGS below can match against it.
       # Verify live against a real token during rollout (#1185) rather than
       # trusting this unconfirmed against Arcane's actual claim-parsing
       # behavior -- Keycloak's own claim shape is a nested object per client,
       # not a flat list, and Arcane's docs don't confirm dotted-path support.
-      OIDC_GROUPS_CLAIM: resource_access.arcane.roles
-      OIDC_AUTO_REDIRECT_TO_PROVIDER: "true"
-      OIDC_PROVIDER_NAME: APIARY
-      OIDC_ROLE_MAPPINGS: '[{"claimValue":"admin","roleId":"role_admin"}]'
+      ARCANE_OIDC_GROUPS_CLAIM: resource_access.arcane.roles
+      ARCANE_OIDC_AUTO_REDIRECT_TO_PROVIDER: "true"
+      ARCANE_OIDC_PROVIDER_NAME: APIARY
+      ARCANE_OIDC_ROLE_MAPPINGS: '[{"claimValue":"admin","roleId":"role_admin"}]'
       # #1185: confirmed live -- Arcane sends a heartbeat (instance ID,
       # version, project counts) to checkin.getarcane.app on a schedule by
       # default. Honeypot infrastructure's own management tooling has no
       # business phoning home to a third party; disabled outright rather
-      # than left as an opt-out default.
-      ANALYTICS_DISABLED: "true"
+      # than left as an opt-out default. v3 inverted the flag: the old
+      # ANALYTICS_DISABLED=true is ignored, so it must be this one.
+      ARCANE_ANALYTICS_ENABLED: "false"
       # GPU monitoring (#1185) is NOT configured here. It lives in
       # docker-compose.arcane.gpu.yml, which install-homeserver.sh merges into
       # the rendered compose.yml only when this host actually has a working
