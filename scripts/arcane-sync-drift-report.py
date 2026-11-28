@@ -87,7 +87,7 @@ def fail(msg: str) -> "None":
 
 def fetch_syncs(api_key: str) -> list[dict]:
     req = urllib.request.Request(
-        f"{ARCANE_URL.rstrip('/')}/api/environments/0/gitops-syncs?limit=100",
+        f"{ARCANE_URL.rstrip('/')}/api/agents/0/gitops/syncs?limit=100",
         headers={"X-API-Key": api_key},
     )
     try:

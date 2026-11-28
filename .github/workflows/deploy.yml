@@ -119,7 +119,7 @@ jobs:
 
       # #1185: replaces Dockge as the stack-management UI. Same
       # fail-closed-until-provisioned shape as honeypot-keycloak above --
-      # ENCRYPTION_KEY/JWT_SECRET/OIDC_CLIENT_SECRET have no *_FILE variant
+      # ARCANE_ENCRYPTION_KEY/ARCANE_OIDC_CLIENT_SECRET have no *_FILE variant
       # Arcane supports, so they live in this stack's own .env (never
       # synced or overwritten here, same as every other stack's .env).
       # Deployed after honeypot-keycloak, not before: OIDC_ISSUER_URL in
@@ -161,7 +161,7 @@ jobs:
                 docker compose -f compose.yml config --quiet
                 docker compose -f compose.yml up -d
               else
-                echo "honeypot-arcane synchronized but not started: provision .env (ARCANE_ENCRYPTION_KEY, ARCANE_JWT_SECRET, OIDC_ISSUER_URL, ARCANE_OIDC_CLIENT_SECRET) first"
+                echo "honeypot-arcane synchronized but not started: provision .env (ARCANE_ENCRYPTION_KEY, OIDC_ISSUER_URL, ARCANE_OIDC_CLIENT_SECRET) first"
               fi'
 
       # #1502: honeypot-init/keycloak/conpot and the 20-stack loop that used

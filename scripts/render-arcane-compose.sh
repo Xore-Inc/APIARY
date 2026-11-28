@@ -18,7 +18,7 @@
 #   off   base file only (installer with ENABLE_GPU_STACK=false)
 #
 # --no-interpolate matters: a plain `config` would resolve ${...} against the
-# stack's .env and bake ENCRYPTION_KEY/JWT_SECRET/the OIDC secret as literals
+# stack's .env and bake the encryption key and the OIDC secret as literals
 # into a world-readable compose.yml.
 #
 # POSIX sh on purpose: deploy.yml runs this inside docker:cli, which has no bash.

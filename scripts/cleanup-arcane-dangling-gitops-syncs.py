@@ -43,7 +43,7 @@ def manifest_sync_names(manifest_path: pathlib.Path = MANIFEST_PATH) -> set:
 
 def dangling_sync_names(live_syncs: list, manifest_names: set) -> set:
     """live_syncs: list of {"name": ..., "id": ..., "projectId": ...} as
-    returned by GET /environments/0/gitops-syncs. Names present live but
+    returned by GET /agents/0/gitops/syncs. Names present live but
     absent from the manifest are dangling and safe to remove.
     """
     return {s["name"] for s in live_syncs} - manifest_names
@@ -68,7 +68,7 @@ def _arcane_api(session, method: str, path: str, base_url: str):
 
 def _fetch_live_syncs(session, base_url: str) -> list:
     # #2549: this endpoint paginates at 20 by default.
-    data = _arcane_api(session, "GET", "/environments/0/gitops-syncs?limit=100", base_url)
+    data = _arcane_api(session, "GET", "/agents/0/gitops/syncs?limit=100", base_url)
     return data.get("data", data if isinstance(data, list) else [])
 
 
@@ -86,7 +86,8 @@ def main() -> int:
     import requests  # local import: only needed for the live-store path
 
     session = requests.Session()
-    session.headers["Authorization"] = f"Bearer {token}"
+    # Arcane v3 takes an API key only as X-API-Key (Bearer is for session JWTs).
+    session.headers["X-API-Key"] = token
     session.headers["Content-Type"] = "application/json"
 
     manifest_names = manifest_sync_names()
@@ -103,10 +104,10 @@ def main() -> int:
             print(f"WOULD DELETE: {label}")
             continue
         print(f"DELETE: {label}")
-        _arcane_api(session, "DELETE", f"/environments/0/gitops-syncs/{sync['id']}", base_url)
+        _arcane_api(session, "DELETE", f"/agents/0/gitops/syncs/{sync['id']}", base_url)
         project_id = sync.get("projectId")
         if project_id:
-            _arcane_api(session, "DELETE", f"/environments/0/projects/{project_id}/destroy", base_url)
+            _arcane_api(session, "DELETE", f"/agents/0/projects/{project_id}", base_url)
 
     if not args.apply:
         print(f"\ndry-run: {len(plan)} dangling sync(s) would be removed (rerun with --apply)")

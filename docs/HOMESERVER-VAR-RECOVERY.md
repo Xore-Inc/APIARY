@@ -280,7 +280,7 @@ Check the API with the key piped from the backup host (header is
 `X-API-Key`, not `Authorization`):
 
 ```bash
-curl -fsS -H @/root/.arcane-hdr http://10.8.0.2:3552/api/environments/0/gitops-syncs?limit=100 | jq length
+curl -fsS -H @/root/.arcane-hdr 'http://10.8.0.2:3552/api/agents/0/gitops/syncs?limit=100' | jq '.data | length'
 ```
 
 (`/root/.arcane-hdr` holds `X-API-Key: <key>`, mode 0600, written from stdin
@@ -298,9 +298,9 @@ has landed on `main` since). Check each such sync against the branch the repo
 now expects before you deploy it. If a sync tracks a branch whose compose
 cannot start on the current host, leave that project stopped until the
 prerequisite exists (for Galah and Ollama that is the Swarm, see part 9). To
-re-point a sync use a **partial** `PUT` to
-`/api/environments/0/gitops-syncs/<id>` with `{"branch":"<branch>"}`; a
-full-object PUT is rejected with 422, and the partial one keeps every other
+re-point a sync use a **partial** `PATCH` (v3; `PUT` in v2) to
+`/api/agents/0/gitops/syncs/<id>` with `{"branch":"<branch>"}`; a
+full-object PUT was rejected with 422 in v2, and the partial one keeps every other
 field. Write down the original branch and put it back if you changed it
 only temporarily.
 
@@ -326,7 +326,7 @@ Docker login:
 3. **Prove it with a private image.** Some org images are public, and a pull
    of one proves nothing. Pick one whose anonymous manifest fetch returns
    403 and pull it through Arcane
-   (`POST /api/environments/0/images/pull {"imageName":...,"tag":...}`).
+   (`POST /api/agents/0/images/pull {"imageName":...,"tag":...}`).
    Fresh layers and a digest mean the credential works.
 
 For a release you pin by digest (apiary-dashboard), also run
@@ -343,7 +343,7 @@ For a release you pin by digest (apiary-dashboard), also run
    ```
    (Use the repo URL from `AUTH_THEME_REPO_URL` in your installer answers
    file if it differs.)
-2. Sync the project: `POST /api/environments/0/gitops-syncs/<keycloak-sync>/sync`.
+2. Sync the project: `POST /api/agents/0/gitops/syncs/<keycloak-sync>?action=sync`.
    The pre-placed `.env` and `secrets/` are kept; the sync does not refuse
    the existing directory.
 3. Bring up Postgres alone and wait for healthy:
@@ -386,7 +386,7 @@ the poller secret in [part 9](#9-workers-models-units).
 2. The sshfs log mounts from the VPS come from `fstab` (check
    `findmnt -t fuse.sshfs`; they are read-only from this side by design).
 3. Sync `honeypot-elk`, then redeploy it
-   (`POST /api/environments/0/projects/<id>/redeploy`, streamed with
+   (`POST /api/agents/0/projects/<id>/deploy?action=redeploy`, streamed with
    `curl -N -m 3600`; the stream must run to completion, a truncated stream
    aborts the operation server-side).
 4. **Expect the redeploy to "fail".** The final frame is
@@ -484,14 +484,14 @@ not do.
 For the sensor and utility stacks the order does not matter. Per stack, one
 at a time:
 
-1. `POST /api/environments/0/gitops-syncs/<sync-id>/sync`
-2. `POST /api/environments/0/projects/<project-id>/build`
-3. `POST /api/environments/0/projects/<project-id>/redeploy`
+1. `POST /api/agents/0/gitops/syncs/<sync-id>?action=sync`
+2. `POST /api/agents/0/projects/<project-id>/build`
+3. `POST /api/agents/0/projects/<project-id>/deploy?action=redeploy`
 
 Run builds and redeploys sequentially with `curl -N -m 3600`; a frame
 `{"done":true}` with no `"error"` frame is success. Do **not** use IDs from
 old notes: projects can be re-created, so look them up by name
-(`GET .../gitops-syncs?limit=100`) and re-read them from the restored
+(`GET /api/agents/0/gitops/syncs?limit=100`) and re-read them from the restored
 Arcane.
 
 Two stacks need care:
@@ -897,7 +897,7 @@ Details in [#3712](https://github.com/Xore-Inc/APIARY/issues/3712).
    `/auth/login` and then to the Keycloak authorization endpoint with the
    `apiary-dashboard` client and PKCE (`S256`).
 6. **Swarm.** `docker node ls` from each manager; service replicas as before;
-   Arcane `/environments/<id>/swarm/info` online for each environment.
+   Arcane `/agents/<id>/swarm/info` online for each agent.
 7. **Backups.** One manual `apiary-backup-essentials.service` run and an
    archive that lists `installer/` and `es-operator-state/`.
 8. **Then clean up.** Remove `/root/restore`, the `.env.bak-*` files you

@@ -350,8 +350,8 @@ class FakeArcane:
 
     def call(self, method, path, body=None, timeout=600):
         self.calls.append((method, path, body))
-        if method == "POST" and path.endswith("/scale"):
-            sid = path.split("/")[-2]
+        if method == "PATCH" and "/swarm/services/" in path:
+            sid = path.rsplit("/", 1)[-1]
             self.services[sid]["replicas"] = body["replicas"]
             self.services[sid]["running"] = body["replicas"]
         if method == "GET" and path.endswith("/swarm/configs"):
@@ -463,8 +463,8 @@ class PauseTest(unittest.TestCase):
         api = self.fake()
         self.assertEqual(self.run_pause(api), 0)
         self.assertEqual(api.services["s1"]["replicas"], 0)
-        puts = [c for c in api.calls if c[0] == "PUT"]
-        self.assertEqual(puts, [("PUT", "/environments/{env}/gitops-syncs/sync1", {"autoSync": False})])
+        puts = [c for c in api.calls if c[0] == "PATCH" and "/gitops/syncs/" in c[1]]
+        self.assertEqual(puts, [("PATCH", "/agents/{env}/gitops/syncs/sync1", {"autoSync": False})])
         inv = stackctl.read_inventory()
         self.assertEqual([e["kind"] for e in inv], ["gate", "service"])
         self.assertEqual(inv[1]["replicas"], 2)
@@ -475,7 +475,7 @@ class PauseTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(api.services["s1"]["replicas"], 2)
         # service first, gate last
-        self.assertEqual([c[0] for c in api.calls], ["POST", "PUT"])
+        self.assertEqual([(c[0], c[1].split("/")[3]) for c in api.calls], [("PATCH", "swarm"), ("PATCH", "gitops")])
         self.assertEqual(api.calls[-1][2], {"autoSync": True})
         self.assertIn("/dev/tcp/10.8.0.2/8080", probe.call_args[0][1])
         self.assertEqual(stackctl.read_inventory(), [])
@@ -489,7 +489,7 @@ class PauseTest(unittest.TestCase):
                 fake.services["s1"]["replicas"] = fake.services["s1"]["running"] = 2
         api = self.fake(auto_sync=False, script=sync_lands_late)
         self.assertEqual(self.run_pause(api), 0)
-        scales = [c for c in api.calls if c[1].endswith("/scale")]
+        scales = [c for c in api.calls if c[0] == "PATCH" and "/swarm/services/" in c[1]]
         self.assertEqual(len(scales), 2)
         self.assertEqual(api.services["s1"]["replicas"], 0)
 
@@ -599,7 +599,7 @@ class SecretTest(unittest.TestCase):
         api = self.api()
         stackctl.cmd_secret(api, argparse.Namespace(action="create", name="tok_v2"), stdin=self.stdin(b"s3cret"))
         method, path, body = api.calls[-1]
-        self.assertEqual((method, path), ("POST", "/environments/{env}/swarm/secrets"))
+        self.assertEqual((method, path), ("POST", "/agents/{env}/swarm/secrets"))
         self.assertEqual(base64.b64decode(body["spec"]["Data"]), b"s3cret")
         self.assertEqual(body["spec"]["Labels"], {"apiary.secret.base": "tok", "apiary.secret.version": "2"})
 

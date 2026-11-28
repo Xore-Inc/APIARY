@@ -100,7 +100,7 @@ Inbound swarm rules are bound to the interfaces in `apiary-swarm` (the fibre, `w
 |---|---|---|---|
 | precision `10.254.250.2` → homeserver `10.254.250.1` | F; TCP 2377, TCP/UDP 7946, UDP 4789, ESP (IP protocol 50) | Manager control, gossip, VXLAN, encrypted overlay | #3588 / live |
 | homeserver `10.254.250.1` → precision `10.254.250.2` | F; TCP 2377, TCP/UDP 7946, UDP 4789, ESP | Manager control (precision is a manager since #3589), gossip and overlay | #3588 / live |
-| precision → homeserver | F; TCP 22, then loopback TCP 13552 → H TCP 3552 | `arcane-fibre-tunnel` user-level SSH forward to the Arcane manager; the agent listens on loopback TCP 3553. Phase 1 keeps the forward but routes its SSH connection over the manager hub address. | #3588 / live; #3589 route change |
+| precision → homeserver | F; TCP 22, then loopback TCP 13552 → H TCP 3552 | `arcane-fibre-tunnel` user-level SSH forward to the Arcane manager; the v3 agent opens no TCP port (the v2 agent listened on loopback TCP 3553). Phase 1 keeps the forward but routes its SSH connection over the manager hub address. | #3588 / live; #3589 route change |
 | homeserver ↔ precision | F and L; ICMP | PMTU discovery and health probes | #3588 / live |
 | LAN admin → homeserver/precision | L; TCP 22 | Existing SSH access, kept in `public` | ops / existing |
 | VPS portbridge → homeserver sensors | H; exact TCP/UDP mappings in the [inventory](https://github.com/Xore/APIARY/issues/3588#issuecomment-6098046203), including translated ports | Internet honeypot traffic; attacker `source.ip` preserved | #3573 / existing |

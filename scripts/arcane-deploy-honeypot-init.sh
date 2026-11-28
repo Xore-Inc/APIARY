@@ -75,7 +75,7 @@ arcane_api() {
 # find_project_id -- resolves honeypot-init's project id by name so this
 # script survives a project being recreated (a fresh id) without editing.
 find_project_id() {
-  arcane_api GET "/environments/0/projects?limit=100" \
+  arcane_api GET "/agents/0/projects?limit=100" \
     | jq -r --arg n "$PROJECT_NAME" '(.data // .) | .[] | select(.name == $n) | .id' | head -1
 }
 
@@ -180,7 +180,7 @@ main() {
   echo "-- redeploying $PROJECT_NAME (project $project_id); this streams and can take a few minutes"
   local redeploy_resp
   redeploy_resp=$(curl -sS -N -m 600 -X POST \
-    "${ARCANE_URL%/}/api/environments/0/projects/$project_id/redeploy" \
+    "${ARCANE_URL%/}/api/agents/0/projects/$project_id/deploy?action=redeploy" \
     -H "X-API-Key: $ARCANE_API_KEY" -H "Content-Type: application/json") || {
     echo "FAIL  $PROJECT_NAME: redeploy request itself failed (network/HTTP-level)"
     exit 1

@@ -108,7 +108,7 @@ MANIFEST_PATH = Path(__file__).resolve().parent.parent / "arcane" / "manifests" 
 #     the thing that has to already be running before any sync can happen
 #     is a bootstrap loop." Installer/deploy.yml-managed instead.
 #   - apiary: Arcane's own internal git-repository clone (registered via
-#     POST /customize/git-repositories), the source directory-sync reads
+#     POST /gitops/repositories), the source directory-sync reads
 #     individual stacks' files from -- not a deployed project itself. It
 #     happens to carry a top-level compose.yml (this repo's own), which is
 #     what made it look like a stack directory to a naive glob.
