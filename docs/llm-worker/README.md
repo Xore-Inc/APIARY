@@ -143,10 +143,10 @@ docker compose \
 ```
 
 The override attaches the worker to the internal `honeypot-llm-data` network
-for Elasticsearch and the internal `honeypot-llm` network for the one Ollama
-instance measured by #144 and requalified/pinned by #158. The root stack owns the former
-and attaches only Elasticsearch; the Ghidra stack owns the latter and attaches
-Ollama. The worker never joins the Internet-routable `honeynet` bridge and
+for Elasticsearch and to the attachable `llm_ollama` Swarm overlay (alias `ollama`)
+for the one Ollama instance measured by #144 and requalified/pinned by #158. The
+Ollama service moved into the Swarm stack (#3706), so `honeypot-llm` no longer
+carries it; the worker joins `llm_ollama` directly (B5b, #3941). The worker never joins the Internet-routable `honeynet` bridge and
 publishes no port. The override mounts only Cowrie downloads and retained
 inline scripts read-only. Version 1 accepts regular text files no larger than
 1 MiB, refuses symlinks and NUL-containing/binary data, and hashes content
