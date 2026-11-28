@@ -1,0 +1,22 @@
+--- a/usr/share/perl5/INetSim/DNS.pm
++++ b/usr/share/perl5/INetSim/DNS.pm
+@@ -66,7 +66,18 @@
+ 
+     $0 = 'inetsim_' . INetSim::Config::getConfigParameter("DNS_ServiceName");
+     INetSim::Log::MainLog("started (PID $CPID)", INetSim::Config::getConfigParameter("DNS_ServiceName"));
+-    $server->main_loop;
++    # Net::DNS::Nameserver 1.57 (trixie) has no main_loop. start_server() would fork the
++    # listeners, but it croaks outside the process that loaded the module, so serve the
++    # TCP and UDP listeners directly. The alarm limit is large enough to never expire.
++    my $listen_forever = 2147483647;
++    my $tcp_pid = fork;
++    die "fork failed: $!" unless defined $tcp_pid;
++    if ($tcp_pid == 0) {
++        $server->_TCP_server($_, $server->{LocalPort}, $listen_forever) for @{ $server->{LocalAddr} };
++        exit 0;
++    }
++    $server->_UDP_server($_, $server->{LocalPort}, $listen_forever) for @{ $server->{LocalAddr} };
++    waitpid($tcp_pid, 0);
+     INetSim::Log::MainLog("stopped (PID $CPID)", INetSim::Config::getConfigParameter("DNS_ServiceName"));
+     exit 0;
+ }
