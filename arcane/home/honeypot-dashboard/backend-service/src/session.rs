@@ -47,6 +47,9 @@ pub struct SessionDetail {
     pub country: String,
     pub first: String,
     pub last: String,
+    /// Every record the session has, by the search's own count. `events`
+    /// holds the first 1000 of them (the search size), so a longer session
+    /// is shown partially there and says so here.
     pub total: u64,
     pub sensors: Vec<Kv>,
     pub commands: Vec<Kv>,
@@ -172,6 +175,9 @@ pub async fn detail(
     if hits.is_empty() {
         return Err((StatusCode::NOT_FOUND, "no such session".into()));
     }
+    // Was the number of hits loaded (at most 1000), which reported a long
+    // session as if it had only that many records.
+    let total = result["hits"]["total"]["value"].as_u64().unwrap_or(hits.len() as u64);
 
     let mut sensors: HashMap<String, u64> = HashMap::new();
     let mut commands: HashMap<String, u64> = HashMap::new();
@@ -274,7 +280,7 @@ pub async fn detail(
         country,
         first,
         last,
-        total: hits.len() as u64,
+        total,
         sensors: top_n(sensors, 20),
         commands: top_n(commands, 30),
         credentials: top_n(credentials, 20),

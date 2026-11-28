@@ -8014,7 +8014,7 @@
             }
           },
           {
-            "description": "Free-text Lucene query string.",
+            "description": "Free text, matched case-insensitively against the hash prefix, kind, kind code, platform, MIME type, source and analysis path. Not a Lucene query on this route.",
             "in": "query",
             "name": "q",
             "required": false,
