@@ -139,11 +139,18 @@ jobs:
         run: |
           set -euo pipefail
           uv python install 3.15.2
-          bindir="$(dirname "$(uv python find 3.15.2)")"
-          echo "$bindir" >> "$GITHUB_PATH"
-          PATH="$bindir:$PATH"
+          # uv's builds are marked externally managed (PEP 668), so pip refuses
+          # to install into them. A venv from the same interpreter keeps the
+          # exact patch and gives later steps a writable pip.
+          base="$(uv python find 3.15.2)"
+          venv="$RUNNER_TEMP/python-3.15.2-venv"
+          rm -rf "$venv"
+          "$base" -m venv "$venv"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          PATH="$venv/bin:$PATH"
           python -c 'import sys; assert tuple(sys.version_info[:3]) == (3, 15, 2), sys.version'
           python --version
+          python -m pip --version
       - run: python scripts/check-public-leaks.py
       - run: python scripts/validate-oidc-redirects.py
       - run: bash scripts/check-ghosts-vendored-egress.sh
@@ -174,11 +181,18 @@ jobs:
         run: |
           set -euo pipefail
           uv python install 3.15.2
-          bindir="$(dirname "$(uv python find 3.15.2)")"
-          echo "$bindir" >> "$GITHUB_PATH"
-          PATH="$bindir:$PATH"
+          # uv's builds are marked externally managed (PEP 668), so pip refuses
+          # to install into them. A venv from the same interpreter keeps the
+          # exact patch and gives later steps a writable pip.
+          base="$(uv python find 3.15.2)"
+          venv="$RUNNER_TEMP/python-3.15.2-venv"
+          rm -rf "$venv"
+          "$base" -m venv "$venv"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          PATH="$venv/bin:$PATH"
           python -c 'import sys; assert tuple(sys.version_info[:3]) == (3, 15, 2), sys.version'
           python --version
+          python -m pip --version
       - run: python scripts/check-public-leaks.py
       - run: python scripts/validate-oidc-redirects.py
       - run: bash scripts/check-ghosts-vendored-egress.sh
@@ -2030,11 +2044,18 @@ jobs:
         run: |
           set -euo pipefail
           uv python install 3.15.2
-          bindir="$(dirname "$(uv python find 3.15.2)")"
-          echo "$bindir" >> "$GITHUB_PATH"
-          PATH="$bindir:$PATH"
+          # uv's builds are marked externally managed (PEP 668), so pip refuses
+          # to install into them. A venv from the same interpreter keeps the
+          # exact patch and gives later steps a writable pip.
+          base="$(uv python find 3.15.2)"
+          venv="$RUNNER_TEMP/python-3.15.2-venv"
+          rm -rf "$venv"
+          "$base" -m venv "$venv"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          PATH="$venv/bin:$PATH"
           python -c 'import sys; assert tuple(sys.version_info[:3]) == (3, 15, 2), sys.version'
           python --version
+          python -m pip --version
       # Needed below by the two dashboard-binary Keycloak integration tests
       # (`go run .` against the real dashboard) -- same version floor as the
       # go-test job, see that job's own go-version comment. Every matrix
