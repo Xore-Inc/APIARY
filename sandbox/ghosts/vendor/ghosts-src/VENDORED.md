@@ -215,7 +215,10 @@ HIGH in `Microsoft.AspNetCore.App.Runtime`; the 10.0.15 tag scans clean):
 - `Dockerfile-client-universal` final stage: `runtime:10.0.14-resolute@sha256:89f13dc6…`
 
 The same pins are in `sandbox/ghosts/Dockerfile.api-prep` and
-`Dockerfile.client-prep`, the builds that actually run. Nothing else in
+`Dockerfile.client-prep`, the builds that actually run. Catch-up 2026-11-28:
+the client runtime is now `runtime:10.0.15-resolute@sha256:3b3aedbd…` (newest
+10.0.x resolute), so the client-prep pin no longer matches the upstream line
+above; api-prep already was on 10.0.15. Nothing else in
 either vendored file changed. The variant keeps what the noble image had:
 a shell and apt, the default user root (the `app` user, uid 1654, exists
 but is not selected), and the same .NET 10.0 line. A future bump can

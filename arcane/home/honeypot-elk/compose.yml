@@ -304,7 +304,7 @@ services:
   # overlap is with our composable template's pattern, not EveBox's.
   evebox:
     <<: *runtime-defaults
-    image: jasonish/evebox:0.31.0@sha256:265d41b5a81f78ecc9262727234be1d249f4e6b00a920656685b915ca8ad9bcb
+    image: jasonish/evebox:0.32.0@sha256:363e6f7727e0daeff6af4746784a73947ad9e68030a530f497376ee7224762a0
     container_name: hp-evebox
     restart: unless-stopped
     command:
