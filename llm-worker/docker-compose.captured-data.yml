@@ -14,6 +14,10 @@ services:
       - synthetic-only
       - llm-data
       - llm-backend
+      # B5b (#3941): Ollama runs as the Swarm service llm_ollama (alias `ollama`,
+      # 10.200.30.x). honeypot-llm does not carry it, so reaching OLLAMA_URL needs
+      # the overlay itself.
+      - ollama
     volumes:
       # Cowrie saves uploaded/downloaded files by SHA-256. Text-only scanning
       # is additionally enforced in worker.py; nothing here is executed.
@@ -29,6 +33,9 @@ networks:
     external: true
   llm-backend:
     name: honeypot-llm
+    external: true
+  ollama:
+    name: llm_ollama
     external: true
 
 volumes:
