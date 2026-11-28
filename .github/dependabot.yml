@@ -205,18 +205,12 @@ updates:
       python-compatible:
         patterns: ["*"]
         update-types: [minor, patch]
-    # #2090: same doctrine as ml-worker/auth-events-worker below. This
-    # directory lived the failure mode from both sides -- dependabot put a
-    # 9.x client here while the server was 8.x (#872), a human reverted it
-    # hours before the server moved to 9.x (#1377 vs #1408/#1410), and the
-    # re-bump landed correct-only-by-timing (#1516), each flip contradicting
-    # whatever the file's comment said at the time. The pin now sits at
-    # 9.5.0 against the deployed 9.5.1 server (verified live, recorded in
-    # docs/runtime-compatibility-record.md) and moves only with a fresh
-    # recorded verification -- it may follow the server's major, never
-    # lead it.
+    # #2090 and B5b (#3941): the elasticsearch pin is 9.5.1, matching the
+    # deployed 9.5.7 server. Majors are ignored (a 10.x client waits for a
+    # 10.x server); 9.x minors and patches flow.
     ignore:
       - dependency-name: elasticsearch
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, python]
 
   # #174: split out of the shared pip entry below specifically so the
@@ -235,9 +229,9 @@ updates:
   # which only reads version ranges -- it will keep proposing the exact
   # same disproven bump indefinitely otherwise. Ignored entirely rather
   # than range-limited: both need a real compatibility re-verification
-  # (numpy jointly with numba/llvmlite; elasticsearch client against
-  # whatever server version is actually deployed), not just "a slightly
-  # newer version might work this time."
+  # (numpy jointly with numba/llvmlite), not just "a slightly newer version
+  # might work this time." elasticsearch is the exception since B5b (#3941):
+  # only its majors are ignored, so 9.x minors and patches flow.
   - package-ecosystem: pip
     directory: /ml-worker
     schedule:
@@ -252,9 +246,10 @@ updates:
     ignore:
       - dependency-name: numpy
       - dependency-name: elasticsearch
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, python]
 
-  # #1066: same elasticsearch==8.19.3 pin, same reason, as ml-worker above
+  # #1066: same elasticsearch==9.5.1 pin (B5b, #3941), same major-only ignore as ml-worker above
   # -- split into its own entry for the same reason ml-worker's is split
   # from the shared pip entry (an ignore rule scoped to one directory's
   # requirements.txt, not every Python stack's).
@@ -271,13 +266,13 @@ updates:
         update-types: [minor, patch]
     ignore:
       - dependency-name: elasticsearch
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, python]
 
   # #2221: es-results-importer and llm-worker were the pre-existing pip
   # coverage gap the shared entry above flagged but never filed. Both pin
-  # elasticsearch==8.19.3 with the same in-file compatibility doctrine as
-  # ml-worker/auth-events-worker above (re-verified live against the 9.5.1
-  # server, #2090) -- same split-entry-with-ignore treatment, not a range
+  # elasticsearch==9.5.1 (B5b, #3941) with the same major-only ignore as
+  # ml-worker/auth-events-worker above -- same split-entry-with-ignore treatment, not a range
   # limit, for the same reason: a code comment is invisible to Dependabot.
   - package-ecosystem: pip
     directory: /arcane/home/honeypot-dashboard/analysis/es-results-importer
@@ -292,6 +287,7 @@ updates:
         update-types: [minor, patch]
     ignore:
       - dependency-name: elasticsearch
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, python]
 
   - package-ecosystem: pip
@@ -307,4 +303,5 @@ updates:
         update-types: [minor, patch]
     ignore:
       - dependency-name: elasticsearch
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, python]

@@ -1,14 +1,5 @@
-# Elasticsearch client. 8.19.3 -- re-verified live (2026-08-26, #2090)
-# against the server the fleet actually runs since #1408/#1410: 9.5.1,
-# digest-pinned in honeypot-init/honeypot-elk's compose.yml. A server
-# accepts clients one major back but none forward, so this client's
-# compatible-with=8 header is accepted by the 9.x server where a 9.x
-# client's compatible-with=9 was rejected by the retired 8.13.4 one --
-# full info/ping/index/search/delete roundtrip PASS, recorded in
-# docs/runtime-compatibility-record.md. Held rather than bumped: see
-# ml-worker/requirements.txt's comment for the incident history and the
-# ignore-rule doctrine behind that.
-elasticsearch==8.19.3
+# Elasticsearch client, 9.5.1 (B5b, #3941): same pin as ml-worker/requirements.txt.
+elasticsearch==9.5.1
 
 # Strict output contracts and JSON Schema sent to Ollama structured output.
 pydantic==2.14.4

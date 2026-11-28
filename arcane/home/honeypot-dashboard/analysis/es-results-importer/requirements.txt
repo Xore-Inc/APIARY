@@ -1,8 +1,3 @@
-# Pinned to match ml-worker/requirements.txt (both 8.19.3): held through
-# the server's 8.13.4 -> 9.5.1 migration (#1408/#1410) and re-verified
-# live against the deployed 9.5.1 server on 2026-08-26 (#2090): full
-# info/ping/index/search/delete roundtrip PASS -- a server accepts
-# clients one major back, so this client's compatible-with=8 header stays
-# valid (recorded in docs/runtime-compatibility-record.md).
-elasticsearch==8.19.3
+# Elasticsearch client, 9.5.1 (B5b, #3941): same pin as ml-worker/requirements.txt.
+elasticsearch==9.5.1
 loguru==0.8.0

@@ -1,14 +1,6 @@
-# Elasticsearch client. 8.19.3 -- same pin, same reasoning, as
-# ml-worker/requirements.txt: held through the server's 8.13.4 -> 9.5.1
-# migration (#1408/#1410) and re-verified live against the deployed 9.5.1
-# server on 2026-08-26 (#2090): full info/ping/index/search/delete
-# roundtrip PASS -- a server accepts clients one major back, so this
-# client's compatible-with=8 header stays valid (recorded in
-# docs/runtime-compatibility-record.md). See ml-worker/requirements.txt's
-# own comment for the two live Dependabot regressions this exact pin
-# family already caught -- .github/dependabot.yml's ignore rule covers
-# this directory too.
-elasticsearch==8.19.3
+# Elasticsearch client, 9.5.1 (B5b, #3941): same pin as ml-worker/requirements.txt.
+# Dependabot ignores majors of this package for this directory.
+elasticsearch==9.5.1
 # 2.34.2, not 2.32.3: dependency-review flagged two moderate CVEs in 2.32.3
 # (GHSA-9hjg-9r4m-mvj7 .netrc credentials leak, GHSA-gc5v-m9x4-r6x2 insecure
 # temp file reuse in extract_zipped_paths()) on this PR's first CI run.

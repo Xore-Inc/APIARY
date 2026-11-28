@@ -1,37 +1,10 @@
-# Elasticsearch client. 8.19.3, held through the fleet's server migration
-# 8.13.4 -> 8.19.20 -> 9.5.1 (#1408/#1410) and re-verified against the
-# server actually deployed today: 9.5.1, digest-pinned in
-# arcane/home/honeypot-init/compose.yml and honeypot-elk/compose.yml.
-# Re-verified live 2026-08-26 (#2090): full info/ping/index/search/delete
-# roundtrip from this exact client version against that server -- PASS,
-# recorded in docs/runtime-compatibility-record.md. Elastic's N/N-1
-# compatibility policy is symmetric: a server accepts clients one major
-# back but none forward, so the 9.x server accepts this client's
-# compatible-with=8 header, while the retired 8.13.4 server rejected a
-# 9.x client's compatible-with=9 outright
-# (media_type_header_exception) -- confirmed live at the time against a
-# disposable 8.13.4 container, not just read from a compatibility table.
-# Held at 8.19.3 deliberately rather than bumped to 9.x: nothing here
-# uses a 9.x-only API, and per .github/dependabot.yml the pin moves only
-# with a fresh recorded verification. See #62.
-#
-# #593: a Dependabot PR (build(deps): bump elasticsearch from 8.19.3 to
-# 9.4.1) bumped this to 9.4.1 anyway, directly contradicting this comment.
-# Reproduced live: es.ping() -> HEAD / returns HTTP 400 against the actual
-# running 8.13.4 server, exactly the media_type_header_exception this
-# comment already describes. Reverted to 8.19.3.
-#
-# #174: happened a second time -- PR #851 ("bump elasticsearch from 8.19.3
-# to 9.4.1 in /ml-worker") re-bumped this right back to 9.4.1, same
-# contradiction, same break. Found live while deploying an unrelated
-# ml-worker fix: `docker compose up -d --build` failed outright (this
-# time on the numpy/numba conflict below, which had *also* regressed --
-# never got far enough to re-hit the ES 400 this pin causes, but reverting
-# it here regardless since it's the exact same disproven change repeating).
-# Reverted to 8.19.3 again. See .github/dependabot.yml's ignore rule for
-# this directory -- added alongside this revert so Dependabot stops
-# proposing it a third time instead of just fixing it again by hand later.
-elasticsearch==8.19.3
+# Elasticsearch client, 9.5.1 (B5b, #3941): the newest stable 9.x, matching the
+# deployed server (ES 9.5.7, digest-pinned in arcane/home/honeypot-init and
+# honeypot-elk compose). The ES-client components move together in one wave:
+# a 9.x client against an 8.x server is unsupported. Dependabot ignores majors
+# of this package for this directory (.github/dependabot.yml); 9.x minors and
+# patches flow.
+elasticsearch==9.5.1
 
 # ML core
 scikit-learn==1.9.1
