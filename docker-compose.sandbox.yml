@@ -65,6 +65,10 @@ services:
       context: ./sandbox/windows/gateway/inetsim
     image: honeypot-sandbox-inetsim:local
     container_name: sbx-inetsim
+    # PID 1 is tini: inetsim as PID 1 ignores SIGTERM, so docker stop used to
+    # wait out the 10 s timeout and SIGKILL. tini forwards the signal and reaps
+    # the DNS fork.
+    init: true
     networks:
       sandbox:
         ipv4_address: 10.10.10.1
