@@ -1,7 +1,5 @@
-# Same client version llm-worker pins and the reasoning behind holding it --
-# see llm-worker/requirements.txt's comment (server is 9.5.1/9.5.2,
-# compatible-with=8 header accepted, compatible-with=9 was not).
-elasticsearch==8.19.3
+# Elasticsearch client, 9.5.1 (B5b, #3941): same pin as ml-worker/requirements.txt.
+elasticsearch==9.5.1
 
 pyyaml==6.0.3
 
