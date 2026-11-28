@@ -382,6 +382,41 @@ pub async fn alerts(
         .map_err(bad_gateway)
 }
 
+/// The payload inventory's free-text search (`?q=` on /api/v1/payloads).
+///
+/// The inventory's keyword fields are case-sensitive to a wildcard, so each
+/// term runs with `case_insensitive`. A value that is all hex digits also
+/// matches the hash by prefix, which is how an operator finds a sample from
+/// the start of its SHA-256. `*`, `?` and `\` are stripped from the input
+/// so the operator's text can never widen a wildcard or break the query.
+/// Blank input (nothing left after stripping) returns `None`, so the route
+/// lists the inventory unfiltered.
+pub(crate) fn payload_search_filter(text: &str) -> Option<Value> {
+    let needle: String = text
+        .chars()
+        .filter(|c| !matches!(c, '*' | '?' | '\\'))
+        .take(120)
+        .collect::<String>()
+        .trim()
+        .to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let wildcard = |field: &str| json!({"wildcard": {field: {"value": format!("*{needle}*"), "case_insensitive": true}}});
+    let mut should = vec![
+        wildcard("Kind"),
+        wildcard("KindCode"),
+        wildcard("Platform"),
+        wildcard("MIME"),
+        wildcard("Sources"),
+        json!({"match": {"AnalysisPath": needle}}),
+    ];
+    if needle.chars().all(|c| c.is_ascii_hexdigit()) {
+        should.push(json!({"prefix": {"Hash": needle}}));
+    }
+    Some(json!({"bool": {"should": should, "minimum_should_match": 1}}))
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/payloads",
@@ -389,7 +424,7 @@ pub async fn alerts(
     params(
         ("offset" = inline(Option<contract::NonNegativeInt>), Query, description = "Result window start."),
         ("size" = inline(Option<contract::PositiveInt>), Query, description = "Page size."),
-        ("q" = inline(Option<String>), Query, description = "Free-text Lucene query string."),
+        ("q" = inline(Option<String>), Query, description = "Free text, matched case-insensitively against the hash prefix, kind, kind code, platform, MIME type, source and analysis path. Not a Lucene query on this route."),
         ("ip" = inline(Option<String>), Query, description = "Narrow to one source address."),
         ("aggs" = inline(Option<String>), Query, description = "`sources` adds the payload-inventory source buckets; anything else is ignored."),
     ),
@@ -404,7 +439,12 @@ pub async fn payloads(
     State(state): State<AppState>,
     Query(q): Query<StoreQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut page = store_page(&state, &["dashboard-payload-inventory-v1"], "MtimeUTC", "date", &q, None)
+    // The payload picker searches the whole inventory, not just the first
+    // page it loads, so `q` here is free text rather than the generic
+    // Lucene string every other store takes (see payload_search_filter).
+    // Blank input is the unfiltered inventory, not the raw text as Lucene.
+    let filter = q.q.as_deref().and_then(payload_search_filter).unwrap_or_else(|| json!({"match_all": {}}));
+    let mut page = store_page(&state, &["dashboard-payload-inventory-v1"], "MtimeUTC", "date", &q, Some(filter))
         .await
         .map_err(bad_gateway)?;
     // #2179: opt-in whole-store source census (`?aggs=sources`) behind one
@@ -873,5 +913,40 @@ mod dead_letter_tests {
         summarize_dead_letter(&mut row);
         let message = row["message"].as_str().unwrap();
         assert!(message.len() <= DEAD_LETTER_PREVIEW_BYTES && message.chars().all(|c| c == 'é'));
+    }
+}
+
+#[cfg(test)]
+mod payload_search_tests {
+    use super::payload_search_filter;
+
+    #[test]
+    fn blank_or_wildcard_only_input_is_no_filter() {
+        assert!(payload_search_filter("").is_none());
+        assert!(payload_search_filter("   ").is_none());
+        assert!(payload_search_filter("*?\\").is_none());
+    }
+
+    #[test]
+    fn a_hex_term_also_matches_the_hash_by_prefix_in_lowercase() {
+        let filter = payload_search_filter("  12013662DE ").expect("filter");
+        let should = filter["bool"]["should"].as_array().expect("should");
+        assert!(should.iter().any(|clause| clause["prefix"]["Hash"] == "12013662de"));
+    }
+
+    #[test]
+    fn a_word_term_searches_kind_and_skips_the_hash_prefix() {
+        let filter = payload_search_filter("dll").expect("filter");
+        let should = filter["bool"]["should"].as_array().expect("should");
+        assert!(should.iter().all(|clause| clause.get("prefix").is_none()));
+        assert_eq!(should[0]["wildcard"]["Kind"]["value"], "*dll*");
+        assert_eq!(should[0]["wildcard"]["Kind"]["case_insensitive"], true);
+    }
+
+    #[test]
+    fn wildcard_characters_in_the_input_are_removed_not_passed_through() {
+        let filter = payload_search_filter("a*b?").expect("filter");
+        let should = filter["bool"]["should"].as_array().expect("should");
+        assert_eq!(should[0]["wildcard"]["Kind"]["value"], "*ab*");
     }
 }

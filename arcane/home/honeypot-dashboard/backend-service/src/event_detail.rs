@@ -843,10 +843,10 @@ fn suricata_detail(eve: &Value) -> String {
 /// anywhere: not in this detail line, not as a link on the event page.
 /// This flags that they exist without inlining them — a multi-KB base64
 /// blob stretched across a table row is not "surfaced", it's noise, and
-/// operators reach the real bytes by opening the event (its full,
-/// undecoded record already renders on `/event/{id}`). Byte counts, not
-/// content, so the fix stays a pointer rather than a second copy of the
-/// dump.
+/// operators reach the real bytes by opening the event: its Captured bytes
+/// section renders them as a hex dump and printable view, and its Raw tab
+/// holds the full stored record. Byte counts, not content, so this line
+/// stays a pointer rather than a second copy of the dump.
 fn captured_bytes_suffix(eve: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(size) = base64_decoded_len(&eve["packet"]) {
@@ -861,7 +861,7 @@ fn captured_bytes_suffix(eve: &Value) -> String {
     if parts.is_empty() {
         return String::new();
     }
-    format!("  [{} — full record on the event page]", parts.join(", "))
+    format!("  [{} — Captured bytes section on the event page]", parts.join(", "))
 }
 
 /// Decoded byte length of a base64 field, or `None` if absent/empty/invalid.
@@ -878,6 +878,14 @@ fn base64_decoded_len(value: &Value) -> Option<usize> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn captured_bytes_suffix_counts_bytes_and_points_at_the_section_that_renders_them() {
+        // "AAAAAA==" decodes to 4 bytes, "AAAA" to 3.
+        let eve = json!({"packet": "AAAAAA==", "http": {"http_request_body": "AAAA"}});
+        assert_eq!(captured_bytes_suffix(&eve), "  [packet capture: 4 bytes, request body: 3 bytes — Captured bytes section on the event page]");
+        assert_eq!(captured_bytes_suffix(&json!({"packet": ""})), "");
+    }
 
     fn src(sensor: &str, honeypot: Value) -> Value {
         json!({"event": {"sensor": sensor}, "honeypot": honeypot})
