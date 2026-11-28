@@ -12,4 +12,11 @@ COPY services-adapter.py .
 # module docstring). cap_drop/no-new-privileges/read_only in
 # docker-compose.yml bound what the *process itself* can do independent of
 # what it can ask the daemon to do via the socket.
+# Health: the adapter is healthy when its control socket answers a real
+# /v1/services request with 200. That route calls the Docker Engine through
+# docker.sock, so it also proves the adapter can still reach the daemon it
+# exists to proxy. Stdlib only, exec form, no shell, no writes (read_only).
+HEALTHCHECK --interval=30s --timeout=6s --start-period=10s --retries=3 \
+  CMD ["python3", "-c", "import socket,sys; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5); s.connect('/run/services-adapter/control.sock'); s.sendall(b'GET /v1/services HTTP/1.0\\r\\nHost: services-adapter\\r\\n\\r\\n'); sys.exit(0 if s.recv(12).startswith(b'HTTP/1.0 200') else 1)"]
+
 CMD ["python3", "-u", "services-adapter.py"]
