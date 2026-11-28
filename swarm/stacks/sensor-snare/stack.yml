@@ -31,7 +31,7 @@
 #   8080 so swarm replaces a task that stops listening.
 services:
   snare:
-    image: ghcr.io/xore-inc/honeypot-snare@sha256:66000ff6a104abcaf12b8919955b63a5b3409d112353781bbef62b4cae54488e
+    image: ghcr.io/xore-inc/honeypot-snare@sha256:b20913f5b859ca88253b0c16ac5e375575edc36513ef2dc7483c2d9ec1522c10
     entrypoint:
       - /bin/sh
       - -c
