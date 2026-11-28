@@ -78,8 +78,13 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      # Binds 21/25/53/80/443. Nothing else is needed.
+      # Binds 21/25/53/80/443 (NET_BIND_SERVICE). SETUID and SETGID are the
+      # group/user switch inetsim attempts at start: it runs its services as root
+      # (service_run_as_user in sandbox/windows/config/inetsim.conf) and still calls
+      # setgid, which fails without them (#4005). Nothing else is needed.
       - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
 
