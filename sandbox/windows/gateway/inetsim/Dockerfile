@@ -17,10 +17,14 @@ FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af6
 # itself can talk to the Debian mirror over TLS. The upgrade applies the
 # trixie security fix for libzstd1 (CVE-2026-124851) that this digest predates,
 # the same handling as the other trixie-slim images in this repository (#3964).
+# libnet-dns-perl is pinned to the exact trixie build the DNS patch below was
+# tested against (1.57-0+deb13u1). A newer build could rename the private
+# _TCP_server/_UDP_server methods the patch calls; the assertion below catches
+# that at build time, and the pin keeps an apt upgrade from changing it silently.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        inetsim procps ca-certificates \
+        inetsim procps ca-certificates libnet-dns-perl=1.57-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
 
 # INetSim's DNS service calls Net::DNS::Nameserver->main_loop, which the libnet-dns-perl
@@ -29,7 +33,10 @@ RUN apt-get update \
 # does not recognise, so a package update that changes DNS.pm fails the build instead
 # of silently shipping a DNS service that does not run.
 COPY inetsim-dns-trixie.patch /tmp/inetsim-dns-trixie.patch
-RUN apt-get update \
+# Build-time assertion: the patch calls these two private Net::DNS::Nameserver
+# methods, so fail the build if the installed library no longer has them.
+RUN perl -MNet::DNS::Nameserver -e 'for my $m (qw(_TCP_server _UDP_server)) { Net::DNS::Nameserver->can($m) or die "Net::DNS::Nameserver has no $m: inetsim-dns-trixie.patch is stale, revise it before rebuilding\n" } print "Net::DNS::Nameserver: _TCP_server and _UDP_server present\n"' \
+    && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends patch \
     && patch -p1 -d / --forward --batch -i /tmp/inetsim-dns-trixie.patch \
     && apt-get purge -y --auto-remove patch \
@@ -47,3 +54,8 @@ RUN mkdir -p /var/log/inetsim/report /var/lib/inetsim/http/fakefiles \
 # has no network path off the sandbox bridge, so the blast radius is the fake
 # internet it is pretending to be.
 ENTRYPOINT ["/usr/bin/inetsim", "--conf", "/etc/inetsim/inetsim.conf"]
+
+# docker stop sends SIGTERM by default, and INetSim's service processes answer TERM
+# by waiting for their children to close: a stop took the full 10 s timeout and ended
+# in SIGKILL (exit 137). SIGQUIT takes the server_close path and exits in under a second.
+STOPSIGNAL SIGQUIT
